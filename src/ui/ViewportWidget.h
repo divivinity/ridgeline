@@ -5,6 +5,7 @@
 #include "render/Camera.h"
 #include "render/TerrainMesh.h"
 #include "render/overlays/HeatmapOverlay.h"
+#include "render/overlays/LOSRayOverlay.h"
 #include "sim/SimEngine.h"
 
 class ViewportWidget : public QOpenGLWidget,
@@ -27,8 +28,9 @@ protected:
 private:
     SimEngine*    m_engine;
     Camera        m_camera;
-    TerrainMesh   m_terrain;
+    TerrainMesh    m_terrain;
     HeatmapOverlay m_heatmap;
-    QPoint        m_lastMouse;
+    LOSRayOverlay  m_losRay;
+    QPoint         m_lastMouse;
     bool          m_dragging = false;
 };

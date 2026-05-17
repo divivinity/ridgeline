@@ -27,8 +27,21 @@ bool TerrainModel::lineOfSight(glm::vec3 from, glm::vec3 to, int steps) const {
     for (int i = 1; i < steps; ++i) {
         float t = static_cast<float>(i) / steps;
         glm::vec3 p = from + dir * t;
-        float ground = heightAtWorld(p.x, p.z);
-        if (p.y < ground) return false;
+        if (p.y < heightAtWorld(p.x, p.z)) return false;
     }
     return true;
+}
+
+TerrainModel::LOSStatus TerrainModel::lineOfSightStatus(
+        glm::vec3 from, glm::vec3 to, int steps) const {
+    glm::vec3 dir = to - from;
+    int blocked = 0;
+    for (int i = 1; i < steps; ++i) {
+        float t = static_cast<float>(i) / steps;
+        glm::vec3 p = from + dir * t;
+        if (p.y < heightAtWorld(p.x, p.z)) ++blocked;
+    }
+    if (blocked == 0)  return LOSStatus::Clear;
+    if (blocked <= 3)  return LOSStatus::Diffracted;  // single knife-edge
+    return LOSStatus::Blocked;
 }

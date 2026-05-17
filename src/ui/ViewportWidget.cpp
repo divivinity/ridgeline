@@ -13,6 +13,7 @@ void ViewportWidget::initializeGL() {
         makeCurrent();
         m_terrain.destroy();
         m_heatmap.destroy();
+        m_losRay.destroy();
         doneCurrent();
     });
 
@@ -22,6 +23,7 @@ void ViewportWidget::initializeGL() {
     const auto& terrain = m_engine->terrain();
     m_terrain.build(terrain);
     m_heatmap.build(terrain);
+    m_losRay.build();
 
     // Center camera on terrain
     float cx = terrain.worldSize().x * 0.5f;
@@ -42,11 +44,13 @@ void ViewportWidget::paintGL() {
     glm::mat4 mvp = m_camera.mvp(aspect);
     m_terrain.draw(mvp);
     m_heatmap.draw(mvp);
+    m_losRay.draw(mvp);
 }
 
 void ViewportWidget::refreshOverlays() {
     makeCurrent();
     m_heatmap.update(m_engine->fieldGrid());
+    m_losRay.update(m_engine->antennas(), m_engine->terrain());
     doneCurrent();
     update();
 }
@@ -55,9 +59,11 @@ void ViewportWidget::reloadTerrain() {
     makeCurrent();
     m_terrain.destroy();
     m_heatmap.destroy();
+    m_losRay.destroy();
     const auto& terrain = m_engine->terrain();
     m_terrain.build(terrain);
     m_heatmap.build(terrain);
+    m_losRay.build();
     float cx = terrain.worldSize().x * 0.5f;
     float cz = terrain.worldSize().z * 0.5f;
     m_camera.target    = { cx, terrain.heightAtWorld(cx, cz), cz };
