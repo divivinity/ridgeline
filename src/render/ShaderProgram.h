@@ -12,6 +12,8 @@ public:
 
     void setMat4(const char* name, const glm::mat4& m);
     void setVec2(const char* name, const glm::vec2& v);
+    void setVec3(const char* name, const glm::vec3& v);
+    void setVec4(const char* name, const glm::vec4& v);
     void setFloat(const char* name, float v);
     void setInt(const char* name, int v);
 

@@ -6,6 +6,9 @@
 #include "render/TerrainMesh.h"
 #include "render/overlays/HeatmapOverlay.h"
 #include "render/overlays/LOSRayOverlay.h"
+#include "render/overlays/AntennaLobeOverlay.h"
+#include "render/overlays/JammerBubbleOverlay.h"
+#include "render/overlays/FresnelOverlay.h"
 #include "sim/SimEngine.h"
 
 class ViewportWidget : public QOpenGLWidget,
@@ -28,9 +31,12 @@ protected:
 private:
     SimEngine*    m_engine;
     Camera        m_camera;
-    TerrainMesh    m_terrain;
-    HeatmapOverlay m_heatmap;
-    LOSRayOverlay  m_losRay;
-    QPoint         m_lastMouse;
+    TerrainMesh        m_terrain;
+    HeatmapOverlay     m_heatmap;
+    LOSRayOverlay      m_losRay;
+    AntennaLobeOverlay m_antennaLobe;
+    JammerBubbleOverlay m_jammerBubble;
+    FresnelOverlay     m_fresnel;
+    QPoint             m_lastMouse;
     bool          m_dragging = false;
 };
