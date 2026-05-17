@@ -15,8 +15,9 @@ void ViewportWidget::initializeGL() {
     m_heatmap.build(terrain);
 
     // Center camera on terrain
-    m_camera.target  = { terrain.worldSize().x * 0.5f, 0,
-                          terrain.worldSize().z * 0.5f };
+    float cx = terrain.worldSize().x * 0.5f;
+    float cz = terrain.worldSize().z * 0.5f;
+    m_camera.target  = { cx, terrain.heightAtWorld(cx, cz), cz };
     m_camera.radius  = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
 }
@@ -26,6 +27,7 @@ void ViewportWidget::resizeGL(int w, int h) {
 }
 
 void ViewportWidget::paintGL() {
+    if (height() == 0) return;
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     float aspect = static_cast<float>(width()) / height();
     glm::mat4 mvp = m_camera.mvp(aspect);
@@ -43,6 +45,10 @@ void ViewportWidget::refreshOverlays() {
 void ViewportWidget::mousePressEvent(QMouseEvent* e) {
     m_lastMouse = e->pos();
     m_dragging  = true;
+}
+
+void ViewportWidget::mouseReleaseEvent(QMouseEvent*) {
+    m_dragging = false;
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {

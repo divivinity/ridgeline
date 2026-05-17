@@ -1,10 +1,9 @@
 #include "MainWindow.h"
 #include "data/TerrainLoader.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QWidget>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QApplication>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Atomic Biscuit");
@@ -67,6 +66,7 @@ void MainWindow::setupScene() {
 void MainWindow::onSolve() {
     m_statusLabel->setText("  Solving...");
     m_solveBtn->setEnabled(false);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     m_engine.solve();
     m_viewport->refreshOverlays();
     m_statusLabel->setText("  Done");
