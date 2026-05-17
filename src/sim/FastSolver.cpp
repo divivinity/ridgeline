@@ -6,19 +6,22 @@
 static constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
 
 FieldGrid FastSolver::solve(const TerrainModel& terrain,
-                            const std::vector<Antenna>& antennas) const {
+                             const std::vector<Antenna>& antennas,
+                             const MaterialLibrary& materials) const {
     FieldGrid grid;
-    grid.cellSize  = gridResolution;
-    grid.width     = static_cast<int>(terrain.width  * terrain.cellSize / gridResolution);
-    grid.height    = static_cast<int>(terrain.height * terrain.cellSize / gridResolution);
-    grid.originXZ  = {0.0f, 0.0f};
+    grid.cellSize = gridResolution;
+    grid.width    = static_cast<int>(terrain.width  * terrain.cellSize / gridResolution);
+    grid.height   = static_cast<int>(terrain.height * terrain.cellSize / gridResolution);
+    grid.originXZ = {0.0f, 0.0f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
+
+    const Material& mat = materials.defaultMaterial();
 
     for (int gz = 0; gz < grid.height; ++gz) {
         for (int gx = 0; gx < grid.width; ++gx) {
             float wx = gx * gridResolution + gridResolution * 0.5f;
             float wz = gz * gridResolution + gridResolution * 0.5f;
-            float wy = terrain.heightAtWorld(wx, wz) + 1.5f;  // 1.5 m receive height
+            float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
 
             float bestDbm = NEG_INF;
             for (const auto& ant : antennas) {
@@ -29,12 +32,13 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
                 if (distM < 1.0f) distM = 1.0f;
 
                 float txPowerDbm = 10.0f * std::log10(ant.powerW * 1000.0f);
+                float matLossDb  = mat.lossDbPer100m(ant.frequencyMHz) * distM / 100.0f;
                 float loss = fsplDb(distM, ant.frequencyMHz)
                            - ant.gainDbi
-                           - materialLossDb(distM);
+                           + matLossDb;
 
                 bool los = terrain.lineOfSight(ant.position, rxPos);
-                if (!los) loss += 20.0f;  // simplified obstruction penalty
+                if (!los) loss += 20.0f;
 
                 float rxDbm = txPowerDbm - loss;
                 if (rxDbm > bestDbm) bestDbm = rxDbm;
@@ -46,13 +50,7 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
 }
 
 float FastSolver::fsplDb(float distM, float freqMHz) {
-    // FSPL(dB) = 20*log10(d) + 20*log10(f) + 20*log10(4π/c)
-    // = 20*log10(d) + 20*log10(f) - 147.55
     return 20.0f * std::log10(distM)
          + 20.0f * std::log10(freqMHz * 1e6f)
          - 147.55f;
-}
-
-float FastSolver::materialLossDb(float /*distM*/) {
-    return 0.0f;  // expanded in Plan 3 with MaterialLibrary
 }
