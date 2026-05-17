@@ -33,8 +33,6 @@ void Camera::orbit(float dAz, float dEl) {
 }
 
 void Camera::pan(float dx, float dy) {
-    float el = elevation * PI / 180.0f;
-    float az = azimuth   * PI / 180.0f;
     glm::vec3 right  = glm::normalize(glm::cross(
         camPos(*this) - target, {0, 1, 0}));
     glm::vec3 up     = {0, 1, 0};
