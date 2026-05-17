@@ -44,3 +44,21 @@ add_custom_command(TARGET ridgeline POST_BUILD
         ${CMAKE_SOURCE_DIR}/assets
         $<TARGET_FILE_DIR:ridgeline>/assets
 )
+
+# ── Tests (no Qt / no OpenGL) ──────────────────────────────────────────────
+enable_testing()
+
+add_executable(ridgeline_tests
+    tests/test_main.cpp
+    src/sim/MaterialLibrary.cpp
+    src/sim/TerrainModel.cpp
+    src/sim/FullSolver.cpp
+)
+target_include_directories(ridgeline_tests PRIVATE src)
+target_link_libraries(ridgeline_tests
+    glm::glm
+    nlohmann_json::nlohmann_json
+)
+add_test(NAME physics_tests
+    COMMAND ridgeline_tests "${CMAKE_SOURCE_DIR}/assets/materials.json"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
