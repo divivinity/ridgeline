@@ -48,12 +48,13 @@ void ViewportWidget::paintGL() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     float aspect = static_cast<float>(width()) / height();
     glm::mat4 mvp = m_camera.mvp(aspect);
+
     m_terrain.draw(mvp);
-    m_heatmap.draw(mvp);
-    m_losRay.draw(mvp);
-    m_antennaLobe.draw(mvp);
-    m_jammerBubble.draw(mvp);
-    m_fresnel.draw(mvp);
+    if (m_heatmap.visible)      m_heatmap.draw(mvp);
+    if (m_losRay.visible)       m_losRay.draw(mvp);
+    if (m_antennaLobe.visible)  m_antennaLobe.draw(mvp);
+    if (m_jammerBubble.visible) m_jammerBubble.draw(mvp);
+    if (m_fresnel.visible)      m_fresnel.draw(mvp);
 }
 
 void ViewportWidget::refreshOverlays() {
@@ -113,5 +114,16 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
 
 void ViewportWidget::wheelEvent(QWheelEvent* e) {
     m_camera.zoom(e->angleDelta().y() / 120.0f);
+    update();
+}
+
+void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
+    switch (overlay) {
+        case Heatmap: m_heatmap.visible      = visible; break;
+        case LOS:     m_losRay.visible       = visible; break;
+        case Lobe:    m_antennaLobe.visible  = visible; break;
+        case Jammer:  m_jammerBubble.visible = visible; break;
+        case Fresnel: m_fresnel.visible      = visible; break;
+    }
     update();
 }

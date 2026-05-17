@@ -15,9 +15,12 @@ class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
 public:
+    enum Overlay { Heatmap = 0, LOS = 1, Lobe = 2, Jammer = 3, Fresnel = 4 };
+
     explicit ViewportWidget(SimEngine* engine, QWidget* parent = nullptr);
     void refreshOverlays();   // call after SimEngine::solve()
     void reloadTerrain();     // call after SimEngine::setTerrain() to rebuild GPU meshes
+    void setOverlayVisible(Overlay overlay, bool visible);
 
 protected:
     void initializeGL()              override;
