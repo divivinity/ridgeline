@@ -67,7 +67,9 @@ add_executable(ridgeline_tests
     tests/test_main.cpp
     src/sim/MaterialLibrary.cpp
     src/sim/TerrainModel.cpp
+    src/sim/FastSolver.cpp
     src/sim/FullSolver.cpp
+    src/sim/SimEngine.cpp
 )
 target_include_directories(ridgeline_tests PRIVATE src)
 target_link_libraries(ridgeline_tests

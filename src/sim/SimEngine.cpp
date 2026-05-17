@@ -25,3 +25,17 @@ void SimEngine::solve() {
 
     if (onFieldUpdated) onFieldUpdated();
 }
+
+void SimEngine::addAntenna(Antenna antenna) {
+    m_antennas.push_back(std::move(antenna));
+}
+
+void SimEngine::removeAntenna(int index) {
+    if (index < 0 || index >= static_cast<int>(m_antennas.size())) return;
+    m_antennas.erase(m_antennas.begin() + index);
+}
+
+void SimEngine::updateAntenna(int index, Antenna antenna) {
+    if (index < 0 || index >= static_cast<int>(m_antennas.size())) return;
+    m_antennas[index] = std::move(antenna);
+}

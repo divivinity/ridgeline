@@ -5,6 +5,7 @@
 #include "sim/MaterialLibrary.h"
 #include "sim/TerrainModel.h"
 #include "sim/FullSolver.h"
+#include "sim/SimEngine.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond) do { \
@@ -190,6 +191,56 @@ static void test_ridge_reduces_power_vs_flat() {
         CHECK(dbmRidged < dbmFlat);
 }
 
+static void test_add_antenna() {
+    SimEngine engine;
+    CHECK(engine.antennas().empty());
+
+    Antenna a;
+    a.frequencyMHz = 433.0f;
+    a.powerW = 10.0f;
+    engine.addAntenna(a);
+
+    CHECK(engine.antennas().size() == 1u);
+    CHECK(engine.antennas()[0].frequencyMHz == 433.0f);
+}
+
+static void test_remove_antenna() {
+    SimEngine engine;
+    Antenna a1, a2;
+    a1.frequencyMHz = 100.0f;
+    a2.frequencyMHz = 200.0f;
+    engine.addAntenna(a1);
+    engine.addAntenna(a2);
+
+    engine.removeAntenna(0);
+
+    CHECK(engine.antennas().size() == 1u);
+    CHECK(engine.antennas()[0].frequencyMHz == 200.0f);
+
+    // Out-of-range is a no-op
+    engine.removeAntenna(99);
+    CHECK(engine.antennas().size() == 1u);
+}
+
+static void test_update_antenna() {
+    SimEngine engine;
+    Antenna a;
+    a.frequencyMHz = 150.0f;
+    engine.addAntenna(a);
+
+    Antenna updated = engine.antennas()[0];
+    updated.frequencyMHz = 900.0f;
+    updated.gainDbi = 12.0f;
+    engine.updateAntenna(0, updated);
+
+    CHECK(engine.antennas()[0].frequencyMHz == 900.0f);
+    CHECK(engine.antennas()[0].gainDbi == 12.0f);
+
+    // Out-of-range is a no-op
+    engine.updateAntenna(99, updated);
+    CHECK(engine.antennas().size() == 1u);
+}
+
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
 
@@ -201,6 +252,9 @@ int main(int argc, char** argv) {
     test_fullsolver_produces_finite_grid();
     test_rain_reduces_power();
     test_ridge_reduces_power_vs_flat();
+    test_add_antenna();
+    test_remove_antenna();
+    test_update_antenna();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;
