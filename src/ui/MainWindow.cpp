@@ -114,7 +114,10 @@ void MainWindow::loadTerrain(const QString& path) {
         m_statusLabel->setText("  Loading terrain…");
         QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
-        TerrainModel t = TerrainLoader::fromDTED(path.toStdString());
+        const QString ext = QFileInfo(path).suffix().toLower();
+        TerrainModel t = (ext == "hgt")
+                       ? TerrainLoader::fromHGT(path.toStdString())
+                       : TerrainLoader::fromDTED(path.toStdString());
         m_engine.setTerrain(std::move(t));
         placeDefaultAntennas();
 
@@ -131,8 +134,11 @@ void MainWindow::loadTerrain(const QString& path) {
 
 void MainWindow::onLoadTerrain() {
     const QString path = QFileDialog::getOpenFileName(
-        this, "Load DTED Terrain", {},
-        "DTED files (*.dt0 *.dt1 *.dt2);;All files (*)");
+        this, "Load Terrain", {},
+        "Terrain files (*.dt0 *.dt1 *.dt2 *.hgt);;"
+        "DTED files (*.dt0 *.dt1 *.dt2);;"
+        "SRTM HGT files (*.hgt);;"
+        "All files (*)");
     if (!path.isEmpty()) loadTerrain(path);
 }
 
