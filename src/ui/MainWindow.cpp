@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("Atomic Biscuit");
+    setWindowTitle("Ridgeline");
     applyTheme();
     setupScene();
 
@@ -90,7 +90,7 @@ void MainWindow::loadTerrain(const QString& path) {
 
         if (m_viewport) m_viewport->reloadTerrain();
 
-        setWindowTitle(QString("Atomic Biscuit — %1")
+        setWindowTitle(QString("Ridgeline — %1")
                        .arg(QFileInfo(path).fileName()));
         m_statusLabel->setText("  Terrain loaded");
     } catch (const std::exception& e) {

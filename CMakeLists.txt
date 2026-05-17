@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AtomicBiscuit LANGUAGES CXX)
+project(Ridgeline LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,10 +26,10 @@ FetchContent_MakeAvailable(json)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
-add_executable(atomic-biscuit ${SOURCES})
+add_executable(ridgeline ${SOURCES})
 
-target_include_directories(atomic-biscuit PRIVATE src)
-target_link_libraries(atomic-biscuit
+target_include_directories(ridgeline PRIVATE src)
+target_link_libraries(ridgeline
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
@@ -39,8 +39,8 @@ target_link_libraries(atomic-biscuit
 )
 
 # Copy shaders to build dir alongside binary
-add_custom_command(TARGET atomic-biscuit POST_BUILD
+add_custom_command(TARGET ridgeline POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:atomic-biscuit>/assets
+        $<TARGET_FILE_DIR:ridgeline>/assets
 )

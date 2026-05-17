@@ -10,7 +10,7 @@ int main(int argc, char* argv[]) {
     QSurfaceFormat::setDefaultFormat(fmt);
 
     QApplication app(argc, argv);
-    app.setApplicationName("Atomic Biscuit");
+    app.setApplicationName("Ridgeline");
 
     MainWindow w;
     w.resize(1400, 900);
