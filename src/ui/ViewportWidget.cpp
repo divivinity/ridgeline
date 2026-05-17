@@ -7,6 +7,15 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
 
 void ViewportWidget::initializeGL() {
     initializeOpenGLFunctions();
+
+    // Destroy GL objects before the context dies, not in the destructor.
+    connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this]() {
+        makeCurrent();
+        m_terrain.destroy();
+        m_heatmap.destroy();
+        doneCurrent();
+    });
+
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.05f, 0.08f, 0.12f, 1.0f);
 
