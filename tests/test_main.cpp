@@ -198,7 +198,7 @@ static void test_add_antenna() {
     Antenna a;
     a.frequencyMHz = 433.0f;
     a.powerW = 10.0f;
-    engine.addAntenna(a);
+    engine.addAntenna(std::move(a));
 
     CHECK(engine.antennas().size() == 1u);
     CHECK(engine.antennas()[0].frequencyMHz == 433.0f);
@@ -220,6 +220,9 @@ static void test_remove_antenna() {
     // Out-of-range is a no-op
     engine.removeAntenna(99);
     CHECK(engine.antennas().size() == 1u);
+
+    engine.removeAntenna(-1);
+    CHECK(engine.antennas().size() == 1u);
 }
 
 static void test_update_antenna() {
@@ -239,6 +242,7 @@ static void test_update_antenna() {
     // Out-of-range is a no-op
     engine.updateAntenna(99, updated);
     CHECK(engine.antennas().size() == 1u);
+    CHECK(engine.antennas()[0].frequencyMHz == 900.0f);  // element not mutated by bad index
 }
 
 int main(int argc, char** argv) {
