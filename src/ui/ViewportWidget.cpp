@@ -14,6 +14,9 @@ void ViewportWidget::initializeGL() {
         m_terrain.destroy();
         m_heatmap.destroy();
         m_losRay.destroy();
+        m_antennaLobe.destroy();
+        m_jammerBubble.destroy();
+        m_fresnel.destroy();
         doneCurrent();
     });
 
@@ -24,6 +27,9 @@ void ViewportWidget::initializeGL() {
     m_terrain.build(terrain);
     m_heatmap.build(terrain);
     m_losRay.build();
+    m_antennaLobe.build();
+    m_jammerBubble.build();
+    m_fresnel.build();
 
     // Center camera on terrain
     float cx = terrain.worldSize().x * 0.5f;
@@ -45,12 +51,18 @@ void ViewportWidget::paintGL() {
     m_terrain.draw(mvp);
     m_heatmap.draw(mvp);
     m_losRay.draw(mvp);
+    m_antennaLobe.draw(mvp);
+    m_jammerBubble.draw(mvp);
+    m_fresnel.draw(mvp);
 }
 
 void ViewportWidget::refreshOverlays() {
     makeCurrent();
     m_heatmap.update(m_engine->fieldGrid());
     m_losRay.update(m_engine->antennas(), m_engine->terrain());
+    m_antennaLobe.update(m_engine->antennas());
+    m_jammerBubble.update(m_engine->antennas());
+    m_fresnel.update(m_engine->antennas(), m_engine->terrain());
     doneCurrent();
     update();
 }
@@ -60,10 +72,16 @@ void ViewportWidget::reloadTerrain() {
     m_terrain.destroy();
     m_heatmap.destroy();
     m_losRay.destroy();
+    m_antennaLobe.destroy();
+    m_jammerBubble.destroy();
+    m_fresnel.destroy();
     const auto& terrain = m_engine->terrain();
     m_terrain.build(terrain);
     m_heatmap.build(terrain);
     m_losRay.build();
+    m_antennaLobe.build();
+    m_jammerBubble.build();
+    m_fresnel.build();
     float cx = terrain.worldSize().x * 0.5f;
     float cz = terrain.worldSize().z * 0.5f;
     m_camera.target    = { cx, terrain.heightAtWorld(cx, cz), cz };

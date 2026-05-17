@@ -35,6 +35,12 @@ void ShaderProgram::setMat4(const char* n, const glm::mat4& m) {
 void ShaderProgram::setVec2(const char* n, const glm::vec2& v) {
     glUniform2fv(glGetUniformLocation(m_id, n), 1, glm::value_ptr(v));
 }
+void ShaderProgram::setVec3(const char* n, const glm::vec3& v) {
+    glUniform3fv(glGetUniformLocation(m_id, n), 1, glm::value_ptr(v));
+}
+void ShaderProgram::setVec4(const char* n, const glm::vec4& v) {
+    glUniform4fv(glGetUniformLocation(m_id, n), 1, glm::value_ptr(v));
+}
 void ShaderProgram::setFloat(const char* n, float v) {
     glUniform1f(glGetUniformLocation(m_id, n), v);
 }
