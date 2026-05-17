@@ -15,8 +15,9 @@ float Material::lossDbPer100m(float freqMHz) const {
 
     for (size_t i = 1; i < bandLoss.size(); ++i) {
         if (freqMHz <= bandLoss[i].freqMHz) {
-            float t = (freqMHz - bandLoss[i-1].freqMHz)
-                    / (bandLoss[i].freqMHz - bandLoss[i-1].freqMHz);
+            float span = bandLoss[i].freqMHz - bandLoss[i-1].freqMHz;
+            if (span < 1e-6f) return bandLoss[i-1].lossDb;  // duplicate guard
+            float t = (freqMHz - bandLoss[i-1].freqMHz) / span;
             return bandLoss[i-1].lossDb + t * (bandLoss[i].lossDb - bandLoss[i-1].lossDb);
         }
     }
@@ -27,22 +28,28 @@ void MaterialLibrary::load(const std::string& path) {
     std::ifstream f(path);
     if (!f) throw std::runtime_error("Cannot open materials file: " + path);
 
-    json data = json::parse(f);
-    for (const auto& entry : data["materials"]) {
-        Material mat;
-        mat.name      = entry["name"].get<std::string>();
-        mat.epsilon_r = entry["epsilon_r"].get<float>();
-        mat.sigma_sm  = entry["sigma_sm"].get<float>();
-        for (const auto& b : entry["band_loss"]) {
-            mat.bandLoss.push_back({
-                b["freq_mhz"].get<float>(),
-                b["loss_db_per_100m"].get<float>()
-            });
+    std::unordered_map<std::string, Material> tmp;
+    try {
+        json data = json::parse(f);
+        for (const auto& entry : data["materials"]) {
+            Material mat;
+            mat.name      = entry["name"].get<std::string>();
+            mat.epsilon_r = entry["epsilon_r"].get<float>();
+            mat.sigma_sm  = entry["sigma_sm"].get<float>();
+            for (const auto& b : entry["band_loss"]) {
+                mat.bandLoss.push_back({
+                    b["freq_mhz"].get<float>(),
+                    b["loss_db_per_100m"].get<float>()
+                });
+            }
+            std::sort(mat.bandLoss.begin(), mat.bandLoss.end(),
+                      [](const auto& a, const auto& b){ return a.freqMHz < b.freqMHz; });
+            tmp[mat.name] = std::move(mat);
         }
-        std::sort(mat.bandLoss.begin(), mat.bandLoss.end(),
-                  [](const auto& a, const auto& b){ return a.freqMHz < b.freqMHz; });
-        m_materials[mat.name] = std::move(mat);
+    } catch (const json::exception& e) {
+        throw std::runtime_error(std::string("materials.json parse error: ") + e.what());
     }
+    m_materials = std::move(tmp);
 }
 
 const Material& MaterialLibrary::find(const std::string& name) const {
