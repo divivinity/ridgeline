@@ -4,6 +4,7 @@
 #include <string>
 #include "sim/MaterialLibrary.h"
 #include "sim/TerrainModel.h"
+#include "sim/FullSolver.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond) do { \
@@ -90,6 +91,105 @@ static void test_peak_obstacle_blocked_terrain() {
     CHECK(obs.t > 0.3f && obs.t < 0.7f); // peak is in the middle
 }
 
+// ── FullSolver tests ──────────────────────────────────────────────────────────
+
+static void test_fullsolver_produces_finite_grid() {
+    // Flat terrain, single antenna above centre — every cell should be finite.
+    TerrainModel terrain;
+    terrain.width    = 10;
+    terrain.height   = 10;
+    terrain.cellSize = 10.0f;
+    terrain.heights.assign(100, 0.0f);
+
+    Antenna tx;
+    tx.position     = {50.0f, 10.0f, 50.0f};
+    tx.frequencyMHz = 150.0f;
+    tx.powerW       = 50.0f;
+    tx.gainDbi      = 0.0f;
+    tx.isJammer     = false;
+
+    MaterialLibrary lib;
+    FullSolver solver;
+    solver.rainRateMmH = 0.0f;
+    FieldGrid grid = solver.solve(terrain, {tx}, lib);
+
+    CHECK(grid.valid());
+    CHECK(grid.width > 0 && grid.height > 0);
+
+    bool anyFinite = false;
+    for (float v : grid.dbm)
+        if (std::isfinite(v)) { anyFinite = true; break; }
+    CHECK(anyFinite);
+}
+
+static void test_rain_reduces_power() {
+    TerrainModel terrain;
+    terrain.width    = 5;
+    terrain.height   = 5;
+    terrain.cellSize = 10.0f;
+    terrain.heights.assign(25, 0.0f);
+
+    Antenna tx;
+    tx.position     = {25.0f, 10.0f, 25.0f};
+    tx.frequencyMHz = 1000.0f;
+    tx.powerW       = 100.0f;
+    tx.gainDbi      = 0.0f;
+    tx.isJammer     = false;
+
+    MaterialLibrary lib;
+    FullSolver solver0, solver1;
+    solver0.rainRateMmH = 0.0f;
+    solver1.rainRateMmH = 50.0f;  // heavy rain
+
+    FieldGrid g0 = solver0.solve(terrain, {tx}, lib);
+    FieldGrid g1 = solver1.solve(terrain, {tx}, lib);
+
+    bool rainReducesPower = false;
+    for (size_t i = 0; i < g0.dbm.size(); ++i)
+        if (std::isfinite(g0.dbm[i]) && std::isfinite(g1.dbm[i]) && g1.dbm[i] < g0.dbm[i]) {
+            rainReducesPower = true;
+            break;
+        }
+    CHECK(rainReducesPower);
+}
+
+static void test_ridge_reduces_power_vs_flat() {
+    // A receiver behind a ridge should have less power than the same setup on flat terrain.
+    auto makeAntenna = [](float x, float z) {
+        Antenna a;
+        a.position     = {x, 10.0f, z};
+        a.frequencyMHz = 150.0f;
+        a.powerW       = 50.0f;
+        a.gainDbi      = 0.0f;
+        a.isJammer     = false;
+        return a;
+    };
+
+    TerrainModel flat;
+    flat.width = flat.height = 100;
+    flat.cellSize = 10.0f;
+    flat.heights.assign(10000, 0.0f);
+
+    TerrainModel ridged = flat;
+    for (int z = 45; z <= 55; ++z)
+        for (int x = 0; x < 100; ++x)
+            ridged.heights[z * 100 + x] = 15.0f;
+
+    Antenna tx = makeAntenna(50.0f, 10.0f);
+    MaterialLibrary lib;
+    FullSolver solver;
+    solver.rainRateMmH = 0.0f;
+
+    FieldGrid gFlat   = solver.solve(flat,   {tx}, lib);
+    FieldGrid gRidged = solver.solve(ridged, {tx}, lib);
+
+    // Cell at (5, 80): behind the ridge
+    float dbmFlat   = gFlat.at(5, 80);
+    float dbmRidged = gRidged.at(5, 80);
+    if (std::isfinite(dbmFlat) && std::isfinite(dbmRidged))
+        CHECK(dbmRidged < dbmFlat);
+}
+
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
 
@@ -98,6 +198,9 @@ int main(int argc, char** argv) {
     test_load_from_json(materialsPath);
     test_peak_obstacle_flat_terrain();
     test_peak_obstacle_blocked_terrain();
+    test_fullsolver_produces_finite_grid();
+    test_rain_reduces_power();
+    test_ridge_reduces_power_vs_flat();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;
