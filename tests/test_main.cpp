@@ -25,8 +25,9 @@ static void test_loss_interpolation() {
     const Material& m = MaterialLibrary::defaultMaterial();
     CHECK_NEAR(m.lossDbPer100m(100.0f), 0.3f, 0.01f);
     CHECK_NEAR(m.lossDbPer100m(300.0f), 0.5f, 0.01f);
-    float mid = m.lossDbPer100m(200.0f);
-    CHECK(mid > 0.3f && mid < 0.5f);
+    // At 200 MHz, linear interpolation between 100 MHz (0.3) and 300 MHz (0.5):
+    // t = (200-100)/(300-100) = 0.5  →  0.3 + 0.5*(0.5-0.3) = 0.4
+    CHECK_NEAR(m.lossDbPer100m(200.0f), 0.4f, 0.01f);
     CHECK_NEAR(m.lossDbPer100m(10.0f),    0.3f, 0.01f);  // clamp low
     CHECK_NEAR(m.lossDbPer100m(10000.0f), 3.0f, 0.01f);  // clamp high
 }
