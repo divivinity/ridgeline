@@ -10,8 +10,8 @@ void SimEngine::setAntennas(std::vector<Antenna> antennas) {
 
 void SimEngine::solve() {
     if (mode == Mode::Fast) {
-        m_field = m_fast.solve(m_terrain, m_antennas);
+        m_field = m_fast.solve(m_terrain, m_antennas, m_materials);
     }
-    // Mode::Full added in Plan 3
+    // Mode::Full added in Task 5
     if (onFieldUpdated) onFieldUpdated();
 }
