@@ -15,5 +15,9 @@ int main(int argc, char* argv[]) {
     MainWindow w;
     w.resize(1400, 900);
     w.show();
+
+    // Optional: pass a DTED file as the first argument.
+    if (argc > 1) w.loadTerrain(QString::fromLocal8Bit(argv[1]));
+
     return app.exec();
 }
