@@ -11,8 +11,10 @@ float TerrainModel::heightAt(int x, int z) const {
 float TerrainModel::heightAtWorld(float wx, float wz) const {
     float gx = wx / cellSize;
     float gz = wz / cellSize;
-    int   x0 = static_cast<int>(gx), z0 = static_cast<int>(gz);
-    float tx = gx - x0, tz = gz - z0;
+    int   x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, width  - 2);
+    int   z0 = std::clamp(static_cast<int>(std::floor(gz)), 0, height - 2);
+    float tx = std::clamp(gx - static_cast<float>(x0), 0.0f, 1.0f);
+    float tz = std::clamp(gz - static_cast<float>(z0), 0.0f, 1.0f);
     float h00 = heightAt(x0,   z0);
     float h10 = heightAt(x0+1, z0);
     float h01 = heightAt(x0,   z0+1);

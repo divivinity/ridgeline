@@ -62,9 +62,17 @@ void HeatmapOverlay::update(const FieldGrid& grid) {
     if (!grid.valid()) return;
     m_texW = grid.width;
     m_texH = grid.height;
+
+    // Clamp non-finite sentinels so GL_LINEAR filtering can't produce NaN
+    // between valid cells and dead-zone cells.
+    constexpr float kNoSignal = -121.0f;  // just below uMinDbm (-120)
+    std::vector<float> clamped(grid.dbm.size());
+    for (size_t i = 0; i < grid.dbm.size(); ++i)
+        clamped[i] = std::isfinite(grid.dbm[i]) ? grid.dbm[i] : kNoSignal;
+
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, grid.width, grid.height,
-                 0, GL_RED, GL_FLOAT, grid.dbm.data());
+                 0, GL_RED, GL_FLOAT, clamped.data());
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
