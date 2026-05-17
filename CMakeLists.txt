@@ -45,6 +45,21 @@ add_custom_command(TARGET ridgeline POST_BUILD
         $<TARGET_FILE_DIR:ridgeline>/assets
 )
 
+# Deploy Qt runtime DLLs (Windows only) so the exe runs without a Qt install
+if(WIN32)
+    find_program(WINDEPLOYQT windeployqt
+        HINTS "${Qt6_DIR}/../../../bin"
+    )
+    if(WINDEPLOYQT)
+        add_custom_command(TARGET ridgeline POST_BUILD
+            COMMAND ${WINDEPLOYQT}
+                --no-compiler-runtime
+                $<TARGET_FILE:ridgeline>
+            COMMENT "Deploying Qt runtime DLLs..."
+        )
+    endif()
+endif()
+
 # ── Tests (no Qt / no OpenGL) ──────────────────────────────────────────────
 enable_testing()
 
