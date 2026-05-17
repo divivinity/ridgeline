@@ -1,0 +1,10 @@
+build/
+_deps/
+*.exe
+*.dll
+*.a
+*.o
+CMakeCache.txt
+aqtinstall.log
+.DS_Store
+*.swp
