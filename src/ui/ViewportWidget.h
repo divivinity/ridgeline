@@ -13,6 +13,7 @@ class ViewportWidget : public QOpenGLWidget,
 public:
     explicit ViewportWidget(SimEngine* engine, QWidget* parent = nullptr);
     void refreshOverlays();   // call after SimEngine::solve()
+    void reloadTerrain();     // call after SimEngine::setTerrain() to rebuild GPU meshes
 
 protected:
     void initializeGL()              override;

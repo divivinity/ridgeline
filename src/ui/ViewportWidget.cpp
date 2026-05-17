@@ -51,6 +51,22 @@ void ViewportWidget::refreshOverlays() {
     update();
 }
 
+void ViewportWidget::reloadTerrain() {
+    makeCurrent();
+    m_terrain.destroy();
+    m_heatmap.destroy();
+    const auto& terrain = m_engine->terrain();
+    m_terrain.build(terrain);
+    m_heatmap.build(terrain);
+    float cx = terrain.worldSize().x * 0.5f;
+    float cz = terrain.worldSize().z * 0.5f;
+    m_camera.target    = { cx, terrain.heightAtWorld(cx, cz), cz };
+    m_camera.radius    = terrain.worldSize().x * 0.8f;
+    m_camera.elevation = 35.0f;
+    doneCurrent();
+    update();
+}
+
 void ViewportWidget::mousePressEvent(QMouseEvent* e) {
     m_lastMouse = e->pos();
     m_dragging  = true;

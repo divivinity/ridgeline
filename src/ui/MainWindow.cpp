@@ -4,6 +4,11 @@
 #include <QStatusBar>
 #include <QToolBar>
 #include <QApplication>
+#include <QMenuBar>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <stdexcept>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Atomic Biscuit");
@@ -12,6 +17,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
+
+    // File menu
+    QMenu* fileMenu = menuBar()->addMenu("&File");
+    QAction* loadAct = fileMenu->addAction("&Load Terrain…");
+    loadAct->setShortcut(QKeySequence::Open);
+    connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
 
     // Toolbar (glassmorphism strip)
     QToolBar* tb = addToolBar("Main");
@@ -43,24 +54,56 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 void MainWindow::setupScene() {
-    // Demo: rolling hills terrain, 200x200 cells at 10m each = 2km x 2km
     TerrainModel terrain = TerrainLoader::makeHills(200, 200, 10.0f, 40.0f);
     m_engine.setTerrain(std::move(terrain));
+    placeDefaultAntennas();
+}
 
-    // Two antennas placed in scene
+void MainWindow::placeDefaultAntennas() {
+    const auto& t = m_engine.terrain();
+    const float w = t.worldSize().x;
+    const float d = t.worldSize().z;
+
     Antenna a1;
-    a1.position      = {200.0f, m_engine.terrain().heightAtWorld(200,200)+10.0f, 200.0f};
-    a1.frequencyMHz  = 150.0f;
-    a1.powerW        = 50.0f;
-    a1.gainDbi       = 3.0f;
+    a1.position     = { w * 0.1f, t.heightAtWorld(w*0.1f, d*0.1f) + 10.0f, d * 0.1f };
+    a1.frequencyMHz = 150.0f;
+    a1.powerW       = 50.0f;
+    a1.gainDbi      = 3.0f;
 
     Antenna a2;
-    a2.position      = {1600.0f, m_engine.terrain().heightAtWorld(1600,1600)+10.0f, 1600.0f};
-    a2.frequencyMHz  = 150.0f;
-    a2.powerW        = 50.0f;
-    a2.gainDbi       = 3.0f;
+    a2.position     = { w * 0.8f, t.heightAtWorld(w*0.8f, d*0.8f) + 10.0f, d * 0.8f };
+    a2.frequencyMHz = 150.0f;
+    a2.powerW       = 50.0f;
+    a2.gainDbi      = 3.0f;
 
     m_engine.setAntennas({a1, a2});
+}
+
+void MainWindow::loadTerrain(const QString& path) {
+    try {
+        m_statusLabel->setText("  Loading terrain…");
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+        TerrainModel t = TerrainLoader::fromDTED(path.toStdString());
+        m_engine.setTerrain(std::move(t));
+        placeDefaultAntennas();
+
+        if (m_viewport) m_viewport->reloadTerrain();
+
+        setWindowTitle(QString("Atomic Biscuit — %1")
+                       .arg(QFileInfo(path).fileName()));
+        m_statusLabel->setText("  Terrain loaded");
+    } catch (const std::exception& e) {
+        m_statusLabel->setText("  Ready");
+        QMessageBox::critical(this, "Load failed", e.what());
+    }
+}
+
+void MainWindow::onLoadTerrain() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Load DTED Terrain", {},
+        "DTED files (*.dt0 *.dt1 *.dt2);;All files (*)");
+    if (!path.isEmpty()) loadTerrain(path);
 }
 
 void MainWindow::onSolve() {

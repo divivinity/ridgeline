@@ -10,15 +10,21 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
 
+    // Load a DTED file and replace the current terrain.
+    // Shows a QMessageBox on parse failure. Safe to call at any time.
+    void loadTerrain(const QString& path);
+
 private slots:
     void onSolve();
+    void onLoadTerrain();
 
 private:
-    SimEngine      m_engine;
-    ViewportWidget* m_viewport;
-    QLabel*         m_statusLabel;
-    QPushButton*    m_solveBtn;
+    SimEngine       m_engine;
+    ViewportWidget* m_viewport    = nullptr;
+    QLabel*         m_statusLabel = nullptr;
+    QPushButton*    m_solveBtn    = nullptr;
 
-    void setupScene();   // load demo terrain + 2 antennas
-    void applyTheme();   // glassmorphism stylesheet
+    void setupScene();
+    void applyTheme();
+    void placeDefaultAntennas();
 };
