@@ -12,6 +12,13 @@ public:
 
     enum class LOSStatus { Clear, Diffracted, Blocked };
 
+    struct PeakObstacle {
+        float clearanceM;  // terrain_height − LOS_height at worst point; negative = clear
+        float t;           // fraction along path [0..1] where peak occurs
+    };
+
+    PeakObstacle peakObstacle(glm::vec3 from, glm::vec3 to, int steps = 256) const;
+
     float     heightAt(int x, int z) const;
     float     heightAtWorld(float wx, float wz) const;
     bool      lineOfSight(glm::vec3 from, glm::vec3 to, int steps = 256) const;

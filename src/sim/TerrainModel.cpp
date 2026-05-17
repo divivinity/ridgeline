@@ -1,6 +1,7 @@
 #include "TerrainModel.h"
 #include <cmath>
 #include <algorithm>
+#include <limits>
 
 float TerrainModel::heightAt(int x, int z) const {
     x = std::clamp(x, 0, width - 1);
@@ -44,4 +45,21 @@ TerrainModel::LOSStatus TerrainModel::lineOfSightStatus(
     if (blocked == 0)  return LOSStatus::Clear;
     if (blocked <= 3)  return LOSStatus::Diffracted;  // single knife-edge
     return LOSStatus::Blocked;
+}
+
+TerrainModel::PeakObstacle
+TerrainModel::peakObstacle(glm::vec3 from, glm::vec3 to, int steps) const {
+    glm::vec3 dir = to - from;
+    float maxExcess = -std::numeric_limits<float>::infinity();
+    float maxT      = 0.5f;
+    for (int i = 1; i < steps; ++i) {
+        float t      = static_cast<float>(i) / static_cast<float>(steps);
+        glm::vec3 p  = from + dir * t;
+        float excess = heightAtWorld(p.x, p.z) - p.y;
+        if (excess > maxExcess) {
+            maxExcess = excess;
+            maxT      = t;
+        }
+    }
+    return { maxExcess, maxT };
 }

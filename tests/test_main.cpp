@@ -3,6 +3,7 @@
 #include <cmath>
 #include <string>
 #include "sim/MaterialLibrary.h"
+#include "sim/TerrainModel.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond) do { \
@@ -50,12 +51,53 @@ static void test_load_from_json(const std::string& path) {
     }
 }
 
+// ── TerrainModel tests ───────────────────────────────────────────────────────
+
+static void test_peak_obstacle_flat_terrain() {
+    TerrainModel t;
+    t.width    = 200;
+    t.height   = 200;
+    t.cellSize = 1.0f;
+    t.heights.assign(200 * 200, 0.0f);
+
+    // LOS ray at y=10 over flat terrain at y=0 — terrain should be well below LOS
+    glm::vec3 from{0.0f, 10.0f, 0.0f};
+    glm::vec3 to  {100.0f, 10.0f, 100.0f};
+    auto obs = t.peakObstacle(from, to);
+
+    CHECK(obs.clearanceM < 0.0f);        // terrain below LOS
+    CHECK(obs.t > 0.0f && obs.t < 1.0f); // peak somewhere along path
+}
+
+static void test_peak_obstacle_blocked_terrain() {
+    TerrainModel t;
+    t.width    = 200;
+    t.height   = 200;
+    t.cellSize = 1.0f;
+    t.heights.assign(200 * 200, 0.0f);
+
+    // Place a 20 m hill near the centre
+    for (int dz = -5; dz <= 5; ++dz)
+        for (int dx = -5; dx <= 5; ++dx)
+            t.heights[(100 + dz) * 200 + (100 + dx)] = 20.0f;
+
+    // Antennas at y=5 on either side — hill should rise above LOS
+    glm::vec3 from{0.0f,   5.0f,   0.0f};
+    glm::vec3 to  {200.0f, 5.0f, 200.0f};
+    auto obs = t.peakObstacle(from, to);
+
+    CHECK(obs.clearanceM > 10.0f);       // hill is 20m, LOS at 5m → excess ~15m
+    CHECK(obs.t > 0.3f && obs.t < 0.7f); // peak is in the middle
+}
+
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
 
     test_default_material();
     test_loss_interpolation();
     test_load_from_json(materialsPath);
+    test_peak_obstacle_flat_terrain();
+    test_peak_obstacle_blocked_terrain();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;
