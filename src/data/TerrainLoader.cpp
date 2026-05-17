@@ -1,4 +1,6 @@
 #include "TerrainLoader.h"
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -127,6 +129,122 @@ TerrainModel TerrainLoader::fromDTED(const std::string& path) {
             const float h = (raw == -32768) ? 0.0f : static_cast<float>(raw);
             // DTED: col = west→east (x), row = south→north (z).
             t.heights[row * numLon + col] = h;
+        }
+    }
+
+    return t;
+}
+
+// ---------------------------------------------------------------------------
+// SRTM HGT parser
+// ---------------------------------------------------------------------------
+// Format: raw signed big-endian int16, row-major, north→south.
+// SRTM1: 3601×3601 samples (25 934 402 bytes), ~30.87 m/cell at 35°N.
+// SRTM3: 1201×1201 samples ( 2 884 802 bytes), ~92.6  m/cell at 35°N.
+// Void value: -32768 → replaced with 0 m.
+// Tile SW corner encoded in filename: N35W079.hgt → lat=35, lon=-79.
+
+// Parse tile SW corner from HGT filename (e.g. "N35W079.hgt").
+// Returns false if filename does not match expected pattern.
+static bool parseHGTOrigin(const std::string& path, int& swLat, int& swLon) {
+    size_t sep = path.find_last_of("/\\");
+    std::string name = (sep == std::string::npos) ? path : path.substr(sep + 1);
+    for (auto& c : name)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+    // Pattern: [NS]\d{2}[EW]\d{3}\.HGT
+    if (name.size() < 7) return false;
+    char latH = name[0];
+    if (latH != 'N' && latH != 'S') return false;
+    if (!std::isdigit(name[1]) || !std::isdigit(name[2])) return false;
+    int absLat = (name[1] - '0') * 10 + (name[2] - '0');
+
+    char lonH = name[3];
+    if (lonH != 'E' && lonH != 'W') return false;
+    if (!std::isdigit(name[4]) || !std::isdigit(name[5]) || !std::isdigit(name[6])) return false;
+    int absLon = (name[4] - '0') * 100 + (name[5] - '0') * 10 + (name[6] - '0');
+
+    swLat = (latH == 'N') ? absLat : -absLat;
+    swLon = (lonH == 'E') ? absLon : -absLon;
+    return true;
+}
+
+TerrainModel TerrainLoader::fromHGT(const std::string& path,
+                                    float cropCenterLat,
+                                    float cropCenterLon,
+                                    int   cropSize) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open HGT file: " + path);
+
+    // Detect resolution from file size.
+    f.seekg(0, std::ios::end);
+    const auto fileSize = static_cast<long long>(f.tellg());
+    f.seekg(0, std::ios::beg);
+
+    int samples;
+    float metersPerCell;
+    if (fileSize == 25934402LL) {
+        samples        = 3601;
+        metersPerCell  = 30.87f;   // 1 arc-sec latitude ≈ 30.87 m at 35°N
+    } else if (fileSize == 2884802LL) {
+        samples        = 1201;
+        metersPerCell  = 92.6f;    // 3 arc-sec
+    } else {
+        throw std::runtime_error(
+            "HGT file has unexpected size (expected SRTM1 or SRTM3): " + path);
+    }
+
+    // Read raw big-endian int16 data.
+    const int total = samples * samples;
+    std::vector<int16_t> raw(total);
+    f.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(total) * 2);
+    if (!f)
+        throw std::runtime_error("Failed to read HGT data from: " + path);
+
+    // Swap bytes: big-endian → native (little-endian on x86).
+    for (auto& v : raw) {
+        const auto u = static_cast<uint16_t>(v);
+        v = static_cast<int16_t>(((u & 0xFF00u) >> 8) | ((u & 0x00FFu) << 8));
+    }
+
+    // Derive tile SW corner from filename, or fall back to centre of file.
+    int swLat = 0, swLon = 0;
+    const bool haveOrigin = parseHGTOrigin(path, swLat, swLon);
+
+    // Compute centre of crop in tile coordinates.
+    // HGT row 0 = northern edge (swLat + 1 °), row (samples-1) = southern edge (swLat).
+    // HGT col 0 = western  edge (swLon),        col (samples-1) = eastern  edge (swLon + 1 °).
+    int centerRow, centerCol;
+    if (haveOrigin) {
+        // Convert geographic coords to tile row/col.
+        const float nEdge = static_cast<float>(swLat + 1);   // northern edge latitude
+        const float wEdge = static_cast<float>(swLon);        // western  edge longitude
+        centerRow = static_cast<int>((nEdge - cropCenterLat) * (samples - 1) + 0.5f);
+        centerCol = static_cast<int>((cropCenterLon - wEdge)  * (samples - 1) + 0.5f);
+    } else {
+        centerRow = samples / 2;
+        centerCol = samples / 2;
+    }
+
+    // Clamp crop to tile bounds.
+    int r0 = centerRow - cropSize / 2;
+    int c0 = centerCol - cropSize / 2;
+    r0 = std::max(0, std::min(r0, samples - cropSize));
+    c0 = std::max(0, std::min(c0, samples - cropSize));
+
+    // Build TerrainModel.  HGT rows go N→S; TerrainModel rows go S→N (row 0 = south).
+    TerrainModel t;
+    t.width    = cropSize;
+    t.height   = cropSize;
+    t.cellSize = metersPerCell;
+    t.heights.resize(cropSize * cropSize);
+
+    for (int hgtRow = 0; hgtRow < cropSize; ++hgtRow) {
+        const int terrainRow = cropSize - 1 - hgtRow;   // flip N↔S
+        for (int col = 0; col < cropSize; ++col) {
+            const int16_t v = raw[(r0 + hgtRow) * samples + (c0 + col)];
+            t.heights[terrainRow * cropSize + col] = (v == -32768) ? 0.0f
+                                                                   : static_cast<float>(v);
         }
     }
 
