@@ -1,0 +1,70 @@
+{
+  "materials": [
+    {
+      "name": "dry_soil",
+      "epsilon_r": 3.0,
+      "sigma_sm": 0.001,
+      "band_loss": [
+        {"freq_mhz": 100,   "loss_db_per_100m": 0.3},
+        {"freq_mhz": 300,   "loss_db_per_100m": 0.5},
+        {"freq_mhz": 1000,  "loss_db_per_100m": 1.2},
+        {"freq_mhz": 3000,  "loss_db_per_100m": 3.0}
+      ]
+    },
+    {
+      "name": "wet_soil",
+      "epsilon_r": 15.0,
+      "sigma_sm": 0.05,
+      "band_loss": [
+        {"freq_mhz": 100,   "loss_db_per_100m": 1.0},
+        {"freq_mhz": 300,   "loss_db_per_100m": 1.8},
+        {"freq_mhz": 1000,  "loss_db_per_100m": 3.5},
+        {"freq_mhz": 3000,  "loss_db_per_100m": 8.0}
+      ]
+    },
+    {
+      "name": "concrete",
+      "epsilon_r": 5.5,
+      "sigma_sm": 0.02,
+      "band_loss": [
+        {"freq_mhz": 100,   "loss_db_per_100m": 1.5},
+        {"freq_mhz": 300,   "loss_db_per_100m": 2.5},
+        {"freq_mhz": 1000,  "loss_db_per_100m": 5.0},
+        {"freq_mhz": 3000,  "loss_db_per_100m": 11.0}
+      ]
+    },
+    {
+      "name": "foliage",
+      "epsilon_r": 12.0,
+      "sigma_sm": 0.1,
+      "band_loss": [
+        {"freq_mhz": 100,   "loss_db_per_100m": 2.0},
+        {"freq_mhz": 300,   "loss_db_per_100m": 4.0},
+        {"freq_mhz": 1000,  "loss_db_per_100m": 10.0},
+        {"freq_mhz": 3000,  "loss_db_per_100m": 20.0}
+      ]
+    },
+    {
+      "name": "asphalt",
+      "epsilon_r": 3.8,
+      "sigma_sm": 0.002,
+      "band_loss": [
+        {"freq_mhz": 100,   "loss_db_per_100m": 0.4},
+        {"freq_mhz": 300,   "loss_db_per_100m": 0.7},
+        {"freq_mhz": 1000,  "loss_db_per_100m": 1.5},
+        {"freq_mhz": 3000,  "loss_db_per_100m": 3.5}
+      ]
+    },
+    {
+      "name": "water",
+      "epsilon_r": 80.0,
+      "sigma_sm": 4.0,
+      "band_loss": [
+        {"freq_mhz": 100,   "loss_db_per_100m": 5.0},
+        {"freq_mhz": 300,   "loss_db_per_100m": 9.0},
+        {"freq_mhz": 1000,  "loss_db_per_100m": 20.0},
+        {"freq_mhz": 3000,  "loss_db_per_100m": 45.0}
+      ]
+    }
+  ]
+}
