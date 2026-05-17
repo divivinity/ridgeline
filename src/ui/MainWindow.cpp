@@ -24,13 +24,42 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     loadAct->setShortcut(QKeySequence::Open);
     connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
 
-    // Toolbar (glassmorphism strip)
+    // Toolbar
     QToolBar* tb = addToolBar("Main");
     tb->setMovable(false);
 
-    QLabel* freqLabel = new QLabel("  150 MHz  |  50 W  |  Fast Mode  ");
+    QLabel* freqLabel = new QLabel("  150 MHz  |  50 W  ");
     freqLabel->setStyleSheet("color: rgba(255,255,255,0.7); font-family: monospace;");
     tb->addWidget(freqLabel);
+
+    m_modeCombo = new QComboBox();
+    m_modeCombo->addItem("⚡ Fast Mode");
+    m_modeCombo->addItem("\U0001F52C Full Physics");
+    m_modeCombo->setStyleSheet(
+        "QComboBox {"
+        "  background: rgba(255,255,255,0.1);"
+        "  border: 1px solid rgba(255,255,255,0.2);"
+        "  border-radius: 4px;"
+        "  color: rgba(255,255,255,0.85);"
+        "  padding: 2px 10px;"
+        "  font-family: monospace;"
+        "  min-width: 130px;"
+        "}"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView {"
+        "  background: #1a2a3a;"
+        "  color: rgba(255,255,255,0.85);"
+        "  selection-background-color: rgba(79,195,247,0.3);"
+        "}"
+    );
+    connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+                m_engine.mode = (idx == 0) ? SimEngine::Mode::Fast
+                                           : SimEngine::Mode::Full;
+                m_statusLabel->setText(idx == 0 ? "  Fast Mode"
+                                                 : "  Full Physics Mode");
+            });
+    tb->addWidget(m_modeCombo);
 
     m_solveBtn = new QPushButton("  ⚡ Solve  ");
     m_solveBtn->setStyleSheet(
@@ -57,6 +86,7 @@ void MainWindow::setupScene() {
     TerrainModel terrain = TerrainLoader::makeHills(200, 200, 10.0f, 40.0f);
     m_engine.setTerrain(std::move(terrain));
     placeDefaultAntennas();
+    m_engine.loadMaterials("assets/materials.json");
 }
 
 void MainWindow::placeDefaultAntennas() {
