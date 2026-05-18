@@ -15,6 +15,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     applyTheme();
     setupScene();
 
+    // ── File menu ─────────────────────────────────────────────────────────────
+    QMenu* fileMenu = menuBar()->addMenu("&File");
+    QAction* loadAct = fileMenu->addAction("&Load Terrain…");
+    loadAct->setShortcut(QKeySequence::Open);
+    connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
+
     // ── Central viewport ──────────────────────────────────────────────────────
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
@@ -205,6 +211,7 @@ void MainWindow::onAddAntenna() {
     m_engine.addAntenna(a);
     m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
     refreshTree();
+    m_scenarioTree->selectRow(m_selectedIndex);
     refreshPropsPanel();
     m_statusLabel->setText("  Antenna added");
 }

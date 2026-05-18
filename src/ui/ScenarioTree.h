@@ -20,6 +20,9 @@ public:
     // Returns the currently selected antenna index, or -1 if none.
     int selectedIndex() const;
 
+    // Programmatically select a row without emitting selectionChanged.
+    void selectRow(int index);
+
 signals:
     void selectionChanged(int index);   // -1 = deselected
     void addRequested();                // user clicked Add
