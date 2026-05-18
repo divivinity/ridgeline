@@ -92,6 +92,13 @@ int ScenarioTree::selectedIndex() const {
     return m_list->currentRow();
 }
 
+void ScenarioTree::selectRow(int index) {
+    m_list->blockSignals(true);
+    m_list->setCurrentRow(index);
+    m_list->blockSignals(false);
+    m_removeBtn->setEnabled(index >= 0 && index < m_list->count());
+}
+
 void ScenarioTree::onSelectionChanged() {
     const int row = m_list->currentRow();
     m_removeBtn->setEnabled(row >= 0);
