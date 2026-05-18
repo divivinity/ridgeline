@@ -15,16 +15,42 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     applyTheme();
     setupScene();
 
+    // ── Central viewport ──────────────────────────────────────────────────────
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
 
-    // File menu
-    QMenu* fileMenu = menuBar()->addMenu("&File");
-    QAction* loadAct = fileMenu->addAction("&Load Terrain…");
-    loadAct->setShortcut(QKeySequence::Open);
-    connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
+    // ── Left dock — Scenario Tree ─────────────────────────────────────────────
+    m_scenarioTree = new ScenarioTree(this);
+    auto* leftDock = new QDockWidget("Scenario", this);
+    leftDock->setWidget(m_scenarioTree);
+    leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    leftDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    leftDock->setStyleSheet(
+        "QDockWidget { color: rgba(255,255,255,0.7); font-family: monospace; font-size: 11px; }"
+        "QDockWidget::title { background: rgba(15,25,35,0.9); padding: 4px; }"
+    );
+    addDockWidget(Qt::LeftDockWidgetArea, leftDock);
 
-    // Toolbar
+    connect(m_scenarioTree, &ScenarioTree::addRequested,
+            this, &MainWindow::onAddAntenna);
+    connect(m_scenarioTree, &ScenarioTree::removeRequested,
+            this, &MainWindow::onRemoveAntenna);
+    connect(m_scenarioTree, &ScenarioTree::selectionChanged,
+            this, &MainWindow::onAntennaSelected);
+
+    // ── Right dock — Properties Panel ─────────────────────────────────────────
+    m_propsPanel = new PropertiesPanel(this);
+    auto* rightDock = new QDockWidget("Properties", this);
+    rightDock->setWidget(m_propsPanel);
+    rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    rightDock->setStyleSheet(leftDock->styleSheet());
+    addDockWidget(Qt::RightDockWidgetArea, rightDock);
+
+    connect(m_propsPanel, &PropertiesPanel::antennaChanged,
+            this, &MainWindow::onAntennaChanged);
+
+    // ── Main toolbar ──────────────────────────────────────────────────────────
     QToolBar* tb = addToolBar("Main");
     tb->setMovable(false);
 
@@ -76,10 +102,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_solveBtn, &QPushButton::clicked, this, &MainWindow::onSolve);
     tb->addWidget(m_solveBtn);
 
+    // ── Overlay toolbar (second row) ──────────────────────────────────────────
+    m_overlayBar = new OverlayToolbar(this);
+    QToolBar* overlayTb = addToolBar("Overlays");
+    overlayTb->setMovable(false);
+    overlayTb->addWidget(m_overlayBar);
+    connect(m_overlayBar, &OverlayToolbar::overlayToggled,
+            m_viewport, &ViewportWidget::setOverlayVisible);
+
+    // ── Status bar ────────────────────────────────────────────────────────────
     m_statusLabel = new QLabel("  Ready");
     m_statusLabel->setStyleSheet("color: rgba(255,255,255,0.5); font-family: monospace;");
     statusBar()->addWidget(m_statusLabel);
     statusBar()->setStyleSheet("background: rgba(15,25,35,0.9);");
+
+    // Populate tree with default antennas
+    refreshTree();
 }
 
 void MainWindow::setupScene() {
@@ -123,23 +161,16 @@ void MainWindow::loadTerrain(const QString& path) {
 
         if (m_viewport) m_viewport->reloadTerrain();
 
-        setWindowTitle(QString("Ridgeline — %1")
-                       .arg(QFileInfo(path).fileName()));
+        m_selectedIndex = -1;
+        refreshTree();
+        refreshPropsPanel();
+
+        setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
         m_statusLabel->setText("  Terrain loaded");
     } catch (const std::exception& e) {
         m_statusLabel->setText("  Ready");
         QMessageBox::critical(this, "Load failed", e.what());
     }
-}
-
-void MainWindow::onLoadTerrain() {
-    const QString path = QFileDialog::getOpenFileName(
-        this, "Load Terrain", {},
-        "Terrain files (*.dt0 *.dt1 *.dt2 *.hgt);;"
-        "DTED files (*.dt0 *.dt1 *.dt2);;"
-        "SRTM HGT files (*.hgt);;"
-        "All files (*)");
-    if (!path.isEmpty()) loadTerrain(path);
 }
 
 void MainWindow::onSolve() {
@@ -152,6 +183,64 @@ void MainWindow::onSolve() {
     m_solveBtn->setEnabled(true);
 }
 
+void MainWindow::onLoadTerrain() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Load Terrain", {},
+        "Terrain files (*.dt0 *.dt1 *.dt2 *.hgt);;"
+        "DTED files (*.dt0 *.dt1 *.dt2);;"
+        "SRTM HGT files (*.hgt);;"
+        "All files (*)");
+    if (!path.isEmpty()) loadTerrain(path);
+}
+
+void MainWindow::onAddAntenna() {
+    const auto& t = m_engine.terrain();
+    const float cx = t.worldSize().x * 0.5f;
+    const float cz = t.worldSize().z * 0.5f;
+    Antenna a;
+    a.position     = { cx, t.heightAtWorld(cx, cz) + 10.0f, cz };
+    a.frequencyMHz = 150.0f;
+    a.powerW       = 10.0f;
+    a.gainDbi      = 3.0f;
+    m_engine.addAntenna(a);
+    m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
+    refreshTree();
+    refreshPropsPanel();
+    m_statusLabel->setText("  Antenna added");
+}
+
+void MainWindow::onRemoveAntenna(int index) {
+    m_engine.removeAntenna(index);
+    if (m_selectedIndex >= static_cast<int>(m_engine.antennas().size()))
+        m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
+    refreshTree();
+    refreshPropsPanel();
+    m_statusLabel->setText("  Antenna removed");
+}
+
+void MainWindow::onAntennaSelected(int index) {
+    m_selectedIndex = index;
+    refreshPropsPanel();
+}
+
+void MainWindow::onAntennaChanged(Antenna updated) {
+    if (m_selectedIndex < 0) return;
+    m_engine.updateAntenna(m_selectedIndex, updated);
+}
+
+void MainWindow::refreshTree() {
+    m_scenarioTree->refresh(m_engine.antennas());
+}
+
+void MainWindow::refreshPropsPanel() {
+    if (m_selectedIndex >= 0 &&
+        m_selectedIndex < static_cast<int>(m_engine.antennas().size())) {
+        m_propsPanel->load(&m_engine.antennas()[m_selectedIndex]);
+    } else {
+        m_propsPanel->load(nullptr);
+    }
+}
+
 void MainWindow::applyTheme() {
     setStyleSheet(
         "QMainWindow, QWidget { background: #0f1923; color: rgba(255,255,255,0.85); }"
@@ -161,5 +250,6 @@ void MainWindow::applyTheme() {
         "  spacing: 8px; padding: 4px 8px;"
         "}"
         "QMenuBar { background: transparent; }"
+        "QDockWidget { background: rgba(15,25,35,0.85); }"
     );
 }
