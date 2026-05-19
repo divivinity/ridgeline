@@ -1,13 +1,15 @@
 #pragma once
+#include <string>
 #include <vector>
 #include <glm/glm.hpp>
 
 struct Antenna {
-    glm::vec3 position;   // world XYZ (Y = up, meters AGL added to terrain height)
-    float frequencyMHz = 150.0f;
-    float powerW        = 50.0f;
-    float gainDbi       = 3.0f;
-    bool  isJammer      = false;
+    glm::vec3   position;   // world XYZ (Y = up, meters AGL added to terrain height)
+    float       frequencyMHz = 150.0f;
+    float       powerW       = 50.0f;
+    float       gainDbi      = 3.0f;
+    bool        isJammer     = false;
+    std::string antennaType  = "omni";
 };
 
 struct FieldGrid {

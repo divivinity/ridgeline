@@ -1,0 +1,8 @@
+{
+  "antenna_types": [
+    { "name": "omni",   "default_gain_dbi": 3.0,  "beamwidth_deg": 360.0 },
+    { "name": "dipole", "default_gain_dbi": 2.15, "beamwidth_deg": 360.0 },
+    { "name": "yagi",   "default_gain_dbi": 10.0, "beamwidth_deg": 60.0  },
+    { "name": "patch",  "default_gain_dbi": 8.0,  "beamwidth_deg": 90.0  }
+  ]
+}

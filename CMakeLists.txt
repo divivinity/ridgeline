@@ -70,6 +70,7 @@ add_executable(ridgeline_tests
     src/sim/FastSolver.cpp
     src/sim/FullSolver.cpp
     src/sim/SimEngine.cpp
+    src/data/AntennaLibrary.cpp
 )
 target_include_directories(ridgeline_tests PRIVATE src)
 target_link_libraries(ridgeline_tests
