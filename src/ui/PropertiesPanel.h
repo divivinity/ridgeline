@@ -5,7 +5,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include "sim/Types.h"
-#include "data/AntennaLibrary.h"
+
+class AntennaLibrary;
 
 // Right-dock panel for editing a selected antenna's parameters.
 // MainWindow calls load() when selection changes.
