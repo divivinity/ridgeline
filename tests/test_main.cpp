@@ -7,6 +7,8 @@
 #include "sim/FullSolver.h"
 #include "sim/SimEngine.h"
 #include "data/AntennaLibrary.h"
+#include "data/ScenarioIO.h"
+#include <cstdio>  // for std::remove
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond) do { \
@@ -273,6 +275,70 @@ static void test_update_antenna() {
     CHECK(engine.antennas()[0].frequencyMHz == 900.0f);  // element not mutated by bad index
 }
 
+static void test_scenario_io_hills_round_trip() {
+    ScenarioDoc doc;
+    doc.terrain.type         = TerrainSource::Type::Hills;
+    doc.mode                 = SimEngine::Mode::Full;
+
+    Antenna a;
+    a.position       = {100.0f, 15.0f, 200.0f};
+    a.frequencyMHz   = 433.0f;
+    a.powerW         = 20.0f;
+    a.gainDbi        = 6.0f;
+    a.isJammer       = false;
+    a.antennaType    = "yagi";
+    doc.antennas.push_back(a);
+
+    Antenna j;
+    j.position       = {500.0f, 10.0f, 500.0f};
+    j.frequencyMHz   = 433.0f;
+    j.powerW         = 100.0f;
+    j.gainDbi        = 3.0f;
+    j.isJammer       = true;
+    j.antennaType    = "omni";
+    doc.antennas.push_back(j);
+
+    const std::string path = "test_scenario_tmp.json";
+    ScenarioIO::save(doc, path);
+
+    ScenarioDoc loaded = ScenarioIO::load(path);
+    CHECK(loaded.terrain.type == TerrainSource::Type::Hills);
+    CHECK(loaded.mode == SimEngine::Mode::Full);
+    CHECK(loaded.antennas.size() == 2u);
+    CHECK_NEAR(loaded.antennas[0].frequencyMHz, 433.0f, 0.01f);
+    CHECK_NEAR(loaded.antennas[0].gainDbi, 6.0f, 0.01f);
+    CHECK(loaded.antennas[0].antennaType == "yagi");
+    CHECK(loaded.antennas[1].isJammer == true);
+    CHECK_NEAR(loaded.antennas[0].position.x, 100.0f, 0.01f);
+    CHECK_NEAR(loaded.antennas[0].position.y, 15.0f, 0.01f);
+    CHECK_NEAR(loaded.antennas[0].position.z, 200.0f, 0.01f);
+
+    std::remove(path.c_str());
+}
+
+static void test_scenario_io_hgt_round_trip() {
+    ScenarioDoc doc;
+    doc.terrain.type    = TerrainSource::Type::Hgt;
+    doc.terrain.hgtPath = "/data/N35W079.hgt";
+    doc.terrain.hgtLat  = 35.05f;
+    doc.terrain.hgtLon  = -78.88f;
+    doc.terrain.hgtSize = 512;
+    doc.mode            = SimEngine::Mode::Fast;
+
+    const std::string path = "test_scenario_hgt_tmp.json";
+    ScenarioIO::save(doc, path);
+    ScenarioDoc loaded = ScenarioIO::load(path);
+
+    CHECK(loaded.terrain.type == TerrainSource::Type::Hgt);
+    CHECK(loaded.terrain.hgtPath == "/data/N35W079.hgt");
+    CHECK_NEAR(loaded.terrain.hgtLat, 35.05f, 0.001f);
+    CHECK_NEAR(loaded.terrain.hgtLon, -78.88f, 0.001f);
+    CHECK(loaded.terrain.hgtSize == 512);
+    CHECK(loaded.mode == SimEngine::Mode::Fast);
+
+    std::remove(path.c_str());
+}
+
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
 
@@ -289,6 +355,8 @@ int main(int argc, char** argv) {
     test_add_antenna();
     test_remove_antenna();
     test_update_antenna();
+    test_scenario_io_hills_round_trip();
+    test_scenario_io_hgt_round_trip();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;
