@@ -193,11 +193,10 @@ void MainWindow::loadTerrain(const QString& path) {
         if (ext == "hgt") {
             m_terrainSource.type    = TerrainSource::Type::Hgt;
             m_terrainSource.hgtPath = path.toStdString();
-        } else if (ext == "dt0" || ext == "dt1" || ext == "dt2") {
+        } else {
+            // All non-HGT paths go through fromDTED — record accordingly.
             m_terrainSource.type    = TerrainSource::Type::Dted;
             m_terrainSource.hgtPath = path.toStdString();
-        } else {
-            m_terrainSource.type = TerrainSource::Type::Flat;
         }
         placeDefaultAntennas();
 
@@ -323,8 +322,6 @@ void MainWindow::onOpenScenario() {
 }
 
 void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
-    m_terrainSource = doc.terrain;
-
     TerrainModel t;
     const auto& ts = doc.terrain;
     switch (ts.type) {
@@ -347,6 +344,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
             break;
     }
     m_engine.setTerrain(std::move(t));
+    m_terrainSource = doc.terrain;  // only update after successful terrain build
 
     m_engine.mode = doc.mode;
     m_modeCombo->setCurrentIndex(doc.mode == SimEngine::Mode::Fast ? 0 : 1);
