@@ -1,5 +1,8 @@
 #include "MainWindow.h"
 #include "data/TerrainLoader.h"
+#include "data/ScenarioIO.h"
+#include "data/Exporter.h"
+#include "data/AntennaLibrary.h"
 #include <QWidget>
 #include <QStatusBar>
 #include <QToolBar>
@@ -15,11 +18,33 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     applyTheme();
     setupScene();
 
+    // ── Antenna library ────────────────────────────────────────────────────────
+    try {
+        m_antennaLib.load("assets/antennas.json");
+    } catch (...) {
+        m_antennaLib.loadDefaults();
+    }
+
     // ── File menu ─────────────────────────────────────────────────────────────
     QMenu* fileMenu = menuBar()->addMenu("&File");
     QAction* loadAct = fileMenu->addAction("&Load Terrain…");
     loadAct->setShortcut(QKeySequence::Open);
     connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
+
+    fileMenu->addSeparator();
+    QAction* openScenAct = fileMenu->addAction("&Open Scenario…");
+    openScenAct->setShortcut(QKeySequence("Ctrl+Shift+O"));
+    connect(openScenAct, &QAction::triggered, this, &MainWindow::onOpenScenario);
+
+    QAction* saveScenAct = fileMenu->addAction("&Save Scenario…");
+    saveScenAct->setShortcut(QKeySequence::Save);
+    connect(saveScenAct, &QAction::triggered, this, &MainWindow::onSaveScenario);
+
+    QMenu* exportMenu = fileMenu->addMenu("&Export");
+    QAction* exportPngAct = exportMenu->addAction("Coverage &PNG…");
+    connect(exportPngAct, &QAction::triggered, this, &MainWindow::onExportPng);
+    QAction* exportCsvAct = exportMenu->addAction("Coverage &CSV…");
+    connect(exportCsvAct, &QAction::triggered, this, &MainWindow::onExportCsv);
 
     // ── Central viewport ──────────────────────────────────────────────────────
     m_viewport = new ViewportWidget(&m_engine, this);
@@ -46,6 +71,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     // ── Right dock — Properties Panel ─────────────────────────────────────────
     m_propsPanel = new PropertiesPanel(this);
+    m_propsPanel->setAntennaLibrary(&m_antennaLib);
     auto* rightDock = new QDockWidget("Properties", this);
     rightDock->setWidget(m_propsPanel);
     rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -129,6 +155,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 void MainWindow::setupScene() {
     TerrainModel terrain = TerrainLoader::makeHills(200, 200, 10.0f, 40.0f);
     m_engine.setTerrain(std::move(terrain));
+    m_terrainSource = TerrainSource{};  // default: Type::Hills, 200×200, 10m cell, 40m amplitude
     placeDefaultAntennas();
     m_engine.loadMaterials("assets/materials.json");
 }
@@ -163,6 +190,12 @@ void MainWindow::loadTerrain(const QString& path) {
                        ? TerrainLoader::fromHGT(path.toStdString())
                        : TerrainLoader::fromDTED(path.toStdString());
         m_engine.setTerrain(std::move(t));
+        if (ext == "hgt") {
+            m_terrainSource.type    = TerrainSource::Type::Hgt;
+            m_terrainSource.hgtPath = path.toStdString();
+        } else {
+            m_terrainSource.type = TerrainSource::Type::Flat;
+        }
         placeDefaultAntennas();
 
         if (m_viewport) m_viewport->reloadTerrain();
@@ -245,6 +278,113 @@ void MainWindow::refreshPropsPanel() {
         m_propsPanel->load(&m_engine.antennas()[m_selectedIndex]);
     } else {
         m_propsPanel->load(nullptr);
+    }
+}
+
+void MainWindow::onSaveScenario() {
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save Scenario", {},
+        "Ridgeline scenario (*.json);;All files (*)");
+    if (path.isEmpty()) return;
+
+    ScenarioDoc doc;
+    doc.terrain  = m_terrainSource;
+    doc.mode     = m_engine.mode;
+    doc.antennas = m_engine.antennas();
+
+    try {
+        ScenarioIO::save(doc, path.toStdString());
+        m_statusLabel->setText("  Scenario saved");
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, "Save failed", e.what());
+    }
+}
+
+void MainWindow::onOpenScenario() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Open Scenario", {},
+        "Ridgeline scenario (*.json);;All files (*)");
+    if (path.isEmpty()) return;
+
+    try {
+        m_statusLabel->setText("  Loading scenario…");
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        ScenarioDoc doc = ScenarioIO::load(path.toStdString());
+        applyScenarioDoc(doc);
+        setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
+        m_statusLabel->setText("  Scenario loaded");
+    } catch (const std::exception& e) {
+        m_statusLabel->setText("  Ready");
+        QMessageBox::critical(this, "Open failed", e.what());
+    }
+}
+
+void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
+    m_terrainSource = doc.terrain;
+
+    TerrainModel t;
+    const auto& ts = doc.terrain;
+    switch (ts.type) {
+        case TerrainSource::Type::Hgt:
+            t = TerrainLoader::fromHGT(ts.hgtPath,
+                                        static_cast<float>(ts.hgtLat),
+                                        static_cast<float>(ts.hgtLon),
+                                        ts.hgtSize);
+            break;
+        case TerrainSource::Type::Flat:
+            t = TerrainLoader::makeFlat(ts.widthCells, ts.heightCells, ts.cellSize);
+            break;
+        case TerrainSource::Type::Hills:
+        default:
+            t = TerrainLoader::makeHills(ts.widthCells, ts.heightCells,
+                                          ts.cellSize, ts.amplitude);
+            break;
+    }
+    m_engine.setTerrain(std::move(t));
+
+    m_engine.mode = doc.mode;
+    m_modeCombo->setCurrentIndex(doc.mode == SimEngine::Mode::Fast ? 0 : 1);
+    m_engine.setAntennas(doc.antennas);
+
+    m_selectedIndex = -1;
+    if (m_viewport) m_viewport->reloadTerrain();
+    refreshTree();
+    refreshPropsPanel();
+}
+
+void MainWindow::onExportPng() {
+    if (!m_engine.fieldGrid().valid()) {
+        QMessageBox::information(this, "No data",
+            "Run Solve first to generate a coverage field.");
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export Coverage PNG", {},
+        "PNG image (*.png);;All files (*)");
+    if (path.isEmpty()) return;
+
+    if (Exporter::exportPng(m_engine.fieldGrid(), path.toStdString())) {
+        m_statusLabel->setText("  PNG exported");
+    } else {
+        QMessageBox::critical(this, "Export failed", "Could not write PNG file.");
+    }
+}
+
+void MainWindow::onExportCsv() {
+    if (!m_engine.fieldGrid().valid()) {
+        QMessageBox::information(this, "No data",
+            "Run Solve first to generate a coverage field.");
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export Coverage CSV", {},
+        "CSV file (*.csv);;All files (*)");
+    if (path.isEmpty()) return;
+
+    if (Exporter::exportCsv(m_engine.fieldGrid(), path.toStdString())) {
+        m_statusLabel->setText("  CSV exported");
+    } else {
+        QMessageBox::critical(this, "Export failed", "Could not write CSV file.");
     }
 }
 

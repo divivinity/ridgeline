@@ -221,6 +221,25 @@ static void test_antenna_library_load_json(const std::string& path) {
     CHECK(patch->beamwidthDeg < 180.0f);  // directional
 }
 
+static void test_antenna_library_load_defaults() {
+    // loadDefaults() should produce the same 4 types as defaults()
+    AntennaLibrary lib;
+    lib.loadDefaults();
+    CHECK(lib.types().size() == AntennaLibrary::defaults().types().size());
+    CHECK(lib.find("omni")   != nullptr);
+    CHECK(lib.find("dipole") != nullptr);
+    CHECK(lib.find("yagi")   != nullptr);
+    CHECK(lib.find("patch")  != nullptr);
+
+    // After load() fails, loadDefaults() should recover the library.
+    AntennaLibrary lib2;
+    bool threw = false;
+    try { lib2.load("nonexistent_antennas.json"); } catch (...) { threw = true; }
+    CHECK(threw);
+    lib2.loadDefaults();
+    CHECK(lib2.find("omni") != nullptr);
+}
+
 static void test_add_antenna() {
     SimEngine engine;
     CHECK(engine.antennas().empty());
@@ -352,6 +371,7 @@ int main(int argc, char** argv) {
     test_ridge_reduces_power_vs_flat();
     test_antenna_library_defaults();
     test_antenna_library_load_json("assets/antennas.json");
+    test_antenna_library_load_defaults();
     test_add_antenna();
     test_remove_antenna();
     test_update_antenna();

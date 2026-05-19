@@ -9,6 +9,8 @@
 #include "ScenarioTree.h"
 #include "PropertiesPanel.h"
 #include "OverlayToolbar.h"
+#include "data/AntennaLibrary.h"
+#include "data/ScenarioIO.h"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -19,6 +21,10 @@ public:
 private slots:
     void onSolve();
     void onLoadTerrain();
+    void onSaveScenario();
+    void onOpenScenario();
+    void onExportPng();
+    void onExportCsv();
     void onAddAntenna();
     void onRemoveAntenna(int index);
     void onAntennaSelected(int index);
@@ -26,6 +32,8 @@ private slots:
 
 private:
     SimEngine        m_engine;
+    AntennaLibrary   m_antennaLib;
+    TerrainSource    m_terrainSource;   // tracks what terrain is currently loaded
     ViewportWidget*  m_viewport      = nullptr;
     ScenarioTree*    m_scenarioTree  = nullptr;
     PropertiesPanel* m_propsPanel    = nullptr;
@@ -40,4 +48,5 @@ private:
     void placeDefaultAntennas();
     void refreshTree();
     void refreshPropsPanel();
+    void applyScenarioDoc(const ScenarioDoc& doc);
 };
