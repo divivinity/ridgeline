@@ -10,6 +10,7 @@ static const char* typeToStr(TerrainSource::Type t) {
         case TerrainSource::Type::Hills: return "hills";
         case TerrainSource::Type::Flat:  return "flat";
         case TerrainSource::Type::Hgt:   return "hgt";
+        case TerrainSource::Type::Dted:  return "dted";
         default: throw std::logic_error("Unknown TerrainSource::Type");
     }
 }
@@ -17,6 +18,7 @@ static const char* typeToStr(TerrainSource::Type t) {
 static TerrainSource::Type strToType(const std::string& s) {
     if (s == "flat") return TerrainSource::Type::Flat;
     if (s == "hgt")  return TerrainSource::Type::Hgt;
+    if (s == "dted") return TerrainSource::Type::Dted;
     return TerrainSource::Type::Hills;
 }
 
@@ -37,6 +39,8 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
         jt["hgt_lat"]  = doc.terrain.hgtLat;
         jt["hgt_lon"]  = doc.terrain.hgtLon;
         jt["hgt_size"] = doc.terrain.hgtSize;
+    } else if (doc.terrain.type == TerrainSource::Type::Dted) {
+        jt["dted_path"] = doc.terrain.hgtPath;
     }
 
     json antennas = json::array();
@@ -85,6 +89,8 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                     doc.terrain.hgtLat  = jt.value("hgt_lat",  def.hgtLat);
                     doc.terrain.hgtLon  = jt.value("hgt_lon",  def.hgtLon);
                     doc.terrain.hgtSize = jt.value("hgt_size",  def.hgtSize);
+                } else if (doc.terrain.type == TerrainSource::Type::Dted) {
+                    doc.terrain.hgtPath = jt.value("dted_path", std::string{});
                 }
             }
         }
