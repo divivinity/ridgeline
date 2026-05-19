@@ -1,4 +1,5 @@
 #include "PropertiesPanel.h"
+#include "data/AntennaLibrary.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
@@ -39,6 +40,26 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* heightLabel = new QLabel("Height:");     heightLabel->setStyleSheet(labelStyle);
     auto* jammerLabel = new QLabel("Is Jammer:");  jammerLabel->setStyleSheet(labelStyle);
 
+    m_typeCombo = new QComboBox();
+    m_typeCombo->setStyleSheet(
+        "QComboBox {"
+        "  background: rgba(255,255,255,0.08);"
+        "  border: 1px solid rgba(255,255,255,0.15);"
+        "  border-radius: 3px;"
+        "  color: rgba(255,255,255,0.85);"
+        "  font-family: monospace; font-size: 12px;"
+        "  padding: 2px 6px;"
+        "}"
+        "QComboBox QAbstractItemView {"
+        "  background: #1a2a3a;"
+        "  color: rgba(255,255,255,0.85);"
+        "  selection-background-color: rgba(79,195,247,0.3);"
+        "}"
+    );
+    connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &PropertiesPanel::onTypeChanged);
+    form->addRow("Type", m_typeCombo);
+
     form->addRow(freqLabel,   m_freqSpin);
     form->addRow(powerLabel,  m_powerSpin);
     form->addRow(gainLabel,   m_gainSpin);
@@ -74,6 +95,34 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     setStyleSheet("background: rgba(15,25,35,0.85);");
 }
 
+void PropertiesPanel::setAntennaLibrary(const AntennaLibrary* lib) {
+    m_lib = lib;
+    if (!lib || lib->types().empty()) return;
+
+    m_loading = true;
+    m_typeCombo->clear();
+    for (const auto& t : lib->types())
+        m_typeCombo->addItem(QString::fromStdString(t.name));
+    m_loading = false;
+}
+
+void PropertiesPanel::onTypeChanged(int index) {
+    if (m_loading || !m_lib || index < 0) return;
+    const auto& types = m_lib->types();
+    if (index >= static_cast<int>(types.size())) return;
+
+    const AntennaType& t = types[index];
+    m_current.antennaType = t.name;
+
+    // Apply the type's default gain when the type changes.
+    m_loading = true;
+    m_gainSpin->setValue(static_cast<double>(t.defaultGainDbi));
+    m_loading = false;
+    m_current.gainDbi = t.defaultGainDbi;
+
+    emit antennaChanged(m_current);
+}
+
 void PropertiesPanel::load(const Antenna* antenna) {
     if (!antenna) {
         m_form->hide();
@@ -87,6 +136,19 @@ void PropertiesPanel::load(const Antenna* antenna) {
     m_gainSpin->setValue(static_cast<double>(antenna->gainDbi));
     m_heightSpin->setValue(static_cast<double>(antenna->position.y));
     m_jammerCheck->setChecked(antenna->isJammer);
+    // Sync type combo
+    if (m_lib && m_typeCombo->count() > 0) {
+        const std::string& typeName = antenna->antennaType;
+        bool found = false;
+        for (int i = 0; i < m_typeCombo->count(); ++i) {
+            if (m_typeCombo->itemText(i).toStdString() == typeName) {
+                m_typeCombo->setCurrentIndex(i);
+                found = true;
+                break;
+            }
+        }
+        if (!found) m_typeCombo->setCurrentIndex(0);
+    }
     m_loading = false;
     m_noSelLabel->hide();
     m_form->show();
