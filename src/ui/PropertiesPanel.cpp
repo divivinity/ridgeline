@@ -104,6 +104,27 @@ void PropertiesPanel::setAntennaLibrary(const AntennaLibrary* lib) {
     for (const auto& t : lib->types())
         m_typeCombo->addItem(QString::fromStdString(t.name));
     m_loading = false;
+
+    // If an antenna is already loaded, re-sync the combo to its type.
+    if (m_form->isVisible()) {
+        const std::string& typeName = m_current.antennaType;
+        bool found = false;
+        for (int i = 0; i < m_typeCombo->count(); ++i) {
+            if (m_typeCombo->itemText(i).toStdString() == typeName) {
+                m_loading = true;
+                m_typeCombo->setCurrentIndex(i);
+                m_loading = false;
+                found = true;
+                break;
+            }
+        }
+        if (!found && m_typeCombo->count() > 0) {
+            m_loading = true;
+            m_typeCombo->setCurrentIndex(0);
+            m_loading = false;
+            m_current.antennaType = m_typeCombo->itemText(0).toStdString();
+        }
+    }
 }
 
 void PropertiesPanel::onTypeChanged(int index) {
@@ -147,7 +168,10 @@ void PropertiesPanel::load(const Antenna* antenna) {
                 break;
             }
         }
-        if (!found) m_typeCombo->setCurrentIndex(0);
+        if (!found && m_typeCombo->count() > 0) {
+            m_typeCombo->setCurrentIndex(0);
+            m_current.antennaType = m_typeCombo->itemText(0).toStdString();
+        }
     }
     m_loading = false;
     m_noSelLabel->hide();
