@@ -2,6 +2,7 @@
 #include <QImage>
 #include <QString>
 #include <fstream>
+#include <iomanip>
 #include <cmath>
 #include <algorithm>
 
@@ -44,12 +45,13 @@ bool Exporter::exportPng(const FieldGrid& grid, const std::string& path) {
     img.fill(Qt::transparent);
 
     for (int y = 0; y < grid.height; ++y) {
+        auto* line = reinterpret_cast<uint32_t*>(img.scanLine(y));
         for (int x = 0; x < grid.width; ++x) {
             const float v = grid.at(x, y);
             if (!std::isfinite(v)) continue;
             uint8_t r, g, b;
             colormapRgb((v - minDbm) / range, r, g, b);
-            img.setPixel(x, y, qRgba(r, g, b, 255));
+            line[x] = qRgba(r, g, b, 255);
         }
     }
 
@@ -64,6 +66,7 @@ bool Exporter::exportCsv(const FieldGrid& grid, const std::string& path) {
     if (!f) return false;
 
     f << "x_m,z_m,dbm\n";
+    f << std::fixed << std::setprecision(3);
     for (int y = 0; y < grid.height; ++y) {
         const float z_m = grid.originXZ.y + static_cast<float>(y) * grid.cellSize;
         for (int x = 0; x < grid.width; ++x) {
