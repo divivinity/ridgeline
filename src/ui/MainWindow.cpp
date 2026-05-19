@@ -193,6 +193,9 @@ void MainWindow::loadTerrain(const QString& path) {
         if (ext == "hgt") {
             m_terrainSource.type    = TerrainSource::Type::Hgt;
             m_terrainSource.hgtPath = path.toStdString();
+        } else if (ext == "dt0" || ext == "dt1" || ext == "dt2") {
+            m_terrainSource.type    = TerrainSource::Type::Dted;
+            m_terrainSource.hgtPath = path.toStdString();
         } else {
             m_terrainSource.type = TerrainSource::Type::Flat;
         }
@@ -330,6 +333,9 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
                                         static_cast<float>(ts.hgtLat),
                                         static_cast<float>(ts.hgtLon),
                                         ts.hgtSize);
+            break;
+        case TerrainSource::Type::Dted:
+            t = TerrainLoader::fromDTED(ts.hgtPath);
             break;
         case TerrainSource::Type::Flat:
             t = TerrainLoader::makeFlat(ts.widthCells, ts.heightCells, ts.cellSize);
