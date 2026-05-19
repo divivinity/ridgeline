@@ -6,6 +6,7 @@
 #include "sim/TerrainModel.h"
 #include "sim/FullSolver.h"
 #include "sim/SimEngine.h"
+#include "data/AntennaLibrary.h"
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(cond) do { \
@@ -191,6 +192,33 @@ static void test_ridge_reduces_power_vs_flat() {
         CHECK(dbmRidged < dbmFlat);
 }
 
+static void test_antenna_library_defaults() {
+    const AntennaLibrary& lib = AntennaLibrary::defaults();
+    CHECK(!lib.types().empty());
+
+    const AntennaType* omni = lib.find("omni");
+    CHECK(omni != nullptr);
+    CHECK_NEAR(omni->defaultGainDbi, 3.0f, 0.01f);
+
+    const AntennaType* missing = lib.find("nonexistent");
+    CHECK(missing == nullptr);
+}
+
+static void test_antenna_library_load_json(const std::string& path) {
+    AntennaLibrary lib;
+    lib.load(path);
+
+    CHECK(!lib.types().empty());
+    const AntennaType* yagi = lib.find("yagi");
+    CHECK(yagi != nullptr);
+    CHECK_NEAR(yagi->defaultGainDbi, 10.0f, 0.01f);
+    CHECK_NEAR(yagi->beamwidthDeg, 60.0f, 0.1f);
+
+    const AntennaType* patch = lib.find("patch");
+    CHECK(patch != nullptr);
+    CHECK(patch->beamwidthDeg < 180.0f);  // directional
+}
+
 static void test_add_antenna() {
     SimEngine engine;
     CHECK(engine.antennas().empty());
@@ -256,6 +284,8 @@ int main(int argc, char** argv) {
     test_fullsolver_produces_finite_grid();
     test_rain_reduces_power();
     test_ridge_reduces_power_vs_flat();
+    test_antenna_library_defaults();
+    test_antenna_library_load_json("assets/antennas.json");
     test_add_antenna();
     test_remove_antenna();
     test_update_antenna();
