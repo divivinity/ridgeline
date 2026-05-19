@@ -8,7 +8,7 @@ struct TerrainSource {
     enum class Type { Hills, Flat, Hgt, Dted };
 
     Type        type         = Type::Hills;
-    std::string hgtPath;            // only for Hgt
+    std::string hgtPath;            // for Hgt and Dted terrain types
     double      hgtLat       = 35.05;
     double      hgtLon       = -78.88;
     int         hgtSize      = 512;
