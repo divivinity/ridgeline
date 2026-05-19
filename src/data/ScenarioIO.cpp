@@ -10,8 +10,8 @@ static const char* typeToStr(TerrainSource::Type t) {
         case TerrainSource::Type::Hills: return "hills";
         case TerrainSource::Type::Flat:  return "flat";
         case TerrainSource::Type::Hgt:   return "hgt";
+        default: throw std::logic_error("Unknown TerrainSource::Type");
     }
-    return "hills";
 }
 
 static TerrainSource::Type strToType(const std::string& s) {
@@ -30,7 +30,8 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     jt["width_cells"]  = doc.terrain.widthCells;
     jt["height_cells"] = doc.terrain.heightCells;
     jt["cell_size"]    = doc.terrain.cellSize;
-    jt["amplitude"]    = doc.terrain.amplitude;
+    if (doc.terrain.type == TerrainSource::Type::Hills)
+        jt["amplitude"] = doc.terrain.amplitude;
     if (doc.terrain.type == TerrainSource::Type::Hgt) {
         jt["hgt_path"] = doc.terrain.hgtPath;
         jt["hgt_lat"]  = doc.terrain.hgtLat;
@@ -56,6 +57,7 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     std::ofstream f(path);
     if (!f) throw std::runtime_error("Cannot write scenario file: " + path);
     f << j.dump(2);
+    if (!f) throw std::runtime_error("Write failed (disk full?): " + path);
 }
 
 ScenarioDoc ScenarioIO::load(const std::string& path) {
@@ -72,15 +74,18 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
         if (j.contains("terrain")) {
             const auto& jt    = j["terrain"];
             doc.terrain.type  = strToType(jt.value("type", std::string{"hills"}));
-            doc.terrain.widthCells  = jt.value("width_cells",  200);
-            doc.terrain.heightCells = jt.value("height_cells", 200);
-            doc.terrain.cellSize    = jt.value("cell_size",   10.0f);
-            doc.terrain.amplitude   = jt.value("amplitude",   40.0f);
-            if (doc.terrain.type == TerrainSource::Type::Hgt) {
-                doc.terrain.hgtPath = jt.value("hgt_path", std::string{});
-                doc.terrain.hgtLat  = jt.value("hgt_lat",  35.05f);
-                doc.terrain.hgtLon  = jt.value("hgt_lon", -78.88f);
-                doc.terrain.hgtSize = jt.value("hgt_size",  512);
+            {
+                const TerrainSource def;
+                doc.terrain.widthCells  = jt.value("width_cells",  def.widthCells);
+                doc.terrain.heightCells = jt.value("height_cells", def.heightCells);
+                doc.terrain.cellSize    = jt.value("cell_size",    def.cellSize);
+                doc.terrain.amplitude   = jt.value("amplitude",    def.amplitude);
+                if (doc.terrain.type == TerrainSource::Type::Hgt) {
+                    doc.terrain.hgtPath = jt.value("hgt_path", std::string{});
+                    doc.terrain.hgtLat  = jt.value("hgt_lat",  def.hgtLat);
+                    doc.terrain.hgtLon  = jt.value("hgt_lon",  def.hgtLon);
+                    doc.terrain.hgtSize = jt.value("hgt_size",  def.hgtSize);
+                }
             }
         }
 

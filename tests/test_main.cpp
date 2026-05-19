@@ -320,8 +320,8 @@ static void test_scenario_io_hgt_round_trip() {
     ScenarioDoc doc;
     doc.terrain.type    = TerrainSource::Type::Hgt;
     doc.terrain.hgtPath = "/data/N35W079.hgt";
-    doc.terrain.hgtLat  = 35.05f;
-    doc.terrain.hgtLon  = -78.88f;
+    doc.terrain.hgtLat  = 35.05;
+    doc.terrain.hgtLon  = -78.88;
     doc.terrain.hgtSize = 512;
     doc.mode            = SimEngine::Mode::Fast;
 
@@ -331,8 +331,8 @@ static void test_scenario_io_hgt_round_trip() {
 
     CHECK(loaded.terrain.type == TerrainSource::Type::Hgt);
     CHECK(loaded.terrain.hgtPath == "/data/N35W079.hgt");
-    CHECK_NEAR(loaded.terrain.hgtLat, 35.05f, 0.001f);
-    CHECK_NEAR(loaded.terrain.hgtLon, -78.88f, 0.001f);
+    CHECK_NEAR(loaded.terrain.hgtLat, 35.05, 0.000001);
+    CHECK_NEAR(loaded.terrain.hgtLon, -78.88, 0.000001);
     CHECK(loaded.terrain.hgtSize == 512);
     CHECK(loaded.mode == SimEngine::Mode::Fast);
 

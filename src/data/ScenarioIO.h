@@ -9,8 +9,8 @@ struct TerrainSource {
 
     Type        type         = Type::Hills;
     std::string hgtPath;            // only for Hgt
-    float       hgtLat       = 35.05f;
-    float       hgtLon       = -78.88f;
+    double      hgtLat       = 35.05;
+    double      hgtLon       = -78.88;
     int         hgtSize      = 512;
 
     // Procedural terrain dimensions (Hills + Flat).
