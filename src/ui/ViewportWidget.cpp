@@ -136,10 +136,11 @@ void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {
     switch (e->key()) {
         case Qt::Key_T:
-            m_camera.elevation = 89.0f;    // top-down
+            m_camera.orbit(0.0f, 89.0f - m_camera.elevation);  // snap to ceiling via orbit
             break;
         case Qt::Key_R:
-            m_camera = m_defaultCamera;    // reset to saved default
+            if (m_defaultCamera.radius > 0.0f)
+                m_camera = m_defaultCamera;    // reset to saved default
             break;
         case Qt::Key_Left:
             m_camera.orbit(-5.0f, 0.0f);
