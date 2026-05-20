@@ -50,5 +50,6 @@ private:
     void placeDefaultAntennas();
     void refreshTree();
     void refreshPropsPanel();
+    void refreshBottomBar();
     void applyScenarioDoc(const ScenarioDoc& doc);
 };
