@@ -358,6 +358,45 @@ static void test_scenario_io_hgt_round_trip() {
     std::remove(path.c_str());
 }
 
+// ── SpectrumCalc ──────────────────────────────────────────────────────────────
+#include "sim/SpectrumCalc.h"
+
+static void test_spectrum_length() {
+    auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60);
+    assert(pts.size() == 60);
+    std::cout << "[PASS] test_spectrum_length\n";
+}
+
+static void test_spectrum_freq_range() {
+    auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60);
+    assert(pts.front().freqMHz == 30.0f);
+    assert(pts.back().freqMHz == 3000.0f);
+    std::cout << "[PASS] test_spectrum_freq_range\n";
+}
+
+static void test_spectrum_higher_freq_lower_power() {
+    // Higher frequency → more free-space path loss → lower received power.
+    auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 2);
+    assert(pts[0].powerDbm > pts[1].powerDbm);
+    std::cout << "[PASS] test_spectrum_higher_freq_lower_power\n";
+}
+
+static void test_spectrum_power_reasonable() {
+    // 50 W + 3 dBi at 150 MHz / 1 km should land in a plausible range.
+    // Friis: FSPL(150 MHz, 1 km) ≈ 93.5 dB; P_tx = 47 dBm; P_rx ≈ -43 dBm.
+    auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 150.0f, 150.0f, 1);
+    assert(pts[0].powerDbm > -80.0f && pts[0].powerDbm < -20.0f);
+    std::cout << "[PASS] test_spectrum_power_reasonable\n";
+}
+
+static void test_spectrum_single_step() {
+    // steps=1 must not divide by zero and must return exactly one point.
+    auto pts = sweepSpectrum(10.0f, 0.0f, 500.0f, 100.0f, 100.0f, 1);
+    assert(pts.size() == 1);
+    assert(pts[0].freqMHz == 100.0f);
+    std::cout << "[PASS] test_spectrum_single_step\n";
+}
+
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
 
@@ -377,6 +416,11 @@ int main(int argc, char** argv) {
     test_update_antenna();
     test_scenario_io_hills_round_trip();
     test_scenario_io_hgt_round_trip();
+    test_spectrum_length();
+    test_spectrum_freq_range();
+    test_spectrum_higher_freq_lower_power();
+    test_spectrum_power_reasonable();
+    test_spectrum_single_step();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;

@@ -65,6 +65,7 @@ enable_testing()
 
 add_executable(ridgeline_tests
     tests/test_main.cpp
+    src/sim/SpectrumCalc.cpp
     src/sim/MaterialLibrary.cpp
     src/sim/TerrainModel.cpp
     src/sim/FastSolver.cpp
