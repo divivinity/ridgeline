@@ -3,7 +3,10 @@
 #include <QWheelEvent>
 
 ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
-    : QOpenGLWidget(parent), m_engine(engine) {}
+    : QOpenGLWidget(parent), m_engine(engine)
+{
+    setFocusPolicy(Qt::StrongFocus);
+}
 
 void ViewportWidget::initializeGL() {
     initializeOpenGLFunctions();
@@ -37,6 +40,7 @@ void ViewportWidget::initializeGL() {
     m_camera.target  = { cx, terrain.heightAtWorld(cx, cz), cz };
     m_camera.radius  = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
+    m_defaultCamera = m_camera;   // save for R key
 }
 
 void ViewportWidget::resizeGL(int w, int h) {
@@ -88,6 +92,7 @@ void ViewportWidget::reloadTerrain() {
     m_camera.target    = { cx, terrain.heightAtWorld(cx, cz), cz };
     m_camera.radius    = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
+    m_defaultCamera    = m_camera;   // save for R key
     doneCurrent();
     update();
 }
@@ -124,6 +129,33 @@ void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
         case Lobe:    m_antennaLobe.visible  = visible; break;
         case Jammer:  m_jammerBubble.visible = visible; break;
         case Fresnel: m_fresnel.visible      = visible; break;
+    }
+    update();
+}
+
+void ViewportWidget::keyPressEvent(QKeyEvent* e) {
+    switch (e->key()) {
+        case Qt::Key_T:
+            m_camera.elevation = 89.0f;    // top-down
+            break;
+        case Qt::Key_R:
+            m_camera = m_defaultCamera;    // reset to saved default
+            break;
+        case Qt::Key_Left:
+            m_camera.orbit(-5.0f, 0.0f);
+            break;
+        case Qt::Key_Right:
+            m_camera.orbit( 5.0f, 0.0f);
+            break;
+        case Qt::Key_Up:
+            m_camera.orbit(0.0f, -5.0f);
+            break;
+        case Qt::Key_Down:
+            m_camera.orbit(0.0f,  5.0f);
+            break;
+        default:
+            QOpenGLWidget::keyPressEvent(e);
+            return;
     }
     update();
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions_3_3_Core>
+#include <QKeyEvent>
 #include <QPoint>
 #include "render/Camera.h"
 #include "render/TerrainMesh.h"
@@ -30,11 +31,13 @@ protected:
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*)    override;
     void wheelEvent(QWheelEvent*)        override;
+    void keyPressEvent(QKeyEvent*)       override;  // T=top-down, R=reset, arrows=orbit
 
 private:
     SimEngine*    m_engine;
     Camera        m_camera;
-    TerrainMesh        m_terrain;
+    Camera        m_defaultCamera;  // saved at initializeGL/reloadTerrain for R key
+    TerrainMesh   m_terrain;
     HeatmapOverlay     m_heatmap;
     LOSRayOverlay      m_losRay;
     AntennaLobeOverlay m_antennaLobe;
