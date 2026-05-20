@@ -148,6 +148,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->addWidget(m_statusLabel);
     statusBar()->setStyleSheet("background: rgba(15,25,35,0.9);");
 
+    // ── Bottom dock — Spectrum display ────────────────────────────────────────
+    m_bottomBar = new BottomBar(this);
+    auto* bottomDock = new QDockWidget("Spectrum", this);
+    bottomDock->setWidget(m_bottomBar);
+    bottomDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    bottomDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    bottomDock->setStyleSheet(
+        "QDockWidget { color: rgba(255,255,255,0.7); font-family: monospace; font-size: 11px; }"
+        "QDockWidget::title { background: rgba(15,25,35,0.9); padding: 4px; }"
+    );
+    addDockWidget(Qt::BottomDockWidgetArea, bottomDock);
+
     // Populate tree with default antennas
     refreshTree();
 }
@@ -263,11 +275,18 @@ void MainWindow::onRemoveAntenna(int index) {
 void MainWindow::onAntennaSelected(int index) {
     m_selectedIndex = index;
     refreshPropsPanel();
+
+    const auto& antennas = m_engine.antennas();
+    if (index >= 0 && index < static_cast<int>(antennas.size()))
+        m_bottomBar->setAntenna(antennas[index]);
+    else
+        m_bottomBar->clearAntenna();
 }
 
 void MainWindow::onAntennaChanged(Antenna updated) {
     if (m_selectedIndex < 0) return;
     m_engine.updateAntenna(m_selectedIndex, updated);
+    m_bottomBar->setAntenna(updated);
 }
 
 void MainWindow::refreshTree() {
