@@ -8,16 +8,20 @@
 BottomBar::BottomBar(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(90);
     setMaximumHeight(150);
-    setStyleSheet("background: rgb(10, 18, 28);");
 }
 
 void BottomBar::setAntenna(const Antenna& antenna) {
-    m_spectrum = sweepSpectrum(
-        antenna.powerW, antenna.gainDbi,
-        1000.0f,         // 1 km reference distance
-        30.0f, 3000.0f,  // 30 MHz – 3 GHz sweep
-        120);            // 120 sample points
-    m_hasAntenna = true;
+    try {
+        m_spectrum = sweepSpectrum(
+            antenna.powerW, antenna.gainDbi,
+            1000.0f,         // 1 km reference distance
+            30.0f, 3000.0f,  // 30 MHz – 3 GHz sweep
+            120);            // 120 sample points
+        m_hasAntenna = true;
+    } catch (const std::exception&) {
+        m_spectrum.clear();
+        m_hasAntenna = false;
+    }
     update();
 }
 
@@ -43,6 +47,12 @@ void BottomBar::paintEvent(QPaintEvent*) {
         p.drawText(rect(), Qt::AlignCenter, "Select an antenna to view spectrum");
         return;
     }
+
+    // Guard against zero-width or zero-height plot
+    if (plot.width() <= 0 || plot.height() <= 0) return;
+
+    // Guard against degenerate spectrum (fewer than 2 points)
+    if (m_spectrum.size() < 2) return;
 
     // Horizontal grid lines
     p.setPen(QPen(QColor(255, 255, 255, 18), 1));
