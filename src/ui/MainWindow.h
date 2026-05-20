@@ -9,6 +9,7 @@
 #include "ScenarioTree.h"
 #include "PropertiesPanel.h"
 #include "OverlayToolbar.h"
+#include "BottomBar.h"                // ← add
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
 
@@ -38,6 +39,7 @@ private:
     ScenarioTree*    m_scenarioTree  = nullptr;
     PropertiesPanel* m_propsPanel    = nullptr;
     OverlayToolbar*  m_overlayBar    = nullptr;
+    BottomBar*       m_bottomBar     = nullptr;  // ← add
     QLabel*          m_statusLabel   = nullptr;
     QPushButton*     m_solveBtn      = nullptr;
     QComboBox*       m_modeCombo     = nullptr;
