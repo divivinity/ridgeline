@@ -18,10 +18,24 @@ void SimEngine::loadMaterials(const std::string& path) {
 }
 
 void SimEngine::solve() {
-    if (mode == Mode::Fast)
+    if (mode == Mode::Preview) {
+        m_fast.gridResolution = 30.0f;
         m_field = m_fast.solve(m_terrain, m_antennas, m_materials);
-    else
+    } else if (mode == Mode::Planner) {
+        m_full.gridResolution = 20.0f;
+        m_full.enableGroundReflection = false;
+        m_full.enableRain = false;
+        m_full.enableFresnelPenalty = true;
+        m_full.requiredFresnelClearance = 0.6f;
         m_field = m_full.solve(m_terrain, m_antennas, m_materials);
+    } else {
+        m_full.gridResolution = 10.0f;
+        m_full.enableGroundReflection = true;
+        m_full.enableRain = true;
+        m_full.enableFresnelPenalty = true;
+        m_full.requiredFresnelClearance = 0.6f;
+        m_field = m_full.solve(m_terrain, m_antennas, m_materials);
+    }
 
     if (onFieldUpdated) onFieldUpdated();
 }

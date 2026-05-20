@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <stdexcept>
+#include <algorithm>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Ridgeline");
@@ -91,8 +92,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tb->addWidget(freqLabel);
 
     m_modeCombo = new QComboBox();
-    m_modeCombo->addItem("⚡ Fast Mode");
-    m_modeCombo->addItem("\U0001F52C Full Physics");
+    m_modeCombo->addItem("Preview");
+    m_modeCombo->addItem("Planner");
+    m_modeCombo->addItem("Engineering");
+    m_modeCombo->setCurrentIndex(1);
     m_modeCombo->setStyleSheet(
         "QComboBox {"
         "  background: rgba(255,255,255,0.1);"
@@ -112,10 +115,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     );
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int idx) {
-                m_engine.mode = (idx == 0) ? SimEngine::Mode::Fast
-                                           : SimEngine::Mode::Full;
-                m_statusLabel->setText(idx == 0 ? "  Fast Mode"
-                                                 : "  Full Physics Mode");
+                if (idx == 0) {
+                    m_engine.mode = SimEngine::Mode::Preview;
+                    m_statusLabel->setText("  Preview RF Mode");
+                } else if (idx == 1) {
+                    m_engine.mode = SimEngine::Mode::Planner;
+                    m_statusLabel->setText("  Planner RF Mode");
+                } else {
+                    m_engine.mode = SimEngine::Mode::Engineering;
+                    m_statusLabel->setText("  Engineering RF Mode");
+                }
             });
     tb->addWidget(m_modeCombo);
 
@@ -200,10 +209,15 @@ void MainWindow::loadTerrain(const QString& path) {
         const QString ext = QFileInfo(path).suffix().toLower();
         TerrainModel t = (ext == "hgt")
                        ? TerrainLoader::fromHGT(path.toStdString())
-                       : TerrainLoader::fromDTED(path.toStdString());
+                       : ((ext == "tif" || ext == "tiff")
+                          ? TerrainLoader::fromGeoTIFF(path.toStdString())
+                          : TerrainLoader::fromDTED(path.toStdString()));
         m_engine.setTerrain(std::move(t));
         if (ext == "hgt") {
             m_terrainSource.type    = TerrainSource::Type::Hgt;
+            m_terrainSource.hgtPath = path.toStdString();
+        } else if (ext == "tif" || ext == "tiff") {
+            m_terrainSource.type    = TerrainSource::Type::GeoTiff;
             m_terrainSource.hgtPath = path.toStdString();
         } else {
             // All non-HGT paths go through fromDTED — record accordingly.
@@ -240,7 +254,8 @@ void MainWindow::onSolve() {
 void MainWindow::onLoadTerrain() {
     const QString path = QFileDialog::getOpenFileName(
         this, "Load Terrain", {},
-        "Terrain files (*.dt0 *.dt1 *.dt2 *.hgt);;"
+        "Terrain files (*.dt0 *.dt1 *.dt2 *.hgt *.tif *.tiff);;"
+        "GeoTIFF DEM files (*.tif *.tiff);;"
         "DTED files (*.dt0 *.dt1 *.dt2);;"
         "SRTM HGT files (*.hgt);;"
         "All files (*)");
@@ -283,6 +298,9 @@ void MainWindow::onAntennaSelected(int index) {
 
 void MainWindow::onAntennaChanged(Antenna updated) {
     if (m_selectedIndex < 0) return;
+    const float ground = m_engine.terrain().heightAtWorld(
+        updated.position.x, updated.position.z);
+    updated.position.y = ground + std::max(0.0f, updated.position.y);
     m_engine.updateAntenna(m_selectedIndex, updated);
     refreshBottomBar();
 }
@@ -294,7 +312,12 @@ void MainWindow::refreshTree() {
 void MainWindow::refreshPropsPanel() {
     if (m_selectedIndex >= 0 &&
         m_selectedIndex < static_cast<int>(m_engine.antennas().size())) {
-        m_propsPanel->load(&m_engine.antennas()[m_selectedIndex]);
+        m_propsAntennaView = m_engine.antennas()[m_selectedIndex];
+        const float ground = m_engine.terrain().heightAtWorld(
+            m_propsAntennaView.position.x, m_propsAntennaView.position.z);
+        m_propsAntennaView.position.y =
+            std::max(0.0f, m_propsAntennaView.position.y - ground);
+        m_propsPanel->load(&m_propsAntennaView);
     } else {
         m_propsPanel->load(nullptr);
     }
@@ -359,6 +382,9 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
         case TerrainSource::Type::Dted:
             t = TerrainLoader::fromDTED(ts.hgtPath);
             break;
+        case TerrainSource::Type::GeoTiff:
+            t = TerrainLoader::fromGeoTIFF(ts.hgtPath);
+            break;
         case TerrainSource::Type::Flat:
             t = TerrainLoader::makeFlat(ts.widthCells, ts.heightCells, ts.cellSize);
             break;
@@ -372,7 +398,12 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     m_terrainSource = doc.terrain;  // only update after successful terrain build
 
     m_engine.mode = doc.mode;
-    m_modeCombo->setCurrentIndex(doc.mode == SimEngine::Mode::Fast ? 0 : 1);
+    if (doc.mode == SimEngine::Mode::Preview)
+        m_modeCombo->setCurrentIndex(0);
+    else if (doc.mode == SimEngine::Mode::Engineering)
+        m_modeCombo->setCurrentIndex(2);
+    else
+        m_modeCombo->setCurrentIndex(1);
     m_engine.setAntennas(doc.antennas);
 
     m_selectedIndex = -1;

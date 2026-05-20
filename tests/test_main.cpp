@@ -96,6 +96,26 @@ static void test_peak_obstacle_blocked_terrain() {
     CHECK(obs.t > 0.3f && obs.t < 0.7f); // peak is in the middle
 }
 
+static void test_georeferenced_world_round_trip() {
+    TerrainModel t;
+    t.width = t.height = 3601;
+    const double sampleDeg = 1.0 / 3600.0;
+    const double centerLat = 35.5;
+    t.setCellSpacing(
+        static_cast<float>(TerrainModel::metersPerDegreeLon(centerLat) * sampleDeg),
+        static_cast<float>(TerrainModel::metersPerDegreeLat(centerLat) * sampleDeg));
+    t.setGeoReference(35.0, -80.0, sampleDeg, sampleDeg);
+    t.heights.assign(t.width * t.height, 0.0f);
+
+    glm::vec2 world = t.latLonToWorld(35.5, -79.5);
+    auto ll = t.worldToLatLon(world.x, world.y);
+
+    CHECK(t.hasGeoReference());
+    CHECK(t.metersPerCellX() < t.metersPerCellZ());  // longitude metres shrink at NC latitudes
+    CHECK_NEAR(ll.latDeg, 35.5, 0.00001);
+    CHECK_NEAR(ll.lonDeg, -79.5, 0.00001);
+}
+
 // ── FullSolver tests ──────────────────────────────────────────────────────────
 
 static void test_fullsolver_produces_finite_grid() {
@@ -359,6 +379,23 @@ static void test_scenario_io_hgt_round_trip() {
     std::remove(path.c_str());
 }
 
+static void test_scenario_io_planner_round_trip() {
+    ScenarioDoc doc;
+    doc.mode = SimEngine::Mode::Planner;
+    doc.terrain.type = TerrainSource::Type::GeoTiff;
+    doc.terrain.hgtPath = "/data/usgs_3dep.tif";
+
+    const std::string path = "test_scenario_planner_tmp.json";
+    ScenarioIO::save(doc, path);
+    ScenarioDoc loaded = ScenarioIO::load(path);
+
+    CHECK(loaded.mode == SimEngine::Mode::Planner);
+    CHECK(loaded.terrain.type == TerrainSource::Type::GeoTiff);
+    CHECK(loaded.terrain.hgtPath == "/data/usgs_3dep.tif");
+
+    std::remove(path.c_str());
+}
+
 // ── SpectrumCalc ──────────────────────────────────────────────────────────────
 
 static void test_spectrum_length() {
@@ -431,6 +468,7 @@ int main(int argc, char** argv) {
     test_load_from_json(materialsPath);
     test_peak_obstacle_flat_terrain();
     test_peak_obstacle_blocked_terrain();
+    test_georeferenced_world_round_trip();
     test_fullsolver_produces_finite_grid();
     test_rain_reduces_power();
     test_ridge_reduces_power_vs_flat();
@@ -442,6 +480,7 @@ int main(int argc, char** argv) {
     test_update_antenna();
     test_scenario_io_hills_round_trip();
     test_scenario_io_hgt_round_trip();
+    test_scenario_io_planner_round_trip();
     test_spectrum_length();
     test_spectrum_freq_range();
     test_spectrum_higher_freq_lower_power();

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <complex>
 #include <limits>
+#include <algorithm>
 #include <glm/glm.hpp>
 
 static constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
@@ -17,8 +18,9 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                              const MaterialLibrary& materials) const {
     FieldGrid grid;
     grid.cellSize = gridResolution;
-    grid.width    = static_cast<int>(terrain.width  * terrain.cellSize / gridResolution);
-    grid.height   = static_cast<int>(terrain.height * terrain.cellSize / gridResolution);
+    const glm::vec3 world = terrain.worldSize();
+    grid.width    = std::max(1, static_cast<int>(std::ceil(world.x / gridResolution)));
+    grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
     grid.originXZ = {0.0f, 0.0f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
 
@@ -45,12 +47,25 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                 float distKm     = distM / 1000.0f;
 
                 float matLossDb = mat.lossDbPer100m(freq) * distM / 100.0f;
-                float rainDb    = rainAttenuationDb(rainRateMmH, freq, distKm);
+                float rainDb    = enableRain
+                                 ? rainAttenuationDb(rainRateMmH, freq, distKm)
+                                 : 0.0f;
 
                 // ── 1. Direct path ──────────────────────────────────────────
                 auto losStatus = terrain.lineOfSightStatus(ant.position, rx);
                 if (losStatus != TerrainModel::LOSStatus::Blocked) {
                     float directLoss = fsplDb(distM, freq) + matLossDb + rainDb;
+
+                    if (enableFresnelPenalty) {
+                        const float clearance =
+                            terrain.fresnelClearanceRatio(ant.position, rx, freq);
+                        if (clearance < requiredFresnelClearance) {
+                            const float deficit =
+                                std::clamp(requiredFresnelClearance - clearance,
+                                           0.0f, 2.0f);
+                            directLoss += deficit * 12.0f;
+                        }
+                    }
 
                     if (losStatus == TerrainModel::LOSStatus::Diffracted) {
                         auto obs = terrain.peakObstacle(ant.position, rx);
@@ -66,7 +81,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                 }
 
                 // ── 2. Single-bounce ground reflection ──────────────────────
-                {
+                if (enableGroundReflection) {
                     float mx = (ant.position.x + rx.x) * 0.5f;
                     float mz = (ant.position.z + rx.z) * 0.5f;
                     glm::vec3 sp{mx, terrain.heightAtWorld(mx, mz), mz};

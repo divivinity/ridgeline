@@ -44,6 +44,7 @@ private:
     QPushButton*     m_solveBtn      = nullptr;
     QComboBox*       m_modeCombo     = nullptr;
     int              m_selectedIndex = -1;
+    Antenna          m_propsAntennaView;
 
     void setupScene();
     void applyTheme();

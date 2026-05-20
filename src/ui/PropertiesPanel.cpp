@@ -37,7 +37,7 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* freqLabel   = new QLabel("Frequency:");  freqLabel->setStyleSheet(labelStyle);
     auto* powerLabel  = new QLabel("Power:");      powerLabel->setStyleSheet(labelStyle);
     auto* gainLabel   = new QLabel("Gain:");       gainLabel->setStyleSheet(labelStyle);
-    auto* heightLabel = new QLabel("Height:");     heightLabel->setStyleSheet(labelStyle);
+    auto* heightLabel = new QLabel("Height AGL:"); heightLabel->setStyleSheet(labelStyle);
     auto* jammerLabel = new QLabel("Is Jammer:");  jammerLabel->setStyleSheet(labelStyle);
 
     m_typeCombo = new QComboBox();

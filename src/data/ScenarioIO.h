@@ -5,7 +5,7 @@
 #include "sim/SimEngine.h"
 
 struct TerrainSource {
-    enum class Type { Hills, Flat, Hgt, Dted };
+    enum class Type { Hills, Flat, Hgt, Dted, GeoTiff };
 
     Type        type         = Type::Hills;
     std::string hgtPath;            // for Hgt and Dted terrain types
