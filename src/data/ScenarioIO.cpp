@@ -11,6 +11,7 @@ static const char* typeToStr(TerrainSource::Type t) {
         case TerrainSource::Type::Flat:  return "flat";
         case TerrainSource::Type::Hgt:   return "hgt";
         case TerrainSource::Type::Dted:  return "dted";
+        case TerrainSource::Type::GeoTiff: return "geotiff";
         default: throw std::logic_error("Unknown TerrainSource::Type");
     }
 }
@@ -19,13 +20,29 @@ static TerrainSource::Type strToType(const std::string& s) {
     if (s == "flat") return TerrainSource::Type::Flat;
     if (s == "hgt")  return TerrainSource::Type::Hgt;
     if (s == "dted") return TerrainSource::Type::Dted;
+    if (s == "geotiff" || s == "tif" || s == "tiff") return TerrainSource::Type::GeoTiff;
     return TerrainSource::Type::Hills;
+}
+
+static const char* modeToStr(SimEngine::Mode m) {
+    switch (m) {
+        case SimEngine::Mode::Preview:     return "preview";
+        case SimEngine::Mode::Planner:     return "planner";
+        case SimEngine::Mode::Engineering: return "engineering";
+    }
+    return "planner";
+}
+
+static SimEngine::Mode strToMode(const std::string& s) {
+    if (s == "preview" || s == "fast") return SimEngine::Mode::Preview;
+    if (s == "engineering" || s == "full") return SimEngine::Mode::Engineering;
+    return SimEngine::Mode::Planner;
 }
 
 void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     json j;
     j["version"] = 1;
-    j["mode"]    = (doc.mode == SimEngine::Mode::Fast) ? "fast" : "full";
+    j["mode"]    = modeToStr(doc.mode);
 
     auto& jt = j["terrain"];
     jt["type"]         = typeToStr(doc.terrain.type);
@@ -41,6 +58,8 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
         jt["hgt_size"] = doc.terrain.hgtSize;
     } else if (doc.terrain.type == TerrainSource::Type::Dted) {
         jt["dted_path"] = doc.terrain.hgtPath;
+    } else if (doc.terrain.type == TerrainSource::Type::GeoTiff) {
+        jt["geotiff_path"] = doc.terrain.hgtPath;
     }
 
     json antennas = json::array();
@@ -72,8 +91,8 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
     try {
         json j = json::parse(f);
 
-        const std::string modeStr = j.value("mode", "fast");
-        doc.mode = (modeStr == "full") ? SimEngine::Mode::Full : SimEngine::Mode::Fast;
+        const std::string modeStr = j.value("mode", "planner");
+        doc.mode = strToMode(modeStr);
 
         if (j.contains("terrain")) {
             const auto& jt    = j["terrain"];
@@ -91,6 +110,8 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                     doc.terrain.hgtSize = jt.value("hgt_size",  def.hgtSize);
                 } else if (doc.terrain.type == TerrainSource::Type::Dted) {
                     doc.terrain.hgtPath = jt.value("dted_path", std::string{});
+                } else if (doc.terrain.type == TerrainSource::Type::GeoTiff) {
+                    doc.terrain.hgtPath = jt.value("geotiff_path", std::string{});
                 }
             }
         }

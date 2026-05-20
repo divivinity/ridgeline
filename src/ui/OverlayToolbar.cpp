@@ -11,6 +11,7 @@ OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
     overlaysLabel->setStyleSheet("color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px;");
     layout->addWidget(overlaysLabel);
 
+    buildCheckbox("Basemap",  ViewportWidget::Basemap, layout);
     buildCheckbox("Heatmap",  ViewportWidget::Heatmap, layout);
     buildCheckbox("LOS Rays", ViewportWidget::LOS,     layout);
     buildCheckbox("Lobe",     ViewportWidget::Lobe,    layout);

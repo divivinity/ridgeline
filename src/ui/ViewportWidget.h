@@ -10,13 +10,14 @@
 #include "render/overlays/AntennaLobeOverlay.h"
 #include "render/overlays/JammerBubbleOverlay.h"
 #include "render/overlays/FresnelOverlay.h"
+#include "render/BasemapOverlay.h"
 #include "sim/SimEngine.h"
 
 class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
 public:
-    enum Overlay { Heatmap = 0, LOS = 1, Lobe = 2, Jammer = 3, Fresnel = 4 };
+    enum Overlay { Basemap = 0, Heatmap = 1, LOS = 2, Lobe = 3, Jammer = 4, Fresnel = 5 };
 
     explicit ViewportWidget(SimEngine* engine, QWidget* parent = nullptr);
     void refreshOverlays();   // call after SimEngine::solve()
@@ -38,6 +39,7 @@ private:
     Camera        m_camera;
     Camera        m_defaultCamera;  // saved at initializeGL/reloadTerrain for R key
     TerrainMesh   m_terrain;
+    BasemapOverlay    m_basemap;
     HeatmapOverlay     m_heatmap;
     LOSRayOverlay      m_losRay;
     AntennaLobeOverlay m_antennaLobe;

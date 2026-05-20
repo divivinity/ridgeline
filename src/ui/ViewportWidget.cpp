@@ -15,6 +15,7 @@ void ViewportWidget::initializeGL() {
     connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this]() {
         makeCurrent();
         m_terrain.destroy();
+        m_basemap.destroy();
         m_heatmap.destroy();
         m_losRay.destroy();
         m_antennaLobe.destroy();
@@ -28,6 +29,7 @@ void ViewportWidget::initializeGL() {
 
     const auto& terrain = m_engine->terrain();
     m_terrain.build(terrain);
+    m_basemap.build(terrain);
     m_heatmap.build(terrain);
     m_losRay.build();
     m_antennaLobe.build();
@@ -54,6 +56,7 @@ void ViewportWidget::paintGL() {
     glm::mat4 mvp = m_camera.mvp(aspect);
 
     m_terrain.draw(mvp);
+    if (m_basemap.visible)      m_basemap.draw(mvp);
     if (m_heatmap.visible)      m_heatmap.draw(mvp);
     if (m_losRay.visible)       m_losRay.draw(mvp);
     if (m_antennaLobe.visible)  m_antennaLobe.draw(mvp);
@@ -75,6 +78,7 @@ void ViewportWidget::refreshOverlays() {
 void ViewportWidget::reloadTerrain() {
     makeCurrent();
     m_terrain.destroy();
+    m_basemap.destroy();
     m_heatmap.destroy();
     m_losRay.destroy();
     m_antennaLobe.destroy();
@@ -82,6 +86,7 @@ void ViewportWidget::reloadTerrain() {
     m_fresnel.destroy();
     const auto& terrain = m_engine->terrain();
     m_terrain.build(terrain);
+    m_basemap.build(terrain);
     m_heatmap.build(terrain);
     m_losRay.build();
     m_antennaLobe.build();
@@ -124,6 +129,7 @@ void ViewportWidget::wheelEvent(QWheelEvent* e) {
 
 void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
     switch (overlay) {
+        case Basemap: m_basemap.visible      = visible; break;
         case Heatmap: m_heatmap.visible      = visible; break;
         case LOS:     m_losRay.visible       = visible; break;
         case Lobe:    m_antennaLobe.visible  = visible; break;

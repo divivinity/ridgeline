@@ -24,4 +24,9 @@ public:
                                 float cropCenterLat = 35.05f,
                                 float cropCenterLon = -78.88f,
                                 int   cropSize      = 512);
+
+    // Parse a GDAL-supported DEM raster, primarily USGS 3DEP GeoTIFF.
+    // Large rasters are resampled to maxSamples per side for interactive use.
+    static TerrainModel fromGeoTIFF(const std::string& path,
+                                    int maxSamples = 1024);
 };

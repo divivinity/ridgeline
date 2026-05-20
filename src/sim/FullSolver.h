@@ -8,6 +8,10 @@ class FullSolver {
 public:
     float gridResolution = 10.0f;  // metres per grid cell
     float rainRateMmH    = 4.0f;   // moderate rain (mm/h); 0 = disable
+    bool  enableGroundReflection = true;
+    bool  enableRain = true;
+    bool  enableFresnelPenalty = true;
+    float requiredFresnelClearance = 0.6f;  // 60% first-zone clearance field rule
 
     FieldGrid solve(const TerrainModel& terrain,
                     const std::vector<Antenna>& antennas,

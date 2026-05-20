@@ -10,9 +10,15 @@
 
 class SimEngine {
 public:
-    enum class Mode { Fast, Full };
+    enum class Mode {
+        Preview,
+        Planner,
+        Engineering,
+        Fast = Preview,       // backwards-compatible scenario/test alias
+        Full = Engineering    // backwards-compatible scenario/test alias
+    };
 
-    Mode mode = Mode::Fast;
+    Mode mode = Mode::Planner;
 
     void setTerrain(TerrainModel terrain);
     void setAntennas(std::vector<Antenna> antennas);

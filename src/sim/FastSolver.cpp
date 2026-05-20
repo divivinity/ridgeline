@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <glm/glm.hpp>
+#include <algorithm>
 
 static constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
 
@@ -10,8 +11,9 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
                              const MaterialLibrary& materials) const {
     FieldGrid grid;
     grid.cellSize = gridResolution;
-    grid.width    = static_cast<int>(terrain.width  * terrain.cellSize / gridResolution);
-    grid.height   = static_cast<int>(terrain.height * terrain.cellSize / gridResolution);
+    const glm::vec3 world = terrain.worldSize();
+    grid.width    = std::max(1, static_cast<int>(std::ceil(world.x / gridResolution)));
+    grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
     grid.originXZ = {0.0f, 0.0f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
 

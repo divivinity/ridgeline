@@ -11,8 +11,8 @@ void TerrainMesh::build(const TerrainModel& terrain) {
     verts.reserve(terrain.width * terrain.height);
     for (int z = 0; z < terrain.height; ++z) {
         for (int x = 0; x < terrain.width; ++x) {
-            float wx = x * terrain.cellSize;
-            float wz = z * terrain.cellSize;
+            float wx = x * terrain.metersPerCellX();
+            float wz = z * terrain.metersPerCellZ();
             float wy = terrain.heightAt(x, z);
             float u  = static_cast<float>(x) / (terrain.width  - 1);
             float v  = static_cast<float>(z) / (terrain.height - 1);
