@@ -217,6 +217,7 @@ void MainWindow::loadTerrain(const QString& path) {
         m_selectedIndex = -1;
         refreshTree();
         refreshPropsPanel();
+        refreshBottomBar();
 
         setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
         m_statusLabel->setText("  Terrain loaded");
@@ -260,6 +261,7 @@ void MainWindow::onAddAntenna() {
     refreshTree();
     m_scenarioTree->selectRow(m_selectedIndex);
     refreshPropsPanel();
+    refreshBottomBar();
     m_statusLabel->setText("  Antenna added");
 }
 
@@ -269,24 +271,20 @@ void MainWindow::onRemoveAntenna(int index) {
         m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
     refreshTree();
     refreshPropsPanel();
+    refreshBottomBar();
     m_statusLabel->setText("  Antenna removed");
 }
 
 void MainWindow::onAntennaSelected(int index) {
     m_selectedIndex = index;
     refreshPropsPanel();
-
-    const auto& antennas = m_engine.antennas();
-    if (index >= 0 && index < static_cast<int>(antennas.size()))
-        m_bottomBar->setAntenna(antennas[index]);
-    else
-        m_bottomBar->clearAntenna();
+    refreshBottomBar();
 }
 
 void MainWindow::onAntennaChanged(Antenna updated) {
     if (m_selectedIndex < 0) return;
     m_engine.updateAntenna(m_selectedIndex, updated);
-    m_bottomBar->setAntenna(updated);
+    refreshBottomBar();
 }
 
 void MainWindow::refreshTree() {
@@ -300,6 +298,14 @@ void MainWindow::refreshPropsPanel() {
     } else {
         m_propsPanel->load(nullptr);
     }
+}
+
+void MainWindow::refreshBottomBar() {
+    const auto& antennas = m_engine.antennas();
+    if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(antennas.size()))
+        m_bottomBar->setAntenna(antennas[m_selectedIndex]);
+    else
+        m_bottomBar->clearAntenna();
 }
 
 void MainWindow::onSaveScenario() {
@@ -373,6 +379,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     if (m_viewport) m_viewport->reloadTerrain();
     refreshTree();
     refreshPropsPanel();
+    refreshBottomBar();
 }
 
 void MainWindow::onExportPng() {
