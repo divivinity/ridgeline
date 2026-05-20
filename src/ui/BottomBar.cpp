@@ -8,6 +8,7 @@
 BottomBar::BottomBar(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(90);
     setMaximumHeight(150);
+    setStyleSheet("background: rgb(10, 18, 28);");
 }
 
 void BottomBar::setAntenna(const Antenna& antenna) {

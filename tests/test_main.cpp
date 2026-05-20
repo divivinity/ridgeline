@@ -407,6 +407,22 @@ static void test_spectrum_throws_on_invalid_steps() {
     std::cout << "[PASS] test_spectrum_throws_on_invalid_steps\n";
 }
 
+static void test_spectrum_throws_on_zero_dist() {
+    bool threw = false;
+    try { sweepSpectrum(50.0f, 3.0f, 0.0f, 30.0f, 3000.0f, 60); }
+    catch (const std::invalid_argument&) { threw = true; }
+    assert(threw);
+    std::cout << "[PASS] test_spectrum_throws_on_zero_dist\n";
+}
+
+static void test_spectrum_throws_on_zero_power() {
+    bool threw = false;
+    try { sweepSpectrum(0.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60); }
+    catch (const std::invalid_argument&) { threw = true; }
+    assert(threw);
+    std::cout << "[PASS] test_spectrum_throws_on_zero_power\n";
+}
+
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
 
@@ -432,6 +448,8 @@ int main(int argc, char** argv) {
     test_spectrum_power_reasonable();
     test_spectrum_single_step();
     test_spectrum_throws_on_invalid_steps();
+    test_spectrum_throws_on_zero_dist();
+    test_spectrum_throws_on_zero_power();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;
