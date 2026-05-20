@@ -6,6 +6,7 @@
 #include "sim/TerrainModel.h"
 #include "sim/FullSolver.h"
 #include "sim/SimEngine.h"
+#include "sim/SpectrumCalc.h"
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
 #include <cstdio>  // for std::remove
@@ -359,7 +360,6 @@ static void test_scenario_io_hgt_round_trip() {
 }
 
 // ── SpectrumCalc ──────────────────────────────────────────────────────────────
-#include "sim/SpectrumCalc.h"
 
 static void test_spectrum_length() {
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60);
@@ -369,6 +369,8 @@ static void test_spectrum_length() {
 
 static void test_spectrum_freq_range() {
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60);
+    // The endpoints 30.0f and 3000.0f are exactly representable in float32,
+    // and t=0.0/t=1.0 when i=0/i=steps-1 respectively, so == is safe here.
     assert(pts.front().freqMHz == 30.0f);
     assert(pts.back().freqMHz == 3000.0f);
     std::cout << "[PASS] test_spectrum_freq_range\n";
@@ -383,7 +385,7 @@ static void test_spectrum_higher_freq_lower_power() {
 
 static void test_spectrum_power_reasonable() {
     // 50 W + 3 dBi at 150 MHz / 1 km should land in a plausible range.
-    // Friis: FSPL(150 MHz, 1 km) ≈ 93.5 dB; P_tx = 47 dBm; P_rx ≈ -43 dBm.
+    // Friis: FSPL(150 MHz, 1 km) ≈ 76.0 dB; P_tx = 47 dBm; P_rx ≈ -26 dBm.
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 150.0f, 150.0f, 1);
     assert(pts[0].powerDbm > -80.0f && pts[0].powerDbm < -20.0f);
     std::cout << "[PASS] test_spectrum_power_reasonable\n";
@@ -395,6 +397,14 @@ static void test_spectrum_single_step() {
     assert(pts.size() == 1);
     assert(pts[0].freqMHz == 100.0f);
     std::cout << "[PASS] test_spectrum_single_step\n";
+}
+
+static void test_spectrum_throws_on_invalid_steps() {
+    bool threw = false;
+    try { sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 0); }
+    catch (const std::invalid_argument&) { threw = true; }
+    assert(threw);
+    std::cout << "[PASS] test_spectrum_throws_on_invalid_steps\n";
 }
 
 int main(int argc, char** argv) {
@@ -421,6 +431,7 @@ int main(int argc, char** argv) {
     test_spectrum_higher_freq_lower_power();
     test_spectrum_power_reasonable();
     test_spectrum_single_step();
+    test_spectrum_throws_on_invalid_steps();
 
     std::cout << g_pass << " passed, " << g_fail << " failed.\n";
     return g_fail ? 1 : 0;
