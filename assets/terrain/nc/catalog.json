@@ -1,0 +1,45 @@
+{
+  "description": "North Carolina SRTM 1-arc-second terrain tiles (~30m resolution)",
+  "source": "AWS elevation-tiles-prod (SRTM GL1)",
+  "tiles": [
+    { "file": "N33W076.hgt", "name": "Outer Banks South / Cape Lookout",   "sw_lat": 33, "sw_lon": -76 },
+    { "file": "N33W077.hgt", "name": "Pamlico Sound / Swansboro",          "sw_lat": 33, "sw_lon": -77 },
+    { "file": "N33W078.hgt", "name": "Wilmington / Cape Fear",             "sw_lat": 33, "sw_lon": -78 },
+    { "file": "N33W079.hgt", "name": "Fayetteville South / Bladenboro",   "sw_lat": 33, "sw_lon": -79 },
+    { "file": "N33W080.hgt", "name": "Rockingham / Scotland County",       "sw_lat": 33, "sw_lon": -80 },
+    { "file": "N33W081.hgt", "name": "Charlotte South / Pineville",        "sw_lat": 33, "sw_lon": -81 },
+    { "file": "N33W082.hgt", "name": "Kings Mountain / Shelby",            "sw_lat": 33, "sw_lon": -82 },
+    { "file": "N33W083.hgt", "name": "Gaffney SC / Foothills",             "sw_lat": 33, "sw_lon": -83 },
+    { "file": "N33W084.hgt", "name": "Gastonia / Lake Norman South",       "sw_lat": 33, "sw_lon": -84 },
+
+    { "file": "N34W076.hgt", "name": "Outer Banks / Cape Hatteras",        "sw_lat": 34, "sw_lon": -76 },
+    { "file": "N34W077.hgt", "name": "Morehead City / Crystal Coast",      "sw_lat": 34, "sw_lon": -77 },
+    { "file": "N34W078.hgt", "name": "Goldsboro / Wayne County",           "sw_lat": 34, "sw_lon": -78 },
+    { "file": "N34W079.hgt", "name": "Sandhills / Southern Pines",         "sw_lat": 34, "sw_lon": -79 },
+    { "file": "N34W080.hgt", "name": "Anson County / Wadesboro",           "sw_lat": 34, "sw_lon": -80 },
+    { "file": "N34W081.hgt", "name": "Charlotte / Cabarrus County",        "sw_lat": 34, "sw_lon": -81 },
+    { "file": "N34W082.hgt", "name": "Gastonia / Lincoln County",          "sw_lat": 34, "sw_lon": -82 },
+    { "file": "N34W083.hgt", "name": "Marion / McDowell County",           "sw_lat": 34, "sw_lon": -83 },
+    { "file": "N34W084.hgt", "name": "Murphy / Cherokee County",           "sw_lat": 34, "sw_lon": -84 },
+
+    { "file": "N35W076.hgt", "name": "Washington NC / Pamlico River",      "sw_lat": 35, "sw_lon": -76 },
+    { "file": "N35W077.hgt", "name": "New Bern / Craven County",           "sw_lat": 35, "sw_lon": -77 },
+    { "file": "N35W078.hgt", "name": "Goldsboro / Seymour Johnson AFB",    "sw_lat": 35, "sw_lon": -78 },
+    { "file": "N35W079.hgt", "name": "Raleigh / Wake County",              "sw_lat": 35, "sw_lon": -79 },
+    { "file": "N35W080.hgt", "name": "Burlington / Alamance County",       "sw_lat": 35, "sw_lon": -80 },
+    { "file": "N35W081.hgt", "name": "Greensboro / Piedmont Triad",        "sw_lat": 35, "sw_lon": -81 },
+    { "file": "N35W082.hgt", "name": "Hickory / Catawba Valley",           "sw_lat": 35, "sw_lon": -82 },
+    { "file": "N35W083.hgt", "name": "Asheville / Blue Ridge Parkway",     "sw_lat": 35, "sw_lon": -83 },
+    { "file": "N35W084.hgt", "name": "Nantahala / Fontana Lake",           "sw_lat": 35, "sw_lon": -84 },
+
+    { "file": "N36W076.hgt", "name": "Elizabeth City / Albemarle Sound",   "sw_lat": 36, "sw_lon": -76 },
+    { "file": "N36W077.hgt", "name": "Roanoke Rapids / Halifax County",    "sw_lat": 36, "sw_lon": -77 },
+    { "file": "N36W078.hgt", "name": "Oxford / Granville County",          "sw_lat": 36, "sw_lon": -78 },
+    { "file": "N36W079.hgt", "name": "Durham / Research Triangle North",   "sw_lat": 36, "sw_lon": -79 },
+    { "file": "N36W080.hgt", "name": "Winston-Salem / Forsyth County",     "sw_lat": 36, "sw_lon": -80 },
+    { "file": "N36W081.hgt", "name": "Wilkesboro / Stone Mountain",        "sw_lat": 36, "sw_lon": -81 },
+    { "file": "N36W082.hgt", "name": "Boone / Appalachian High Country",   "sw_lat": 36, "sw_lon": -82 },
+    { "file": "N36W083.hgt", "name": "Newland / Grandfather Mountain",     "sw_lat": 36, "sw_lon": -83 },
+    { "file": "N36W084.hgt", "name": "Great Smoky Mountains / Bryson City","sw_lat": 36, "sw_lon": -84 }
+  ]
+}

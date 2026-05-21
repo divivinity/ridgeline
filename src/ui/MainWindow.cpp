@@ -181,8 +181,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Auto-load NC terrain for immediate geo-referenced basemap.
     // Deferred so the OpenGL context is fully initialised before reloadTerrain() runs.
     QTimer::singleShot(0, this, [this]() {
+        // N35W083 = Asheville / Blue Ridge Parkway — dramatic mountain terrain
         QString ncTile = QCoreApplication::applicationDirPath()
-                         + "/assets/terrain/nc/N35W079.hgt";
+                         + "/assets/terrain/nc/N35W083.hgt";
         if (QFileInfo::exists(ncTile))
             loadTerrain(ncTile);
     });
