@@ -12,6 +12,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QTimer>
 #include <stdexcept>
 #include <algorithm>
 
@@ -177,13 +178,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_viewport, &ViewportWidget::terrainClicked,
             this, &MainWindow::onTerrainClicked);
 
-    // Auto-load NC terrain for immediate geo-referenced basemap
-    {
+    // Auto-load NC terrain for immediate geo-referenced basemap.
+    // Deferred so the OpenGL context is fully initialised before reloadTerrain() runs.
+    QTimer::singleShot(0, this, [this]() {
         QString ncTile = QCoreApplication::applicationDirPath()
                          + "/assets/terrain/nc/N35W079.hgt";
         if (QFileInfo::exists(ncTile))
             loadTerrain(ncTile);
-    }
+    });
 }
 
 void MainWindow::setupScene() {
