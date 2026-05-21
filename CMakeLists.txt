@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Network)
 find_package(OpenGL REQUIRED)
-find_package(GDAL REQUIRED)
+find_package(GDAL QUIET)  # optional — enables GeoTIFF loading when present
 
 # GLM — header only, fetch if not system-installed
 include(FetchContent)
@@ -36,10 +36,17 @@ target_link_libraries(ridgeline
     Qt6::OpenGLWidgets
     Qt6::Network
     OpenGL::GL
-    GDAL::GDAL
     glm::glm
     nlohmann_json::nlohmann_json
 )
+if(GDAL_FOUND)
+    target_compile_definitions(ridgeline PRIVATE HAVE_GDAL)
+    target_include_directories(ridgeline PRIVATE ${GDAL_INCLUDE_DIRS})
+    target_link_libraries(ridgeline GDAL::GDAL)
+    message(STATUS "GDAL found — GeoTIFF loading enabled")
+else()
+    message(STATUS "GDAL not found — GeoTIFF loading disabled (HGT/DTED still work)")
+endif()
 
 # Copy shaders to build dir alongside binary
 add_custom_command(TARGET ridgeline POST_BUILD
