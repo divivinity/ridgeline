@@ -7,8 +7,10 @@
 #include <stdexcept>
 #include <vector>
 #include <memory>
-#include <gdal_priv.h>
-#include <ogr_spatialref.h>
+#ifdef HAVE_GDAL
+#  include <gdal_priv.h>
+#  include <ogr_spatialref.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // DTED parser
@@ -277,6 +279,14 @@ TerrainModel TerrainLoader::fromHGT(const std::string& path,
 
 // ---------------------------------------------------------------------------
 
+#ifndef HAVE_GDAL
+TerrainModel TerrainLoader::fromGeoTIFF(const std::string& path,
+                                        int maxSamples) {
+    (void)maxSamples;
+    throw std::runtime_error("GeoTIFF loading requires GDAL (not compiled in): " + path);
+}
+#else  // HAVE_GDAL
+
 static bool rasterPointToWgs84(const OGRSpatialReference* srs,
                                const double gt[6],
                                double pixelCol,
@@ -387,6 +397,7 @@ TerrainModel TerrainLoader::fromGeoTIFF(const std::string& path,
 
     return t;
 }
+#endif // HAVE_GDAL / !HAVE_GDAL
 
 // ---------------------------------------------------------------------------
 
