@@ -3,8 +3,10 @@
 #include <QWheelEvent>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     : QOpenGLWidget(parent), m_engine(engine)
@@ -28,6 +30,8 @@ void ViewportWidget::initializeGL() {
         m_antennaLobe.destroy();
         m_jammerBubble.destroy();
         m_fresnel.destroy();
+        if (m_markerVAO) { glDeleteVertexArrays(1, &m_markerVAO); m_markerVAO = 0; }
+        if (m_markerVBO) { glDeleteBuffers(1, &m_markerVBO);      m_markerVBO = 0; }
         doneCurrent();
     });
 
@@ -43,10 +47,16 @@ void ViewportWidget::initializeGL() {
     m_jammerBubble.build();
     m_fresnel.build();
 
-    // Center camera on terrain
+    // Build marker GL objects
+    glGenVertexArrays(1, &m_markerVAO);
+    glGenBuffers(1, &m_markerVBO);
+    m_markerShader.load("assets/shaders/marker.vert", "assets/shaders/marker.frag");
+    buildMarkers();
+
+    // Center camera on terrain (target Y in scaled world-space)
     float cx = terrain.worldSize().x * 0.5f;
     float cz = terrain.worldSize().z * 0.5f;
-    m_camera.target  = { cx, terrain.heightAtWorld(cx, cz), cz };
+    m_camera.target  = { cx, terrain.heightAtWorld(cx, cz) * kVertScale, cz };
     m_camera.radius  = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
     m_defaultCamera = m_camera;   // save for R key
@@ -61,15 +71,68 @@ void ViewportWidget::paintGL() {
     if (height() == 0) return;
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     float aspect = static_cast<float>(width()) / height();
-    glm::mat4 mvp = m_camera.mvp(aspect);
+    // Apply vertical exaggeration: scale Y only, in world space before view/proj.
+    const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
+                                            glm::vec3(1.0f, kVertScale, 1.0f));
+    m_lastMVP = m_camera.mvp(aspect) * vertScale;
 
-    m_terrain.draw(mvp);
-    if (m_basemap.visible)      m_basemap.draw(mvp);
-    if (m_heatmap.visible)      m_heatmap.draw(mvp);
-    if (m_losRay.visible)       m_losRay.draw(mvp);
-    if (m_antennaLobe.visible)  m_antennaLobe.draw(mvp);
-    if (m_jammerBubble.visible) m_jammerBubble.draw(mvp);
-    if (m_fresnel.visible)      m_fresnel.draw(mvp);
+    m_terrain.draw(m_lastMVP);
+    if (m_basemap.visible)      m_basemap.draw(m_lastMVP);
+    if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
+    if (m_losRay.visible)       m_losRay.draw(m_lastMVP);
+    if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
+    if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
+    if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
+}
+
+void ViewportWidget::buildMarkers() {
+    const auto& antennas = m_engine->antennas();
+    m_markerCount = static_cast<int>(antennas.size());
+    if (m_markerVAO == 0) return;  // GL not ready
+
+    // Pack: x, y, z, r, g, b  per marker
+    struct MarkerVert { float x, y, z, r, g, b; };
+    std::vector<MarkerVert> verts;
+    verts.reserve(antennas.size());
+    for (const auto& ant : antennas) {
+        glm::vec3 col = ant.isJammer ? glm::vec3(1.0f, 0.2f, 0.2f)   // red
+                                     : glm::vec3(0.0f, 0.9f, 1.0f);   // cyan
+        verts.push_back({ ant.position.x, ant.position.y, ant.position.z,
+                          col.r, col.g, col.b });
+    }
+
+    glBindVertexArray(m_markerVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_markerVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(verts.size() * sizeof(MarkerVert)),
+                 verts.empty() ? nullptr : verts.data(),
+                 GL_DYNAMIC_DRAW);
+    // Position: location 0, 3 floats
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(MarkerVert), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Color: location 1, 3 floats
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(MarkerVert),
+                          (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+}
+
+void ViewportWidget::drawAntennaMarkers() {
+    if (m_markerVAO == 0 || m_markerCount == 0) return;
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Disable depth test so markers always show on top
+    glDisable(GL_DEPTH_TEST);
+    m_markerShader.bind();
+    m_markerShader.setMat4("uMVP", m_lastMVP);
+    glBindVertexArray(m_markerVAO);
+    glDrawArrays(GL_POINTS, 0, m_markerCount);
+    glBindVertexArray(0);
+    m_markerShader.release();
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
 void ViewportWidget::refreshOverlays() {
@@ -79,6 +142,7 @@ void ViewportWidget::refreshOverlays() {
     m_antennaLobe.update(m_engine->antennas());
     m_jammerBubble.update(m_engine->antennas());
     m_fresnel.update(m_engine->antennas(), m_engine->terrain());
+    buildMarkers();
     doneCurrent();
     update();
 }
@@ -100,9 +164,10 @@ void ViewportWidget::reloadTerrain() {
     m_antennaLobe.build();
     m_jammerBubble.build();
     m_fresnel.build();
+    buildMarkers();
     float cx = terrain.worldSize().x * 0.5f;
     float cz = terrain.worldSize().z * 0.5f;
-    m_camera.target    = { cx, terrain.heightAtWorld(cx, cz), cz };
+    m_camera.target    = { cx, terrain.heightAtWorld(cx, cz) * kVertScale, cz };
     m_camera.radius    = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
     m_defaultCamera    = m_camera;   // save for R key
@@ -194,7 +259,9 @@ bool ViewportWidget::raycastTerrain(const QPoint& screenPos,
     if (terrain.width < 2 || terrain.height < 2) return false;
 
     const float aspect = static_cast<float>(width()) / static_cast<float>(height());
-    const glm::mat4 invMVP = glm::inverse(m_camera.mvp(aspect));
+    const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
+                                            glm::vec3(1.0f, kVertScale, 1.0f));
+    const glm::mat4 invMVP = glm::inverse(m_camera.mvp(aspect) * vertScale);
 
     // Convert screen pixel to NDC
     const float ndcX =  2.0f * screenPos.x() / static_cast<float>(width())  - 1.0f;
@@ -231,7 +298,7 @@ bool ViewportWidget::raycastTerrain(const QPoint& screenPos,
                                   0, terrain.width  - 1);
         const int gz = std::clamp(static_cast<int>(p.z / terrain.metersPerCellZ()),
                                   0, terrain.height - 1);
-        const float groundY = terrain.heightAt(gx, gz);
+        const float groundY = terrain.heightAt(gx, gz) * kVertScale;
         const float above   = p.y - groundY;
 
         if (i > 1 && above < 0.0f) {

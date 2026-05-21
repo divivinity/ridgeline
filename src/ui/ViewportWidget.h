@@ -5,6 +5,7 @@
 #include <QPoint>
 #include "render/Camera.h"
 #include "render/TerrainMesh.h"
+#include "render/ShaderProgram.h"
 #include "render/overlays/HeatmapOverlay.h"
 #include "render/overlays/LOSRayOverlay.h"
 #include "render/overlays/AntennaLobeOverlay.h"
@@ -13,6 +14,7 @@
 #include "render/BasemapOverlay.h"
 #include "sim/SimEngine.h"
 #include "HeatmapLegend.h"
+#include <glm/glm.hpp>
 
 class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
@@ -53,7 +55,19 @@ private:
     QPoint             m_pressPos;   // for distinguishing click vs drag
     bool          m_dragging = false;
     HeatmapLegend* m_heatmapLegend = nullptr;
+    glm::mat4      m_lastMVP{1.0f}; // saved each paintGL for 2D overlay projection
 
+    // Vertical exaggeration applied to Y in the render MVP only (not sim data).
+    static constexpr float kVertScale = 2.5f;
+
+    void drawAntennaMarkers();
+    void buildMarkers();
     bool raycastTerrain(const QPoint& screenPos,
                         float& outWorldX, float& outWorldZ) const;
+
+    // Antenna marker GL objects
+    GLuint        m_markerVAO   = 0;
+    GLuint        m_markerVBO   = 0;
+    int           m_markerCount = 0;
+    ShaderProgram m_markerShader;
 };

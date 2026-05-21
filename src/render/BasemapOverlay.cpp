@@ -184,6 +184,10 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
 
 void BasemapOverlay::draw(const glm::mat4& mvp) {
     if (!visible || !m_hasTexture || m_indexCount == 0) return;
+    // Pull the basemap slightly toward the camera to prevent z-fighting
+    // with the terrain mesh that shares the same vertex positions.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     m_shader.bind();
@@ -197,6 +201,7 @@ void BasemapOverlay::draw(const glm::mat4& mvp) {
     glBindVertexArray(0);
     m_shader.release();
     glDisable(GL_BLEND);
+    glDisable(GL_POLYGON_OFFSET_FILL);
 }
 
 void BasemapOverlay::destroy() {
