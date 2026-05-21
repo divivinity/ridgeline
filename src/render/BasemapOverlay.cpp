@@ -31,7 +31,11 @@ BasemapOverlay::mercatorPixel(double latDeg, double lonDeg, int zoom) {
 QString BasemapOverlay::tileUrlTemplate() {
     const char* env = std::getenv("RIDGELINE_TILE_URL");
     if (env && *env) return QString::fromUtf8(env);
-    return QStringLiteral("https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+    // ESRI World Imagery — free satellite tiles, no API key required.
+    // Format: {z}/{y}/{x}  (note: y before x, unlike OSM)
+    return QStringLiteral(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/"
+        "World_Imagery/MapServer/tile/{z}/{y}/{x}");
 }
 
 int BasemapOverlay::chooseZoom(const TerrainModel& terrain) {

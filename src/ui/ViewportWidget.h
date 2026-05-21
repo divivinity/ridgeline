@@ -24,6 +24,9 @@ public:
     void reloadTerrain();     // call after SimEngine::setTerrain() to rebuild GPU meshes
     void setOverlayVisible(Overlay overlay, bool visible);
 
+signals:
+    void terrainClicked(float worldX, float worldZ);
+
 protected:
     void initializeGL()              override;
     void resizeGL(int w, int h)      override;
@@ -46,5 +49,9 @@ private:
     JammerBubbleOverlay m_jammerBubble;
     FresnelOverlay     m_fresnel;
     QPoint             m_lastMouse;
+    QPoint             m_pressPos;   // for distinguishing click vs drag
     bool          m_dragging = false;
+
+    bool raycastTerrain(const QPoint& screenPos,
+                        float& outWorldX, float& outWorldZ) const;
 };
