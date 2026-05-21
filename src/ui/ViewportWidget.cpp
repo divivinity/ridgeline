@@ -10,6 +10,9 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     : QOpenGLWidget(parent), m_engine(engine)
 {
     setFocusPolicy(Qt::StrongFocus);
+    m_heatmapLegend = new HeatmapLegend(this);
+    // Heatmap starts visible (matches OverlayToolbar default of checked=true)
+    m_heatmapLegend->show();
 }
 
 void ViewportWidget::initializeGL() {
@@ -51,6 +54,7 @@ void ViewportWidget::initializeGL() {
 
 void ViewportWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
+    m_heatmapLegend->reposition(QSize(w, h));
 }
 
 void ViewportWidget::paintGL() {
@@ -146,7 +150,8 @@ void ViewportWidget::wheelEvent(QWheelEvent* e) {
 void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
     switch (overlay) {
         case Basemap: m_basemap.visible      = visible; break;
-        case Heatmap: m_heatmap.visible      = visible; break;
+        case Heatmap: m_heatmap.visible      = visible;
+                      m_heatmapLegend->setVisible(visible); break;
         case LOS:     m_losRay.visible       = visible; break;
         case Lobe:    m_antennaLobe.visible  = visible; break;
         case Jammer:  m_jammerBubble.visible = visible; break;

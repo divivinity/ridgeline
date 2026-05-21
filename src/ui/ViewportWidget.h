@@ -12,6 +12,7 @@
 #include "render/overlays/FresnelOverlay.h"
 #include "render/BasemapOverlay.h"
 #include "sim/SimEngine.h"
+#include "HeatmapLegend.h"
 
 class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
@@ -51,6 +52,7 @@ private:
     QPoint             m_lastMouse;
     QPoint             m_pressPos;   // for distinguishing click vs drag
     bool          m_dragging = false;
+    HeatmapLegend* m_heatmapLegend = nullptr;
 
     bool raycastTerrain(const QPoint& screenPos,
                         float& outWorldX, float& outWorldZ) const;
