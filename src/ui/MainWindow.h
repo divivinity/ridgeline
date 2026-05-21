@@ -30,6 +30,7 @@ private slots:
     void onRemoveAntenna(int index);
     void onAntennaSelected(int index);
     void onAntennaChanged(Antenna updated);
+    void onTerrainClicked(float worldX, float worldZ);
 
 private:
     SimEngine        m_engine;

@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QMenuBar>
 #include <QFileDialog>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <stdexcept>
@@ -171,6 +172,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     // Populate tree with default antennas
     refreshTree();
+
+    // Connect click-to-place signal
+    connect(m_viewport, &ViewportWidget::terrainClicked,
+            this, &MainWindow::onTerrainClicked);
+
+    // Auto-load NC terrain for immediate geo-referenced basemap
+    {
+        QString ncTile = QCoreApplication::applicationDirPath()
+                         + "/assets/terrain/nc/N35W079.hgt";
+        if (QFileInfo::exists(ncTile))
+            loadTerrain(ncTile);
+    }
 }
 
 void MainWindow::setupScene() {
@@ -411,6 +424,23 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     refreshTree();
     refreshPropsPanel();
     refreshBottomBar();
+}
+
+void MainWindow::onTerrainClicked(float worldX, float worldZ) {
+    const auto& t = m_engine.terrain();
+    Antenna a;
+    a.position     = { worldX, t.heightAtWorld(worldX, worldZ) + 10.0f, worldZ };
+    a.frequencyMHz = 150.0f;
+    a.powerW       = 10.0f;
+    a.gainDbi      = 3.0f;
+    m_engine.addAntenna(a);
+    m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
+    refreshTree();
+    m_scenarioTree->selectRow(m_selectedIndex);
+    refreshPropsPanel();
+    refreshBottomBar();
+    m_statusLabel->setText(QString("  Antenna %1 placed")
+                           .arg(m_engine.antennas().size()));
 }
 
 void MainWindow::onExportPng() {
