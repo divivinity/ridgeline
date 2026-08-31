@@ -23,11 +23,6 @@ FetchContent_Declare(json
 )
 FetchContent_MakeAvailable(json)
 
-# NTIA's official Irregular Terrain Model (Longley-Rice) reference
-# implementation. v1.4 is pinned for reproducible predictions. The upstream
-# v1.4 source uses Windows path separators and a Windows DLL export macro even
-# though the algorithms are portable; normalize those two build-surface details
-# in the fetched copy without changing propagation code.
 FetchContent_Declare(ntia_itm
     GIT_REPOSITORY https://github.com/NTIA/itm.git
     GIT_TAG        v1.4
@@ -60,15 +55,8 @@ add_executable(ridgeline ${SOURCES})
 target_include_directories(ridgeline PRIVATE src)
 target_compile_definitions(ridgeline PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline
-    Qt6::Widgets
-    Qt6::OpenGL
-    Qt6::OpenGLWidgets
-    Qt6::Network
-    Qt6::Concurrent
-    OpenGL::GL
-    glm::glm
-    nlohmann_json::nlohmann_json
-    ntia_itm
+    Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Concurrent
+    OpenGL::GL glm::glm nlohmann_json::nlohmann_json ntia_itm
 )
 if(GDAL_FOUND)
     target_compile_definitions(ridgeline PRIVATE HAVE_GDAL)
@@ -86,15 +74,11 @@ add_custom_command(TARGET ridgeline POST_BUILD
 )
 
 if(WIN32)
-    find_program(WINDEPLOYQT windeployqt
-        HINTS "${Qt6_DIR}/../../../bin"
-    )
+    find_program(WINDEPLOYQT windeployqt HINTS "${Qt6_DIR}/../../../bin")
     if(WINDEPLOYQT)
         add_custom_command(TARGET ridgeline POST_BUILD
-            COMMAND ${WINDEPLOYQT}
-                $<TARGET_FILE:ridgeline>
-            COMMENT "Deploying Qt runtime DLLs..."
-        )
+            COMMAND ${WINDEPLOYQT} $<TARGET_FILE:ridgeline>
+            COMMENT "Deploying Qt runtime DLLs...")
     endif()
 endif()
 
@@ -114,17 +98,10 @@ set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/data/TerrainLoader.cpp
 )
 
-add_executable(ridgeline_tests
-    tests/test_main.cpp
-    ${RIDGELINE_PHYSICS_TEST_SOURCES}
-)
+add_executable(ridgeline_tests tests/test_main.cpp ${RIDGELINE_PHYSICS_TEST_SOURCES})
 target_include_directories(ridgeline_tests PRIVATE src)
 target_compile_definitions(ridgeline_tests PRIVATE HAVE_NTIA_ITM)
-target_link_libraries(ridgeline_tests
-    glm::glm
-    nlohmann_json::nlohmann_json
-    ntia_itm
-)
+target_link_libraries(ridgeline_tests glm::glm nlohmann_json::nlohmann_json ntia_itm)
 add_test(NAME physics_tests
     COMMAND ridgeline_tests
         "${CMAKE_SOURCE_DIR}/assets/materials.json"
@@ -132,48 +109,46 @@ add_test(NAME physics_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_hgt_georef_tests
-    tests/test_hgt_georef.cpp
-    src/sim/TerrainModel.cpp
-    src/data/TerrainLoader.cpp
-)
+    tests/test_hgt_georef.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
 target_include_directories(ridgeline_hgt_georef_tests PRIVATE src)
-target_link_libraries(ridgeline_hgt_georef_tests
-    glm::glm
-    nlohmann_json::nlohmann_json
-)
-add_test(NAME hgt_georef_tests
-    COMMAND ridgeline_hgt_georef_tests
+target_link_libraries(ridgeline_hgt_georef_tests glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME hgt_georef_tests COMMAND ridgeline_hgt_georef_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_geospatial_antenna_tests
-    tests/test_geospatial_antennas.cpp
-    ${RIDGELINE_PHYSICS_TEST_SOURCES}
-)
+    tests/test_geospatial_antennas.cpp ${RIDGELINE_PHYSICS_TEST_SOURCES})
 target_include_directories(ridgeline_geospatial_antenna_tests PRIVATE src)
 target_compile_definitions(ridgeline_geospatial_antenna_tests PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline_geospatial_antenna_tests
-    glm::glm
-    nlohmann_json::nlohmann_json
-    ntia_itm
-)
-add_test(NAME geospatial_antenna_tests
-    COMMAND ridgeline_geospatial_antenna_tests
+    glm::glm nlohmann_json::nlohmann_json ntia_itm)
+add_test(NAME geospatial_antenna_tests COMMAND ridgeline_geospatial_antenna_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(ridgeline_rf_model_tests
+    tests/test_rf_models.cpp
+    ${RIDGELINE_PHYSICS_TEST_SOURCES}
+    src/data/AntennaPatternIO.cpp)
+target_include_directories(ridgeline_rf_model_tests PRIVATE src)
+target_compile_definitions(ridgeline_rf_model_tests PRIVATE HAVE_NTIA_ITM)
+target_link_libraries(ridgeline_rf_model_tests
+    glm::glm nlohmann_json::nlohmann_json ntia_itm)
+add_test(NAME rf_model_tests COMMAND ridgeline_rf_model_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(ridgeline_tile_cache_tests
+    tests/test_tile_cache.cpp src/data/TileBatchDownloader.cpp)
+target_include_directories(ridgeline_tile_cache_tests PRIVATE src)
+target_link_libraries(ridgeline_tile_cache_tests Qt6::Network)
+add_test(NAME tile_cache_tests COMMAND ridgeline_tile_cache_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 if(GDAL_FOUND)
     add_executable(ridgeline_geotiff_tests
-        tests/test_geotiff.cpp
-        src/sim/TerrainModel.cpp
-        src/data/TerrainLoader.cpp
-    )
+        tests/test_geotiff.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
     target_include_directories(ridgeline_geotiff_tests PRIVATE src ${GDAL_INCLUDE_DIRS})
     target_compile_definitions(ridgeline_geotiff_tests PRIVATE HAVE_GDAL)
     target_link_libraries(ridgeline_geotiff_tests
-        glm::glm
-        nlohmann_json::nlohmann_json
-        GDAL::GDAL
-    )
-    add_test(NAME geotiff_tests
-        COMMAND ridgeline_geotiff_tests
+        glm::glm nlohmann_json::nlohmann_json GDAL::GDAL)
+    add_test(NAME geotiff_tests COMMAND ridgeline_geotiff_tests
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
