@@ -36,6 +36,13 @@ PixelPoint mercatorPixel(double latDeg, double lonDeg, int zoom) {
     };
 }
 
+int wrapTileX(int tileX, int zoom) {
+    const int tileCount = 1 << zoom;
+    int wrapped = tileX % tileCount;
+    if (wrapped < 0) wrapped += tileCount;
+    return wrapped;
+}
+
 QByteArray waitForReply(QNetworkReply* reply, QString& error) {
     QEventLoop loop;
     QTimer timeout;
@@ -102,10 +109,14 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     const double halfLonDeg = halfM / TerrainModel::metersPerDegreeLon(centerLat);
     const double south = std::max(-kMaxMercatorLat, centerLat - halfLatDeg);
     const double north = std::min( kMaxMercatorLat, centerLat + halfLatDeg);
-    const double west  = std::max(-180.0, centerLon - halfLonDeg);
-    const double east  = std::min( 180.0, centerLon + halfLonDeg);
+
+    // Keep longitude bounds unwrapped. Web Mercator X is periodic, so a small
+    // analysis area centered near +/-180 degrees should continue smoothly past
+    // the date line instead of being truncated at the map edge.
+    const double west = centerLon - halfLonDeg;
+    const double east = centerLon + halfLonDeg;
     if (east <= west || north <= south)
-        throw std::runtime_error("Selected area crosses an unsupported map boundary");
+        throw std::runtime_error("Selected area has invalid geographic bounds");
 
     const double desiredMpp = std::max(8.0, extentM / (samplesPerAxis - 1));
     const double circumference = 40075016.686 * std::cos(centerLat * kPi / 180.0);
@@ -153,9 +164,10 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     QString lastError;
     for (int ty = tileMinY; ty <= tileMaxY; ++ty) {
         for (int tx = tileMinX; tx <= tileMaxX; ++tx) {
+            const int requestX = wrapTileX(tx, zoom);
             QString url = urlTemplate;
             url.replace("{z}", QString::number(zoom));
-            url.replace("{x}", QString::number(tx));
+            url.replace("{x}", QString::number(requestX));
             url.replace("{y}", QString::number(ty));
             QNetworkRequest request{QUrl(url)};
             request.setHeader(QNetworkRequest::UserAgentHeader,
