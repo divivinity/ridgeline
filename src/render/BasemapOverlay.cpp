@@ -23,6 +23,19 @@ constexpr double kPi = 3.14159265358979323846;
 
 struct BaseVert { float x, y, z, u, v; };
 
+double normalizeLongitude(double lonDeg) {
+    double wrapped = std::fmod(lonDeg + 180.0, 360.0);
+    if (wrapped < 0.0) wrapped += 360.0;
+    return wrapped - 180.0;
+}
+
+int wrapTileX(int tileX, int zoom) {
+    const int tileCount = 1 << zoom;
+    int wrapped = tileX % tileCount;
+    if (wrapped < 0) wrapped += tileCount;
+    return wrapped;
+}
+
 QByteArray waitForReply(QNetworkReply* reply, QString& error) {
     QEventLoop loop;
     QTimer timeout;
@@ -107,12 +120,16 @@ BasemapOverlay::mercatorPixel(double latDeg, double lonDeg, int zoom) {
 }
 
 int BasemapOverlay::chooseZoom(const TerrainModel& terrain) {
-    const auto sw = terrain.worldToLatLon(0.0f, 0.0f);
-    const auto ne = terrain.worldToLatLon(terrain.worldSize().x, terrain.worldSize().z);
-    const double minLat = std::min(sw.latDeg, ne.latDeg);
-    const double maxLat = std::max(sw.latDeg, ne.latDeg);
-    const double minLon = std::min(sw.lonDeg, ne.lonDeg);
-    const double maxLon = std::max(sw.lonDeg, ne.lonDeg);
+    const double south = terrain.originLatDeg;
+    const double north = terrain.originLatDeg
+                       + static_cast<double>(terrain.height - 1) * terrain.cellLatDeg;
+    const double west = terrain.originLonDeg;
+    const double east = terrain.originLonDeg
+                      + static_cast<double>(terrain.width - 1) * terrain.cellLonDeg;
+    const double minLat = std::min(south, north);
+    const double maxLat = std::max(south, north);
+    const double minLon = std::min(west, east);
+    const double maxLon = std::max(west, east);
     for (int zoom = 17; zoom >= 5; --zoom) {
         const MercatorPixel nw = mercatorPixel(maxLat, minLon, zoom);
         const MercatorPixel se = mercatorPixel(minLat, maxLon, zoom);
@@ -135,10 +152,14 @@ void BasemapOverlay::build(const TerrainModel& terrain) {
 
     MercatorPixel swPx{}, nePx{};
     if (terrain.hasGeoReference()) {
-        const auto sw = terrain.worldToLatLon(0.0f, 0.0f);
-        const auto ne = terrain.worldToLatLon(terrain.worldSize().x, terrain.worldSize().z);
-        swPx = mercatorPixel(sw.latDeg, sw.lonDeg, 0);
-        nePx = mercatorPixel(ne.latDeg, ne.lonDeg, 0);
+        const double south = terrain.originLatDeg;
+        const double north = terrain.originLatDeg
+                           + static_cast<double>(terrain.height - 1) * terrain.cellLatDeg;
+        const double west = terrain.originLonDeg;
+        const double east = terrain.originLonDeg
+                          + static_cast<double>(terrain.width - 1) * terrain.cellLonDeg;
+        swPx = mercatorPixel(south, west, 0);
+        nePx = mercatorPixel(north, east, 0);
     }
 
     std::vector<BaseVert> verts;
@@ -151,8 +172,11 @@ void BasemapOverlay::build(const TerrainModel& terrain) {
             float u = static_cast<float>(x) / std::max(1, terrain.width - 1);
             float v = static_cast<float>(z) / std::max(1, terrain.height - 1);
             if (terrain.hasGeoReference()) {
-                const auto ll = terrain.worldToLatLon(wx, wz);
-                const MercatorPixel p = mercatorPixel(ll.latDeg, ll.lonDeg, 0);
+                const double lat = terrain.originLatDeg
+                                 + static_cast<double>(z) * terrain.cellLatDeg;
+                const double lon = terrain.originLonDeg
+                                 + static_cast<double>(x) * terrain.cellLonDeg;
+                const MercatorPixel p = mercatorPixel(lat, lon, 0);
                 if (std::abs(nePx.x - swPx.x) > 1e-12)
                     u = static_cast<float>((p.x - swPx.x) / (nePx.x - swPx.x));
                 if (std::abs(swPx.y - nePx.y) > 1e-12)
@@ -200,12 +224,16 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
         return false;
     }
 
-    const auto sw = terrain.worldToLatLon(0.0f, 0.0f);
-    const auto ne = terrain.worldToLatLon(terrain.worldSize().x, terrain.worldSize().z);
-    const double minLat = std::min(sw.latDeg, ne.latDeg);
-    const double maxLat = std::max(sw.latDeg, ne.latDeg);
-    const double minLon = std::min(sw.lonDeg, ne.lonDeg);
-    const double maxLon = std::max(sw.lonDeg, ne.lonDeg);
+    const double south = terrain.originLatDeg;
+    const double north = terrain.originLatDeg
+                       + static_cast<double>(terrain.height - 1) * terrain.cellLatDeg;
+    const double west = terrain.originLonDeg;
+    const double east = terrain.originLonDeg
+                      + static_cast<double>(terrain.width - 1) * terrain.cellLonDeg;
+    const double minLat = std::min(south, north);
+    const double maxLat = std::max(south, north);
+    const double minLon = std::min(west, east);
+    const double maxLon = std::max(west, east);
     const int zoom = chooseZoom(terrain);
     const MercatorPixel nwPx = mercatorPixel(maxLat, minLon, zoom);
     const MercatorPixel sePx = mercatorPixel(minLat, maxLon, zoom);
@@ -251,8 +279,8 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
         query.addQueryItem("zoom", QString::number(zoom));
         query.addQueryItem("north", QString::number(maxLat, 'f', 8));
         query.addQueryItem("south", QString::number(minLat, 'f', 8));
-        query.addQueryItem("east", QString::number(maxLon, 'f', 8));
-        query.addQueryItem("west", QString::number(minLon, 'f', 8));
+        query.addQueryItem("east", QString::number(normalizeLongitude(maxLon), 'f', 8));
+        query.addQueryItem("west", QString::number(normalizeLongitude(minLon), 'f', 8));
         viewportUrl.setQuery(query);
         QNetworkRequest request(viewportUrl);
         request.setHeader(QNetworkRequest::UserAgentHeader, "Ridgeline-RF-Planner/1.0");
@@ -285,13 +313,14 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
     int failed = 0;
     for (int ty = tileMinY; ty <= tileMaxY; ++ty) {
         for (int tx = tileMinX; tx <= tileMaxX; ++tx) {
+            const int requestX = wrapTileX(tx, zoom);
             QString url;
             if (provider.kind == TileProvider::Kind::Google) {
-                url = googleTileUrl(provider, zoom, tx, ty);
+                url = googleTileUrl(provider, zoom, requestX, ty);
             } else {
                 url = provider.urlTemplate;
                 url.replace("{z}", QString::number(zoom));
-                url.replace("{x}", QString::number(tx));
+                url.replace("{x}", QString::number(requestX));
                 url.replace("{y}", QString::number(ty));
             }
             QNetworkRequest request{QUrl(url)};
