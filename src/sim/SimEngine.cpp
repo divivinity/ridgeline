@@ -24,25 +24,34 @@ void SimEngine::solve(const std::function<void(int, int)>& progress) {
     auto adaptiveResolution = [longestAxis](float preferredM, int maxCellsPerAxis) {
         return std::max(preferredM, longestAxis / static_cast<float>(maxCellsPerAxis));
     };
+
+    // Configure solver snapshots locally. This keeps a background solve from
+    // mutating the engine's persistent solver configuration while the UI owns
+    // the SimEngine instance. Only the completed FieldGrid is committed back.
+    FastSolver fast = m_fast;
+    FullSolver full = m_full;
+    FieldGrid result;
+
     if (mode == Mode::Preview) {
-        m_fast.gridResolution = adaptiveResolution(30.0f, 240);
-        m_field = m_fast.solve(m_terrain, m_antennas, m_materials, progress);
+        fast.gridResolution = adaptiveResolution(30.0f, 240);
+        result = fast.solve(m_terrain, m_antennas, m_materials, progress);
     } else if (mode == Mode::Planner) {
-        m_full.gridResolution = adaptiveResolution(20.0f, 360);
-        m_full.enableGroundReflection = false;
-        m_full.enableRain = false;
-        m_full.enableFresnelPenalty = true;
-        m_full.requiredFresnelClearance = 0.6f;
-        m_field = m_full.solve(m_terrain, m_antennas, m_materials, progress);
+        full.gridResolution = adaptiveResolution(20.0f, 360);
+        full.enableGroundReflection = false;
+        full.enableRain = false;
+        full.enableFresnelPenalty = true;
+        full.requiredFresnelClearance = 0.6f;
+        result = full.solve(m_terrain, m_antennas, m_materials, progress);
     } else {
-        m_full.gridResolution = adaptiveResolution(10.0f, 600);
-        m_full.enableGroundReflection = true;
-        m_full.enableRain = true;
-        m_full.enableFresnelPenalty = true;
-        m_full.requiredFresnelClearance = 0.6f;
-        m_field = m_full.solve(m_terrain, m_antennas, m_materials, progress);
+        full.gridResolution = adaptiveResolution(10.0f, 600);
+        full.enableGroundReflection = true;
+        full.enableRain = true;
+        full.enableFresnelPenalty = true;
+        full.requiredFresnelClearance = 0.6f;
+        result = full.solve(m_terrain, m_antennas, m_materials, progress);
     }
 
+    m_field = std::move(result);
     if (onFieldUpdated) onFieldUpdated();
 }
 
