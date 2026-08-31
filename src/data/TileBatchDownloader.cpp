@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -74,8 +75,6 @@ std::vector<TileDownloadResult> TileBatchDownloader::download(
     pending.reserve(requests.size());
     int completed = 0;
 
-    // Portable raw tile files are checked first. This keeps offline packages
-    // deterministic and independent of QNetworkDiskCache's internal format.
     for (int i = 0; i < total; ++i) {
         const QByteArray cached = readCache(requests[i].cacheRelativePath);
         if (!cached.isEmpty()) {
@@ -158,8 +157,6 @@ std::vector<TileDownloadResult> TileBatchDownloader::download(
         for (QNetworkReply* reply : active)
             if (reply) reply->abort();
 
-        // Mark requests that were never launched so the result vector is
-        // complete and progress reaches a stable terminal state.
         while (nextPending < static_cast<int>(pending.size())) {
             const int index = pending[nextPending++];
             results[index].error = QStringLiteral("cancelled");
