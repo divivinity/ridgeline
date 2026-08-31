@@ -6,6 +6,16 @@
 static constexpr float kEffectiveEarthRadiusM = 6371000.0f * 4.0f / 3.0f;
 static constexpr double kPi = 3.14159265358979323846;
 
+static double normalizeLongitude(double lonDeg) {
+    double wrapped = std::fmod(lonDeg + 180.0, 360.0);
+    if (wrapped < 0.0) wrapped += 360.0;
+    return wrapped - 180.0;
+}
+
+static double longitudeDelta(double lonDeg, double originLonDeg) {
+    return normalizeLongitude(lonDeg - originLonDeg);
+}
+
 static float earthBulgeM(const glm::vec3& from, const glm::vec3& to, float t) {
     const float totalM = glm::distance(glm::vec2(from.x, from.z),
                                        glm::vec2(to.x,   to.z));
@@ -31,7 +41,7 @@ void TerrainModel::setCellSpacing(float eastWestM, float southNorthM) {
 void TerrainModel::setGeoReference(double swLatDeg, double swLonDeg,
                                    double sampleLatDeg, double sampleLonDeg) {
     originLatDeg = swLatDeg;
-    originLonDeg = swLonDeg;
+    originLonDeg = normalizeLongitude(swLonDeg);
     cellLatDeg = sampleLatDeg;
     cellLonDeg = sampleLonDeg;
     georeferenced = sampleLatDeg != 0.0 && sampleLonDeg != 0.0;
@@ -43,13 +53,13 @@ TerrainModel::GeoPoint TerrainModel::worldToLatLon(float wx, float wz) const {
     const double zSamples = wz / static_cast<double>(metersPerCellZ());
     return {
         originLatDeg + zSamples * cellLatDeg,
-        originLonDeg + xSamples * cellLonDeg
+        normalizeLongitude(originLonDeg + xSamples * cellLonDeg)
     };
 }
 
 glm::vec2 TerrainModel::latLonToWorld(double latDeg, double lonDeg) const {
     if (!georeferenced) return {0.0f, 0.0f};
-    const double xSamples = (lonDeg - originLonDeg) / cellLonDeg;
+    const double xSamples = longitudeDelta(lonDeg, originLonDeg) / cellLonDeg;
     const double zSamples = (latDeg - originLatDeg) / cellLatDeg;
     return {
         static_cast<float>(xSamples * metersPerCellX()),
