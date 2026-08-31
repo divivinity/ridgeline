@@ -14,27 +14,22 @@ public:
         Preview,
         Planner,
         Engineering,
-        Fast = Preview,       // backwards-compatible scenario/test alias
-        Full = Engineering    // backwards-compatible scenario/test alias
+        Fast = Preview,
+        Full = Engineering
     };
 
     Mode mode = Mode::Planner;
+    ReceiverSettings receiver;
 
     void setTerrain(TerrainModel terrain);
     void setAntennas(std::vector<Antenna> antennas);
     void addAntenna(Antenna antenna);
-    void removeAntenna(int index);   // no-op if index out of range
-    void updateAntenna(int index, Antenna antenna);  // no-op if index out of range
+    void removeAntenna(int index);
+    void updateAntenna(int index, Antenna antenna);
     void setFieldGrid(FieldGrid field);
 
-    // Load EM material properties from JSON.
-    // Silent no-op on failure (default dry-soil always available).
     void loadMaterials(const std::string& path);
 
-    // Progress reports completed and total terrain rows. Both callbacks may run
-    // on a worker thread when the UI launches an asynchronous solve. Returning
-    // true from cancelled cooperatively aborts the solve without publishing a
-    // partial FieldGrid.
     void solve(const std::function<void(int, int)>& progress = {},
                const std::function<bool()>& cancelled = {});
 
