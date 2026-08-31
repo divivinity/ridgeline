@@ -3,6 +3,7 @@
 #include <complex>
 #include <limits>
 #include <algorithm>
+#include <stdexcept>
 #include <glm/glm.hpp>
 
 static constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
@@ -16,7 +17,8 @@ static float mwToDbm(float mw)  { return 10.0f * std::log10(mw); }
 FieldGrid FullSolver::solve(const TerrainModel& terrain,
                              const std::vector<Antenna>& antennas,
                              const MaterialLibrary& materials,
-                             const std::function<void(int, int)>& progress) const {
+                             const std::function<void(int, int)>& progress,
+                             const std::function<bool()>& cancelled) const {
     FieldGrid grid;
     grid.cellSize = gridResolution;
     const glm::vec3 world = terrain.worldSize();
@@ -29,7 +31,12 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
     const Material& mat = materials.defaultMaterial();
 
     for (int gz = 0; gz < grid.height; ++gz) {
+        if (cancelled && cancelled())
+            throw std::runtime_error("Coverage solve cancelled");
         for (int gx = 0; gx < grid.width; ++gx) {
+            if ((gx & 7) == 0 && cancelled && cancelled())
+                throw std::runtime_error("Coverage solve cancelled");
+
             float wx = gx * gridResolution + gridResolution * 0.5f;
             float wz = gz * gridResolution + gridResolution * 0.5f;
             float wy = terrain.heightAtWorld(wx, wz) + 1.5f;  // 1.5 m receive height
@@ -39,6 +46,8 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
 
             for (const auto& ant : antennas) {
                 if (ant.isJammer) continue;
+                if (cancelled && cancelled())
+                    throw std::runtime_error("Coverage solve cancelled");
 
                 float distM = glm::distance(ant.position, rx);
                 if (distM < 1.0f) distM = 1.0f;
