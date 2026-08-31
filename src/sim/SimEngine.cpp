@@ -73,7 +73,11 @@ void SimEngine::loadMaterials(const std::string& path) {
     }
 }
 
-void SimEngine::solve(const std::function<void(int, int)>& progress) {
+void SimEngine::solve(const std::function<void(int, int)>& progress,
+                      const std::function<bool()>& cancelled) {
+    if (cancelled && cancelled())
+        throw std::runtime_error("Coverage solve cancelled");
+
     const glm::vec3 world = m_terrain.worldSize();
     const float longestAxis = std::max(world.x, world.z);
     auto adaptiveResolution = [longestAxis](float preferredM, int maxCellsPerAxis) {
@@ -89,23 +93,25 @@ void SimEngine::solve(const std::function<void(int, int)>& progress) {
 
     if (mode == Mode::Preview) {
         fast.gridResolution = adaptiveResolution(30.0f, 240);
-        result = fast.solve(m_terrain, m_antennas, m_materials, progress);
+        result = fast.solve(m_terrain, m_antennas, m_materials, progress, cancelled);
     } else if (mode == Mode::Planner) {
         full.gridResolution = adaptiveResolution(20.0f, 360);
         full.enableGroundReflection = false;
         full.enableRain = false;
         full.enableFresnelPenalty = true;
         full.requiredFresnelClearance = 0.6f;
-        result = full.solve(m_terrain, m_antennas, m_materials, progress);
+        result = full.solve(m_terrain, m_antennas, m_materials, progress, cancelled);
     } else {
         full.gridResolution = adaptiveResolution(10.0f, 600);
         full.enableGroundReflection = true;
         full.enableRain = true;
         full.enableFresnelPenalty = true;
         full.requiredFresnelClearance = 0.6f;
-        result = full.solve(m_terrain, m_antennas, m_materials, progress);
+        result = full.solve(m_terrain, m_antennas, m_materials, progress, cancelled);
     }
 
+    if (cancelled && cancelled())
+        throw std::runtime_error("Coverage solve cancelled");
     setFieldGrid(std::move(result));
 }
 
