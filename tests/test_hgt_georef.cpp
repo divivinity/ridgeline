@@ -31,6 +31,7 @@ int fail(const char* message) {
 int main() {
     const std::string standard = "N35W079.hgt";
     const std::string renamed = "terrain.hgt";
+    const std::string southernWestern = "S12W077.hgt";
 
     if (!writeZeroSrtm3(standard))
         return fail("could not create SRTM3 fixture");
@@ -56,12 +57,24 @@ int main() {
 
         TerrainModel unknown = TerrainLoader::fromHGT(renamed, 35.5f, -78.5f, 32);
         std::remove(renamed.c_str());
-
         if (unknown.hasGeoReference())
             return fail("renamed HGT without an encoded tile origin must remain ungeoreferenced");
+
+        if (!writeZeroSrtm3(southernWestern))
+            return fail("could not create southern/western SRTM fixture");
+        TerrainModel swHemisphere = TerrainLoader::fromHGT(
+            southernWestern, -11.5f, -76.5f, 32);
+        std::remove(southernWestern.c_str());
+        if (!swHemisphere.hasGeoReference())
+            return fail("southern/western SRTM filename should be georeferenced");
+        const auto sw2 = swHemisphere.worldToLatLon(0.0f, 0.0f);
+        if (sw2.latDeg < -12.0 || sw2.latDeg > -11.0 ||
+            sw2.lonDeg < -77.0 || sw2.lonDeg > -76.0)
+            return fail("southern/western HGT origin parsed incorrectly");
     } catch (const std::exception& e) {
         std::remove(standard.c_str());
         std::remove(renamed.c_str());
+        std::remove(southernWestern.c_str());
         std::cerr << "FAIL: unexpected exception: " << e.what() << '\n';
         return 1;
     }
