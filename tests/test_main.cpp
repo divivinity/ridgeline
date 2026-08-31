@@ -491,6 +491,7 @@ static void test_spectrum_throws_on_zero_power() {
 
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
+    std::string antennasPath = (argc > 2) ? argv[2] : "assets/antennas.json";
 
     test_default_material();
     test_loss_interpolation();
@@ -502,7 +503,7 @@ int main(int argc, char** argv) {
     test_rain_reduces_power();
     test_ridge_reduces_power_vs_flat();
     test_antenna_library_defaults();
-    test_antenna_library_load_json("assets/antennas.json");
+    test_antenna_library_load_json(antennasPath);
     test_antenna_library_load_defaults();
     test_add_antenna();
     test_remove_antenna();
