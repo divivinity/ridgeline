@@ -2,6 +2,7 @@
 #include "Types.h"
 #include "TerrainModel.h"
 #include "MaterialLibrary.h"
+#include <functional>
 #include <vector>
 
 class FastSolver {
@@ -10,7 +11,8 @@ public:
 
     FieldGrid solve(const TerrainModel& terrain,
                     const std::vector<Antenna>& antennas,
-                    const MaterialLibrary& materials) const;
+                    const MaterialLibrary& materials,
+                    const std::function<void(int, int)>& progress = {}) const;
 
 private:
     static float fsplDb(float distM, float freqMHz);

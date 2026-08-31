@@ -12,7 +12,8 @@ one WGS84 coordinate system.
 4. Use **+ Emitter** or **+ Jammer**, then click the terrain.
 5. Select a source to edit its frequency, power, height, and optional advanced
    antenna settings.
-6. Choose Quick preview, Balanced, or High accuracy and run coverage.
+6. Choose Quick preview, Balanced, or High accuracy and run coverage. A live
+   progress bar reports completed terrain rows and elapsed time while it runs.
 
 `Esc` cancels placement. `T` switches to a top-down view, `R` resets the camera,
 the arrow keys orbit, and the mouse wheel zooms.

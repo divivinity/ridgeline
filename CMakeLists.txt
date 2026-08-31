@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Network Concurrent)
 find_package(OpenGL REQUIRED)
 find_package(GDAL QUIET)  # optional — enables GeoTIFF loading when present
 
@@ -35,6 +35,7 @@ target_link_libraries(ridgeline
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     Qt6::Network
+    Qt6::Concurrent
     OpenGL::GL
     glm::glm
     nlohmann_json::nlohmann_json

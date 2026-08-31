@@ -18,7 +18,7 @@ void SimEngine::loadMaterials(const std::string& path) {
     }
 }
 
-void SimEngine::solve() {
+void SimEngine::solve(const std::function<void(int, int)>& progress) {
     const glm::vec3 world = m_terrain.worldSize();
     const float longestAxis = std::max(world.x, world.z);
     auto adaptiveResolution = [longestAxis](float preferredM, int maxCellsPerAxis) {
@@ -26,21 +26,21 @@ void SimEngine::solve() {
     };
     if (mode == Mode::Preview) {
         m_fast.gridResolution = adaptiveResolution(30.0f, 240);
-        m_field = m_fast.solve(m_terrain, m_antennas, m_materials);
+        m_field = m_fast.solve(m_terrain, m_antennas, m_materials, progress);
     } else if (mode == Mode::Planner) {
         m_full.gridResolution = adaptiveResolution(20.0f, 360);
         m_full.enableGroundReflection = false;
         m_full.enableRain = false;
         m_full.enableFresnelPenalty = true;
         m_full.requiredFresnelClearance = 0.6f;
-        m_field = m_full.solve(m_terrain, m_antennas, m_materials);
+        m_field = m_full.solve(m_terrain, m_antennas, m_materials, progress);
     } else {
         m_full.gridResolution = adaptiveResolution(10.0f, 600);
         m_full.enableGroundReflection = true;
         m_full.enableRain = true;
         m_full.enableFresnelPenalty = true;
         m_full.requiredFresnelClearance = 0.6f;
-        m_field = m_full.solve(m_terrain, m_antennas, m_materials);
+        m_field = m_full.solve(m_terrain, m_antennas, m_materials, progress);
     }
 
     if (onFieldUpdated) onFieldUpdated();

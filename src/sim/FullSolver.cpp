@@ -15,7 +15,8 @@ static float mwToDbm(float mw)  { return 10.0f * std::log10(mw); }
 
 FieldGrid FullSolver::solve(const TerrainModel& terrain,
                              const std::vector<Antenna>& antennas,
-                             const MaterialLibrary& materials) const {
+                             const MaterialLibrary& materials,
+                             const std::function<void(int, int)>& progress) const {
     FieldGrid grid;
     grid.cellSize = gridResolution;
     const glm::vec3 world = terrain.worldSize();
@@ -23,6 +24,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
     grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
     grid.originXZ = {gridResolution * 0.5f, gridResolution * 0.5f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
+    if (progress) progress(0, grid.height);
 
     const Material& mat = materials.defaultMaterial();
 
@@ -107,6 +109,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
             if (totalMw > 0.0f)
                 grid.dbm[gz * grid.width + gx] = mwToDbm(totalMw);
         }
+        if (progress) progress(gz + 1, grid.height);
     }
     return grid;
 }
