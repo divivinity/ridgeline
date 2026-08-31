@@ -228,7 +228,8 @@ TerrainModel TerrainLoader::fromHGT(const std::string& path,
     const int samples = source.samples;
     cropSize = std::clamp(cropSize, 2, samples);
 
-    // Derive tile SW corner from filename, or fall back to centre of file.
+    // SRTM HGT stores no coordinate metadata internally. Only a standard
+    // [NS]dd[EW]ddd filename can establish an authoritative WGS84 origin.
     int swLat = 0, swLon = 0;
     const bool haveOrigin = parseHGTOrigin(path, swLat, swLon);
 
@@ -260,22 +261,36 @@ TerrainModel TerrainLoader::fromHGT(const std::string& path,
     r0 = std::max(0, std::min(r0, samples - cropSize));
     c0 = std::max(0, std::min(c0, samples - cropSize));
 
-    // Build TerrainModel.  HGT rows go N→S; TerrainModel rows go S→N (row 0 = south).
+    // Build TerrainModel. HGT rows go N→S; TerrainModel rows go S→N (row 0 = south).
     TerrainModel t;
     t.width    = cropSize;
     t.height   = cropSize;
     const double sampleDeg = 1.0 / static_cast<double>(samples - 1);
-    const double cropSouthLat =
-        static_cast<double>(swLat + 1) -
-        static_cast<double>(r0 + cropSize - 1) * sampleDeg;
-    const double cropWestLon =
-        static_cast<double>(swLon) + static_cast<double>(c0) * sampleDeg;
-    const double cropCenterLatDeg =
-        cropSouthLat + static_cast<double>(cropSize - 1) * sampleDeg * 0.5;
-    t.setCellSpacing(
-        static_cast<float>(TerrainModel::metersPerDegreeLon(cropCenterLatDeg) * sampleDeg),
-        static_cast<float>(TerrainModel::metersPerDegreeLat(cropCenterLatDeg) * sampleDeg));
-    t.setGeoReference(cropSouthLat, cropWestLon, sampleDeg, sampleDeg);
+
+    // Without a standard SRTM filename, the file has no authoritative WGS84
+    // origin. Keep useful physical cell spacing, but do not fabricate a map
+    // location that would misalign imagery or exported coordinates.
+    if (haveOrigin) {
+        const double cropSouthLat =
+            static_cast<double>(swLat + 1) -
+            static_cast<double>(r0 + cropSize - 1) * sampleDeg;
+        const double cropWestLon =
+            static_cast<double>(swLon) + static_cast<double>(c0) * sampleDeg;
+        const double cropCenterLatDeg =
+            cropSouthLat + static_cast<double>(cropSize - 1) * sampleDeg * 0.5;
+        t.setCellSpacing(
+            static_cast<float>(TerrainModel::metersPerDegreeLon(cropCenterLatDeg) * sampleDeg),
+            static_cast<float>(TerrainModel::metersPerDegreeLat(cropCenterLatDeg) * sampleDeg));
+        t.setGeoReference(cropSouthLat, cropWestLon, sampleDeg, sampleDeg);
+    } else {
+        const double spacingLat = std::clamp(
+            std::isfinite(static_cast<double>(cropCenterLat))
+                ? static_cast<double>(cropCenterLat) : 0.0,
+            -89.0, 89.0);
+        t.setCellSpacing(
+            static_cast<float>(TerrainModel::metersPerDegreeLon(spacingLat) * sampleDeg),
+            static_cast<float>(TerrainModel::metersPerDegreeLat(spacingLat) * sampleDeg));
+    }
     t.heights.resize(cropSize * cropSize);
 
     for (int hgtRow = 0; hgtRow < cropSize; ++hgtRow) {
