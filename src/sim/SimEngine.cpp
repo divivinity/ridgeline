@@ -10,6 +10,11 @@ void SimEngine::setAntennas(std::vector<Antenna> antennas) {
     m_antennas = std::move(antennas);
 }
 
+void SimEngine::setFieldGrid(FieldGrid field) {
+    m_field = std::move(field);
+    if (onFieldUpdated) onFieldUpdated();
+}
+
 void SimEngine::loadMaterials(const std::string& path) {
     try {
         m_materials.load(path);
@@ -51,8 +56,7 @@ void SimEngine::solve(const std::function<void(int, int)>& progress) {
         result = full.solve(m_terrain, m_antennas, m_materials, progress);
     }
 
-    m_field = std::move(result);
-    if (onFieldUpdated) onFieldUpdated();
+    setFieldGrid(std::move(result));
 }
 
 void SimEngine::addAntenna(Antenna antenna) {
