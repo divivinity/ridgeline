@@ -1,4 +1,5 @@
 #include "FastSolver.h"
+#include "RFModels.h"
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -19,6 +20,7 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
     grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
     grid.originXZ = {gridResolution * 0.5f, gridResolution * 0.5f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
+    RFModels::initializeMetrics(grid);
     if (progress) progress(0, grid.height);
 
     const Material& mat = materials.defaultMaterial();
@@ -30,34 +32,42 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
             if ((gx & 15) == 0 && cancelled && cancelled())
                 throw std::runtime_error("Coverage solve cancelled");
 
-            float wx = gx * gridResolution + gridResolution * 0.5f;
-            float wz = gz * gridResolution + gridResolution * 0.5f;
-            float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
+            const float wx = gx * gridResolution + gridResolution * 0.5f;
+            const float wz = gz * gridResolution + gridResolution * 0.5f;
+            const float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
+            const glm::vec3 rxPos{wx, wy, wz};
 
-            float bestDbm = NEG_INF;
+            float bestDesiredDbm = NEG_INF;
+            float jammerMw = 0.0f;
             for (const auto& ant : antennas) {
-                if (ant.isJammer) continue;
-
-                glm::vec3 rxPos{wx, wy, wz};
                 float distM = glm::distance(ant.position, rxPos);
                 if (distM < 1.0f) distM = 1.0f;
 
-                float txPowerDbm = 10.0f * std::log10(ant.powerW * 1000.0f);
-                float matLossDb  = mat.lossDbPer100m(ant.frequencyMHz) * distM / 100.0f;
+                const float txPowerDbm = 10.0f * std::log10(
+                    std::max(ant.powerW, 1.0e-9f) * 1000.0f);
+                const float directionalGain = RFModels::effectiveAntennaGainDbi(
+                    ant, rxPos, receiver);
+                const float matLossDb = mat.lossDbPer100m(ant.frequencyMHz)
+                                      * distM / 100.0f;
                 float loss = fsplDb(distM, ant.frequencyMHz)
-                           - ant.gainDbi
+                           - directionalGain
                            + matLossDb;
 
-                bool los = terrain.lineOfSight(ant.position, rxPos);
-                if (!los) loss += 20.0f;
-
-                float rxDbm = txPowerDbm - loss;
-                if (rxDbm > bestDbm) bestDbm = rxDbm;
+                if (!terrain.lineOfSight(ant.position, rxPos)) loss += 20.0f;
+                const float rxDbm = txPowerDbm - loss;
+                if (ant.isJammer)
+                    jammerMw += RFModels::dbmToMw(rxDbm);
+                else if (rxDbm > bestDesiredDbm)
+                    bestDesiredDbm = rxDbm;
             }
-            grid.dbm[gz * grid.width + gx] = bestDbm;
+
+            const std::size_t index = static_cast<std::size_t>(gz) * grid.width + gx;
+            grid.dbm[index] = bestDesiredDbm;
+            grid.jammerDbm[index] = RFModels::mwToDbm(jammerMw);
         }
         if (progress) progress(gz + 1, grid.height);
     }
+    RFModels::finalizeMetrics(grid, receiver);
     return grid;
 }
 
