@@ -129,7 +129,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     locationButton->setToolTip("Choose any location worldwide (Ctrl+L)");
     connect(locationButton, &QPushButton::clicked, this, &MainWindow::onChooseLocation);
     tb->addWidget(locationButton);
-    m_locationLabel = new QLabel("Loading analysis area…");
+    m_locationLabel = new QLabel("Procedural terrain · Choose Location for real-world data");
     m_locationLabel->setObjectName("LocationSummary");
     tb->addWidget(m_locationLabel);
 
@@ -251,11 +251,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_viewport, &ViewportWidget::placementCancelled, this, [this]() {
         m_placementActive = false;
         m_statusLabel->setText("  Placement cancelled");
-    });
-
-    // Start with a real global terrain selection. Deferred until OpenGL is ready.
-    QTimer::singleShot(0, this, [this]() {
-        loadGlobalLocation(35.5951, -82.5515, 15.0, "Asheville, North Carolina");
     });
 }
 
