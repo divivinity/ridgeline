@@ -17,18 +17,24 @@ static int g_fail = 0;
 
 #define CHECK_NEAR(a, b, tol) CHECK(std::abs((double)(a) - (double)(b)) <= (double)(tol))
 
-static TerrainModel makeGeoTerrain(int samples, float elevationM) {
+static TerrainModel makeCustomGeoTerrain(int samples, float elevationM,
+                                         double south, double west,
+                                         double spanDeg = 0.1) {
     TerrainModel t;
     t.width = samples;
     t.height = samples;
-    const double sampleDeg = 0.1 / static_cast<double>(samples - 1);
-    const double centerLat = 35.05;
+    const double sampleDeg = spanDeg / static_cast<double>(samples - 1);
+    const double centerLat = south + spanDeg * 0.5;
     t.setCellSpacing(
         static_cast<float>(TerrainModel::metersPerDegreeLon(centerLat) * sampleDeg),
         static_cast<float>(TerrainModel::metersPerDegreeLat(centerLat) * sampleDeg));
-    t.setGeoReference(35.0, -80.0, sampleDeg, sampleDeg);
+    t.setGeoReference(south, west, sampleDeg, sampleDeg);
     t.heights.assign(samples * samples, elevationM);
     return t;
+}
+
+static TerrainModel makeGeoTerrain(int samples, float elevationM) {
+    return makeCustomGeoTerrain(samples, elevationM, 35.0, -80.0);
 }
 
 static void test_engine_tracks_geo_metadata() {
@@ -66,6 +72,24 @@ static void test_engine_reprojects_across_terrain_resolution() {
     CHECK_NEAR(ll.lonDeg, -79.96, 1e-7);
     CHECK_NEAR(moved.position.y, 212.0, 1e-3);
     CHECK_NEAR(moved.heightAglM, 12.0, 1e-4);
+}
+
+static void test_outside_source_is_preserved_not_clamped() {
+    SimEngine engine;
+    engine.setTerrain(makeGeoTerrain(101, 100.0f));
+    const auto world = engine.terrain().latLonToWorld(35.08, -79.92);
+    Antenna a;
+    a.position = {world.x, 115.0f, world.y};
+    engine.addAntenna(a);
+
+    engine.setTerrain(makeCustomGeoTerrain(101, 120.0f, 34.0, -81.0, 0.1));
+    const Antenna& moved = engine.antennas().front();
+    CHECK(moved.hasGeoPosition);
+    CHECK_NEAR(moved.latitudeDeg, 35.08, 1e-7);
+    CHECK_NEAR(moved.longitudeDeg, -79.92, 1e-7);
+    CHECK(moved.position.x > engine.terrain().worldSize().x ||
+          moved.position.z > engine.terrain().worldSize().z ||
+          moved.position.x < 0.0f || moved.position.z < 0.0f);
 }
 
 static void test_scenario_geo_round_trip() {
@@ -114,6 +138,23 @@ static void test_antimeridian_round_trip() {
     CHECK_NEAR(ll.lonDeg, -179.9, 1e-7);
 }
 
+static void test_southern_western_round_trip() {
+    TerrainModel t = makeCustomGeoTerrain(101, 25.0f, -34.0, -71.0, 0.2);
+    const auto world = t.latLonToWorld(-33.91, -70.87);
+    const auto ll = t.worldToLatLon(world.x, world.y);
+    CHECK_NEAR(ll.latDeg, -33.91, 1e-7);
+    CHECK_NEAR(ll.lonDeg, -70.87, 1e-7);
+}
+
+static void test_high_latitude_round_trip() {
+    TerrainModel t = makeCustomGeoTerrain(101, 15.0f, 79.8, 20.0, 0.2);
+    const auto world = t.latLonToWorld(79.91, 20.14);
+    const auto ll = t.worldToLatLon(world.x, world.y);
+    CHECK(world.x > 0.0f && world.y > 0.0f);
+    CHECK_NEAR(ll.latDeg, 79.91, 1e-7);
+    CHECK_NEAR(ll.lonDeg, 20.14, 1e-7);
+}
+
 static void test_cancelled_solve_does_not_publish_partial_field() {
     SimEngine engine;
     TerrainModel t;
@@ -142,8 +183,11 @@ static void test_cancelled_solve_does_not_publish_partial_field() {
 int main() {
     test_engine_tracks_geo_metadata();
     test_engine_reprojects_across_terrain_resolution();
+    test_outside_source_is_preserved_not_clamped();
     test_scenario_geo_round_trip();
     test_antimeridian_round_trip();
+    test_southern_western_round_trip();
+    test_high_latitude_round_trip();
     test_cancelled_solve_does_not_publish_partial_field();
 
     if (g_fail == 0)
