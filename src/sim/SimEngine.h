@@ -25,6 +25,7 @@ public:
     void addAntenna(Antenna antenna);
     void removeAntenna(int index);   // no-op if index out of range
     void updateAntenna(int index, Antenna antenna);  // no-op if index out of range
+    void setFieldGrid(FieldGrid field);
 
     // Load EM material properties from JSON.
     // Silent no-op on failure (default dry-soil always available).
