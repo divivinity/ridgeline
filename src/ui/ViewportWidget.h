@@ -15,6 +15,7 @@
 #include "sim/SimEngine.h"
 #include "HeatmapLegend.h"
 #include <glm/glm.hpp>
+#include <functional>
 
 class QLabel;
 
@@ -30,6 +31,10 @@ public:
     void setOverlayVisible(Overlay overlay, bool visible);
     void setBasemapOpacity(float opacity);
     void setPlacementMode(bool active, bool jammer = false);
+    void setBasemapLoadCallbacks(BasemapOverlay::ProgressCallback progress,
+                                 BasemapOverlay::CancelCallback cancel) {
+        m_basemap.setLoadCallbacks(std::move(progress), std::move(cancel));
+    }
 
 signals:
     void terrainClicked(float worldX, float worldZ);
@@ -44,12 +49,12 @@ protected:
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*)    override;
     void wheelEvent(QWheelEvent*)        override;
-    void keyPressEvent(QKeyEvent*)       override;  // T=top-down, R=reset, arrows=orbit
+    void keyPressEvent(QKeyEvent*)       override;
 
 private:
     SimEngine*    m_engine;
     Camera        m_camera;
-    Camera        m_defaultCamera;  // saved at initializeGL/reloadTerrain for R key
+    Camera        m_defaultCamera;
     TerrainMesh   m_terrain;
     BasemapOverlay    m_basemap;
     HeatmapOverlay     m_heatmap;
@@ -58,7 +63,7 @@ private:
     JammerBubbleOverlay m_jammerBubble;
     FresnelOverlay     m_fresnel;
     QPoint             m_lastMouse;
-    QPoint             m_pressPos;   // for distinguishing click vs drag
+    QPoint             m_pressPos;
     bool          m_dragging = false;
     HeatmapLegend* m_heatmapLegend = nullptr;
     QLabel*       m_mapInfoLabel = nullptr;
@@ -66,9 +71,8 @@ private:
     QLabel*       m_placementHint = nullptr;
     bool          m_placementActive = false;
     bool          m_placingJammer = false;
-    glm::mat4      m_lastMVP{1.0f}; // saved each paintGL for 2D overlay projection
+    glm::mat4      m_lastMVP{1.0f};
 
-    // Vertical exaggeration applied to Y in the render MVP only (not sim data).
     static constexpr float kVertScale = 2.5f;
 
     void drawAntennaMarkers();
@@ -78,7 +82,6 @@ private:
     void updateMapHud();
     void repositionHud();
 
-    // Antenna marker GL objects
     GLuint        m_markerVAO   = 0;
     GLuint        m_markerVBO   = 0;
     int           m_markerCount = 0;
