@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include "sim/SimEngine.h"
 #include "data/ScenarioIO.h"
@@ -113,13 +114,39 @@ static void test_antimeridian_round_trip() {
     CHECK_NEAR(ll.lonDeg, -179.9, 1e-7);
 }
 
+static void test_cancelled_solve_does_not_publish_partial_field() {
+    SimEngine engine;
+    TerrainModel t;
+    t.width = 20;
+    t.height = 20;
+    t.cellSize = 10.0f;
+    t.heights.assign(400, 0.0f);
+    engine.setTerrain(std::move(t));
+
+    Antenna a;
+    a.position = {100.0f, 10.0f, 100.0f};
+    engine.addAntenna(a);
+    engine.mode = SimEngine::Mode::Engineering;
+
+    bool threw = false;
+    try {
+        engine.solve({}, [] { return true; });
+    } catch (const std::runtime_error& e) {
+        threw = std::string(e.what()) == "Coverage solve cancelled";
+    }
+
+    CHECK(threw);
+    CHECK(!engine.fieldGrid().valid());
+}
+
 int main() {
     test_engine_tracks_geo_metadata();
     test_engine_reprojects_across_terrain_resolution();
     test_scenario_geo_round_trip();
     test_antimeridian_round_trip();
+    test_cancelled_solve_does_not_publish_partial_field();
 
     if (g_fail == 0)
-        std::cout << "Geospatial antenna tests passed.\n";
+        std::cout << "Geospatial/cancellation tests passed.\n";
     return g_fail ? 1 : 0;
 }
