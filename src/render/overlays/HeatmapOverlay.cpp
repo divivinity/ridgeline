@@ -1,6 +1,7 @@
 #include "HeatmapOverlay.h"
 #include <vector>
 #include <cmath>
+#include <limits>
 
 struct HVert { float x, y, z, u, v; };
 
@@ -8,7 +9,6 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
     initializeOpenGLFunctions();
     m_shader.load("assets/shaders/heatmap.vert", "assets/shaders/heatmap.frag");
 
-    // Same mesh as terrain -- reuse vertex positions + UV
     std::vector<HVert> verts;
     verts.reserve(terrain.width * terrain.height);
     for (int z = 0; z < terrain.height; ++z) {
@@ -16,8 +16,8 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
             float wx = x * terrain.metersPerCellX();
             float wz = z * terrain.metersPerCellZ();
             float wy = terrain.heightAt(x, z);
-            float u  = static_cast<float>(x) / (terrain.width  - 1);
-            float v  = static_cast<float>(z) / (terrain.height - 1);
+            float u  = static_cast<float>(x) / std::max(1, terrain.width  - 1);
+            float v  = static_cast<float>(z) / std::max(1, terrain.height - 1);
             verts.push_back({wx, wy, wz, u, v});
         }
     }
@@ -48,7 +48,6 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // Create texture (R32F -- one float per cell)
     glGenTextures(1, &m_tex);
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -58,21 +57,50 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-void HeatmapOverlay::update(const FieldGrid& grid) {
+void HeatmapOverlay::update(const FieldGrid& grid, Metric metric) {
     if (!grid.valid()) return;
+    m_metric = metric;
     m_texW = grid.width;
     m_texH = grid.height;
 
-    // Clamp non-finite sentinels so GL_LINEAR filtering can't produce NaN
-    // between valid cells and dead-zone cells.
-    constexpr float kNoSignal = -121.0f;  // just below uMinDbm (-120)
-    std::vector<float> clamped(grid.dbm.size());
-    for (size_t i = 0; i < grid.dbm.size(); ++i)
-        clamped[i] = std::isfinite(grid.dbm[i]) ? grid.dbm[i] : kNoSignal;
+    const std::vector<float>* values = &grid.dbm;
+    m_minValue = -120.0f;
+    m_maxValue = -40.0f;
+    switch (metric) {
+        case Metric::DesiredPower:
+            values = &grid.dbm; m_minValue = -120.0f; m_maxValue = -40.0f; break;
+        case Metric::JammerPower:
+            values = &grid.jammerDbm; m_minValue = -120.0f; m_maxValue = -40.0f; break;
+        case Metric::Snr:
+            values = &grid.snrDb; m_minValue = -20.0f; m_maxValue = 40.0f; break;
+        case Metric::Sinr:
+            values = &grid.sinrDb; m_minValue = -20.0f; m_maxValue = 40.0f; break;
+        case Metric::JOverS:
+            values = &grid.jOverSDb; m_minValue = -40.0f; m_maxValue = 40.0f; break;
+        case Metric::FadeMargin:
+            values = &grid.fadeMarginDb; m_minValue = -20.0f; m_maxValue = 40.0f; break;
+        case Metric::Service:
+            break;
+    }
+
+    std::vector<float> texture(grid.cellCount(), m_minValue - 2.0f);
+    if (metric == Metric::Service) {
+        // The fragment shader hides values below min+1. With -0.01/1.0 bounds,
+        // out-of-service cells are transparent and in-service cells form a
+        // crisp service contour over the terrain/basemap.
+        m_minValue = -0.01f;
+        m_maxValue = 1.0f;
+        for (std::size_t i = 0; i < texture.size(); ++i)
+            texture[i] = i < grid.service.size() && grid.service[i] ? 1.0f : -1.01f;
+    } else if (values && values->size() == texture.size()) {
+        const float sentinel = m_minValue - 2.0f;
+        for (std::size_t i = 0; i < texture.size(); ++i)
+            texture[i] = std::isfinite((*values)[i]) ? (*values)[i] : sentinel;
+    }
 
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, grid.width, grid.height,
-                 0, GL_RED, GL_FLOAT, clamped.data());
+                 0, GL_RED, GL_FLOAT, texture.data());
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -80,15 +108,13 @@ void HeatmapOverlay::draw(const glm::mat4& mvp) {
     if (!visible || m_texW == 0) return;
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    // Bias the analysis surface toward the camera so it remains visible over
-    // terrain and imagery even across large real-world extents.
     glDepthMask(GL_FALSE);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(-2.0f, -2.0f);
     m_shader.bind();
-    m_shader.setMat4("uMVP",   mvp);
-    m_shader.setFloat("uMinDbm", -120.0f);
-    m_shader.setFloat("uMaxDbm",  -40.0f);
+    m_shader.setMat4("uMVP", mvp);
+    m_shader.setFloat("uMinDbm", m_minValue);
+    m_shader.setFloat("uMaxDbm", m_maxValue);
     m_shader.setInt("uHeatmap", 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_tex);
@@ -106,4 +132,6 @@ void HeatmapOverlay::destroy() {
     glDeleteBuffers(1, &m_vbo);
     glDeleteBuffers(1, &m_ebo);
     glDeleteTextures(1, &m_tex);
+    m_vao = m_vbo = m_ebo = m_tex = 0;
+    m_texW = m_texH = 0;
 }
