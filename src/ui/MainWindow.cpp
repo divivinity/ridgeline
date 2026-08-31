@@ -26,24 +26,24 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <stdexcept>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <string>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Ridgeline");
     applyTheme();
     setupScene();
 
-    // ── Antenna library ────────────────────────────────────────────────────────
     try {
         m_antennaLib.load("assets/antennas.json");
     } catch (...) {
         m_antennaLib.loadDefaults();
     }
 
-    // ── File menu ─────────────────────────────────────────────────────────────
     QMenu* fileMenu = menuBar()->addMenu("&File");
     QAction* locationAct = fileMenu->addAction("&Choose Location…");
     locationAct->setShortcut(QKeySequence("Ctrl+L"));
@@ -69,11 +69,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QAction* exportCsvAct = exportMenu->addAction("Coverage &CSV…");
     connect(exportCsvAct, &QAction::triggered, this, &MainWindow::onExportCsv);
 
-    // ── Central viewport ──────────────────────────────────────────────────────
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
 
-    // ── Left dock — Sources and selected-source settings ─────────────────────
     m_scenarioTree = new ScenarioTree(this);
     m_propsPanel = new PropertiesPanel(this);
     m_propsPanel->setAntennaLibrary(&m_antennaLib);
@@ -112,11 +110,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             this, &MainWindow::onRemoveAntenna);
     connect(m_scenarioTree, &ScenarioTree::selectionChanged,
             this, &MainWindow::onAntennaSelected);
-
     connect(m_propsPanel, &PropertiesPanel::antennaChanged,
             this, &MainWindow::onAntennaChanged);
 
-    // ── Main toolbar ──────────────────────────────────────────────────────────
     QToolBar* tb = addToolBar("Main");
     tb->setMovable(false);
 
@@ -194,7 +190,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_solveBtn, &QPushButton::clicked, this, &MainWindow::onSolve);
     tb->addWidget(m_solveBtn);
 
-    // ── Overlay toolbar (second row) ──────────────────────────────────────────
     m_overlayBar = new OverlayToolbar(this);
     QToolBar* overlayTb = addToolBar("Overlays");
     overlayTb->setMovable(false);
@@ -204,7 +199,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_overlayBar, &OverlayToolbar::basemapOpacityChanged,
             m_viewport, &ViewportWidget::setBasemapOpacity);
 
-    // ── Status bar ────────────────────────────────────────────────────────────
     m_statusLabel = new QLabel("  Ready");
     m_statusLabel->setStyleSheet("color: #94a3b8; font-size: 11px;");
     statusBar()->addWidget(m_statusLabel);
@@ -219,7 +213,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         }
     });
 
-    // ── Bottom dock — Spectrum display ────────────────────────────────────────
     m_bottomBar = new BottomBar(this);
     auto* bottomDock = new QDockWidget("Spectrum", this);
     bottomDock->setWidget(m_bottomBar);
@@ -242,10 +235,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     viewMenu->addAction(leftDock->toggleViewAction());
     viewMenu->addAction(bottomDock->toggleViewAction());
 
-    // Populate tree with default antennas
     refreshTree();
 
-    // Connect click-to-place signal
     connect(m_viewport, &ViewportWidget::terrainClicked,
             this, &MainWindow::onTerrainClicked);
     connect(m_viewport, &ViewportWidget::placementCancelled, this, [this]() {
@@ -257,12 +248,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 void MainWindow::setupScene() {
     TerrainModel terrain = TerrainLoader::makeHills(200, 200, 10.0f, 40.0f);
     m_engine.setTerrain(std::move(terrain));
-    m_terrainSource = TerrainSource{};  // default: Type::Hills, 200×200, 10m cell, 40m amplitude
+    m_terrainSource = TerrainSource{};
     placeDefaultAntennas();
     m_engine.loadMaterials("assets/materials.json");
 }
 
 void MainWindow::placeDefaultAntennas() {
+    if (!m_engine.antennas().empty()) return;
+
     const auto& t = m_engine.terrain();
     const float w = t.worldSize().x;
     const float d = t.worldSize().z;
@@ -272,7 +265,6 @@ void MainWindow::placeDefaultAntennas() {
     a1.frequencyMHz = 150.0f;
     a1.powerW       = 50.0f;
     a1.gainDbi      = 3.0f;
-
     m_engine.setAntennas({a1});
 }
 
@@ -296,9 +288,9 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
         placeDefaultAntennas();
 
         if (m_viewport) m_viewport->reloadTerrain();
-        m_selectedIndex = 0;
+        m_selectedIndex = m_engine.antennas().empty() ? -1 : 0;
         refreshTree();
-        m_scenarioTree->selectRow(m_selectedIndex);
+        if (m_selectedIndex >= 0) m_scenarioTree->selectRow(m_selectedIndex);
         refreshPropsPanel();
         refreshBottomBar();
         updateLocationSummary();
@@ -306,8 +298,22 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
             ? QString("Ridgeline — %1°, %2°")
                 .arg(latitude, 0, 'f', 4).arg(longitude, 0, 'f', 4)
             : QString("Ridgeline — %1").arg(m_locationName.section(',', 0, 0)));
-        m_statusLabel->setText(
-            "  Real elevation and satellite imagery aligned · Place emitters or run coverage");
+
+        const auto world = m_engine.terrain().worldSize();
+        const int outside = static_cast<int>(std::count_if(
+            m_engine.antennas().begin(), m_engine.antennas().end(),
+            [world](const Antenna& a) {
+                return a.position.x < 0.0f || a.position.z < 0.0f ||
+                       a.position.x > world.x || a.position.z > world.z;
+            }));
+        if (outside > 0) {
+            m_statusLabel->setText(QString(
+                "  Location loaded · %1 source(s) preserved outside this analysis area")
+                .arg(outside));
+        } else {
+            m_statusLabel->setText(
+                "  Real elevation and satellite imagery aligned · Sources preserved");
+        }
     } catch (const std::exception& e) {
         m_statusLabel->setText("  Location load failed");
         QMessageBox::critical(this, "Could not load location", e.what());
@@ -376,7 +382,6 @@ void MainWindow::loadTerrain(const QString& path) {
             m_terrainSource.type    = TerrainSource::Type::GeoTiff;
             m_terrainSource.hgtPath = path.toStdString();
         } else {
-            // All non-HGT paths go through fromDTED — record accordingly.
             m_terrainSource.type    = TerrainSource::Type::Dted;
             m_terrainSource.hgtPath = path.toStdString();
         }
@@ -396,13 +401,14 @@ void MainWindow::loadTerrain(const QString& path) {
 
         if (m_viewport) m_viewport->reloadTerrain();
 
-        m_selectedIndex = -1;
+        m_selectedIndex = m_engine.antennas().empty() ? -1 : 0;
         refreshTree();
+        if (m_selectedIndex >= 0) m_scenarioTree->selectRow(m_selectedIndex);
         refreshPropsPanel();
         refreshBottomBar();
 
         setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
-        m_statusLabel->setText("  Terrain loaded");
+        m_statusLabel->setText("  Terrain loaded · Existing georeferenced sources preserved");
     } catch (const std::exception& e) {
         m_statusLabel->setText("  Ready");
         QMessageBox::critical(this, "Load failed", e.what());
@@ -426,17 +432,33 @@ void MainWindow::onSolve() {
         return;
     }
 
+    const auto world = m_engine.terrain().worldSize();
+    const bool sourceOutside = std::any_of(
+        m_engine.antennas().begin(), m_engine.antennas().end(),
+        [world](const Antenna& a) {
+            return a.position.x < 0.0f || a.position.z < 0.0f ||
+                   a.position.x > world.x || a.position.z > world.z;
+        });
+    if (sourceOutside) {
+        QMessageBox::warning(this, "Source outside analysis area",
+            "One or more preserved sources are outside the current terrain. "
+            "Choose an analysis area containing them, reposition them, or remove them before solving.");
+        m_statusLabel->setText("  Coverage not run · Source outside analysis area");
+        return;
+    }
+
     m_statusLabel->setText("  Calculating terrain-aware coverage…");
     m_solveBtn->setEnabled(false);
     m_solveBtn->setText("Calculating…");
     auto timer = std::make_shared<QElapsedTimer>();
     timer->start();
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
 
     QProgressDialog progress(this);
     progress.setWindowTitle("Calculating coverage");
     progress.setLabelText("Preparing terrain paths…");
     progress.setRange(0, 0);
-    progress.setCancelButton(nullptr);
+    progress.setCancelButtonText("Cancel");
     progress.setWindowModality(Qt::WindowModal);
     progress.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint);
     progress.setMinimumDuration(0);
@@ -450,6 +472,8 @@ void MainWindow::onSolve() {
         " border-radius: 7px; color: #e2e8f0; min-height: 18px; text-align: center; }"
         "QProgressBar::chunk { background: #14b8a6; border-radius: 6px; }"
     );
+    connect(&progress, &QProgressDialog::canceled, this,
+            [cancelled]() { cancelled->store(true, std::memory_order_relaxed); });
 
     QPointer<QProgressDialog> progressGuard(&progress);
     const QString quality = m_modeCombo->currentText();
@@ -473,9 +497,11 @@ void MainWindow::onSolve() {
     QEventLoop waitLoop;
     connect(&watcher, &QFutureWatcher<void>::finished, &waitLoop, &QEventLoop::quit);
     watcher.setFuture(QtConcurrent::run(
-        [solveEngine, reportProgress, &solvedField, &solveError]() {
+        [solveEngine, reportProgress, cancelled, &solvedField, &solveError]() {
             try {
-                solveEngine->solve(reportProgress);
+                solveEngine->solve(
+                    reportProgress,
+                    [cancelled]() { return cancelled->load(std::memory_order_relaxed); });
                 solvedField = solveEngine->fieldGrid();
             } catch (...) {
                 solveError = std::current_exception();
@@ -503,6 +529,13 @@ void MainWindow::onSolve() {
         m_statusLabel->setText(QString("  Coverage ready in %1 s · %2 × %3 cells%4")
             .arg(timer->elapsed() / 1000.0, 0, 'f', 1)
             .arg(grid.width).arg(grid.height).arg(signalRange));
+    } catch (const std::runtime_error& e) {
+        if (std::string(e.what()) == "Coverage solve cancelled") {
+            m_statusLabel->setText("  Coverage calculation cancelled");
+        } else {
+            QMessageBox::critical(this, "Coverage failed", e.what());
+            m_statusLabel->setText("  Coverage calculation failed");
+        }
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Coverage failed", e.what());
         m_statusLabel->setText("  Coverage calculation failed");
@@ -525,13 +558,8 @@ void MainWindow::onLoadTerrain() {
     if (!path.isEmpty()) loadTerrain(path);
 }
 
-void MainWindow::onAddAntenna() {
-    startPlacement(false);
-}
-
-void MainWindow::onAddJammer() {
-    startPlacement(true);
-}
+void MainWindow::onAddAntenna() { startPlacement(false); }
+void MainWindow::onAddJammer() { startPlacement(true); }
 
 void MainWindow::onRemoveAntenna(int index) {
     m_engine.removeAntenna(index);
@@ -656,7 +684,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
             break;
     }
     m_engine.setTerrain(std::move(t));
-    m_terrainSource = doc.terrain;  // only update after successful terrain build
+    m_terrainSource = doc.terrain;
     m_locationName.clear();
     if (m_terrainSource.type == TerrainSource::Type::Global)
         updateLocationSummary();
