@@ -43,7 +43,7 @@ static SimEngine::Mode strToMode(const std::string& s) {
 
 void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     json j;
-    j["version"] = 2;
+    j["version"] = 3;
     j["mode"]    = modeToStr(doc.mode);
 
     auto& jt = j["terrain"];
@@ -79,6 +79,11 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
         ja["gain_dbi"]     = a.gainDbi;
         ja["is_jammer"]    = a.isJammer;
         ja["antenna_type"] = a.antennaType;
+        if (a.hasGeoPosition) {
+            ja["latitude"]   = a.latitudeDeg;
+            ja["longitude"]  = a.longitudeDeg;
+            ja["height_agl"] = a.heightAglM;
+        }
         antennas.push_back(std::move(ja));
     }
     j["antennas"] = std::move(antennas);
@@ -137,6 +142,12 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                 a.gainDbi      = ja.value("gain_dbi",     3.0f);
                 a.isJammer     = ja.value("is_jammer",   false);
                 a.antennaType  = ja.value("antenna_type", std::string{"omni"});
+                if (ja.contains("latitude") && ja.contains("longitude")) {
+                    a.hasGeoPosition = true;
+                    a.latitudeDeg = ja.value("latitude", 0.0);
+                    a.longitudeDeg = ja.value("longitude", 0.0);
+                    a.heightAglM = ja.value("height_agl", 10.0f);
+                }
                 doc.antennas.push_back(std::move(a));
             }
         }
