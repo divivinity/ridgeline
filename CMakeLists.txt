@@ -8,9 +8,8 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Network Concurrent)
 find_package(OpenGL REQUIRED)
-find_package(GDAL QUIET)  # optional — enables GeoTIFF loading when present
+find_package(GDAL QUIET)
 
-# GLM — header only, fetch if not system-installed
 include(FetchContent)
 FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
@@ -18,18 +17,48 @@ FetchContent_Declare(glm
 )
 FetchContent_MakeAvailable(glm)
 
-# nlohmann/json — header only
 FetchContent_Declare(json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG        v3.11.3
 )
 FetchContent_MakeAvailable(json)
 
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
+# NTIA's official Irregular Terrain Model (Longley-Rice) reference
+# implementation. v1.4 is pinned for reproducible predictions. The upstream
+# v1.4 source uses Windows path separators and a Windows DLL export macro even
+# though the algorithms are portable; normalize those two build-surface details
+# in the fetched copy without changing propagation code.
+FetchContent_Declare(ntia_itm
+    GIT_REPOSITORY https://github.com/NTIA/itm.git
+    GIT_TAG        v1.4
+)
+FetchContent_GetProperties(ntia_itm)
+if(NOT ntia_itm_POPULATED)
+    FetchContent_Populate(ntia_itm)
+endif()
 
+file(GLOB NTIA_ITM_SOURCES CONFIGURE_DEPENDS "${ntia_itm_SOURCE_DIR}/src/*.cpp")
+foreach(_itm_src IN LISTS NTIA_ITM_SOURCES)
+    file(READ "${_itm_src}" _itm_text)
+    string(REPLACE "..\\include\\" "../include/" _itm_text "${_itm_text}")
+    file(WRITE "${_itm_src}" "${_itm_text}")
+endforeach()
+file(READ "${ntia_itm_SOURCE_DIR}/include/itm.h" _itm_header)
+string(REPLACE
+    "#define DLLEXPORT extern \"C\" __declspec(dllexport)"
+    "#ifdef _WIN32\n#define DLLEXPORT extern \"C\" __declspec(dllexport)\n#else\n#define DLLEXPORT extern \"C\"\n#endif"
+    _itm_header "${_itm_header}")
+file(WRITE "${ntia_itm_SOURCE_DIR}/include/itm.h" "${_itm_header}")
+
+add_library(ntia_itm STATIC ${NTIA_ITM_SOURCES})
+target_include_directories(ntia_itm PUBLIC "${ntia_itm_SOURCE_DIR}/include")
+target_compile_features(ntia_itm PUBLIC cxx_std_17)
+
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 add_executable(ridgeline ${SOURCES})
 
 target_include_directories(ridgeline PRIVATE src)
+target_compile_definitions(ridgeline PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline
     Qt6::Widgets
     Qt6::OpenGL
@@ -39,6 +68,7 @@ target_link_libraries(ridgeline
     OpenGL::GL
     glm::glm
     nlohmann_json::nlohmann_json
+    ntia_itm
 )
 if(GDAL_FOUND)
     target_compile_definitions(ridgeline PRIVATE HAVE_GDAL)
@@ -49,14 +79,12 @@ else()
     message(STATUS "GDAL not found — GeoTIFF loading disabled (HGT/DTED still work)")
 endif()
 
-# Copy shaders to build dir alongside binary
 add_custom_command(TARGET ridgeline POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets
         $<TARGET_FILE_DIR:ridgeline>/assets
 )
 
-# Deploy Qt runtime DLLs (Windows only) so the exe runs without a Qt install
 if(WIN32)
     find_program(WINDEPLOYQT windeployqt
         HINTS "${Qt6_DIR}/../../../bin"
@@ -70,13 +98,14 @@ if(WIN32)
     endif()
 endif()
 
-# ── Tests (no Qt / no OpenGL) ──────────────────────────────────────────────
 enable_testing()
 
 set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/sim/SpectrumCalc.cpp
     src/sim/MaterialLibrary.cpp
     src/sim/TerrainModel.cpp
+    src/sim/RFModels.cpp
+    src/sim/ItmPropagation.cpp
     src/sim/FastSolver.cpp
     src/sim/FullSolver.cpp
     src/sim/SimEngine.cpp
@@ -90,9 +119,11 @@ add_executable(ridgeline_tests
     ${RIDGELINE_PHYSICS_TEST_SOURCES}
 )
 target_include_directories(ridgeline_tests PRIVATE src)
+target_compile_definitions(ridgeline_tests PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline_tests
     glm::glm
     nlohmann_json::nlohmann_json
+    ntia_itm
 )
 add_test(NAME physics_tests
     COMMAND ridgeline_tests
@@ -119,10 +150,30 @@ add_executable(ridgeline_geospatial_antenna_tests
     ${RIDGELINE_PHYSICS_TEST_SOURCES}
 )
 target_include_directories(ridgeline_geospatial_antenna_tests PRIVATE src)
+target_compile_definitions(ridgeline_geospatial_antenna_tests PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline_geospatial_antenna_tests
     glm::glm
     nlohmann_json::nlohmann_json
+    ntia_itm
 )
 add_test(NAME geospatial_antenna_tests
     COMMAND ridgeline_geospatial_antenna_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+if(GDAL_FOUND)
+    add_executable(ridgeline_geotiff_tests
+        tests/test_geotiff.cpp
+        src/sim/TerrainModel.cpp
+        src/data/TerrainLoader.cpp
+    )
+    target_include_directories(ridgeline_geotiff_tests PRIVATE src ${GDAL_INCLUDE_DIRS})
+    target_compile_definitions(ridgeline_geotiff_tests PRIVATE HAVE_GDAL)
+    target_link_libraries(ridgeline_geotiff_tests
+        glm::glm
+        nlohmann_json::nlohmann_json
+        GDAL::GDAL
+    )
+    add_test(NAME geotiff_tests
+        COMMAND ridgeline_geotiff_tests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+endif()
