@@ -470,23 +470,29 @@ void MainWindow::onSolve() {
         }, Qt::QueuedConnection);
     };
 
+    auto solveEngine = std::make_shared<SimEngine>(m_engine);
+    solveEngine->onFieldUpdated = {};
+    FieldGrid solvedField;
     std::exception_ptr solveError;
     QFutureWatcher<void> watcher;
     QEventLoop waitLoop;
     connect(&watcher, &QFutureWatcher<void>::finished, &waitLoop, &QEventLoop::quit);
-    watcher.setFuture(QtConcurrent::run([this, reportProgress, &solveError]() {
-        try {
-            m_engine.solve(reportProgress);
-        } catch (...) {
-            solveError = std::current_exception();
-        }
-    }));
+    watcher.setFuture(QtConcurrent::run(
+        [solveEngine, reportProgress, &solvedField, &solveError]() {
+            try {
+                solveEngine->solve(reportProgress);
+                solvedField = solveEngine->fieldGrid();
+            } catch (...) {
+                solveError = std::current_exception();
+            }
+        }));
     progress.show();
     waitLoop.exec();
     progress.close();
 
     try {
         if (solveError) std::rethrow_exception(solveError);
+        m_engine.setFieldGrid(std::move(solvedField));
         m_viewport->refreshOverlays();
         const auto& grid = m_engine.fieldGrid();
         float minDbm = std::numeric_limits<float>::infinity();
