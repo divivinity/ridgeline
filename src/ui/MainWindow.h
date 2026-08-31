@@ -9,7 +9,7 @@
 #include "ScenarioTree.h"
 #include "PropertiesPanel.h"
 #include "OverlayToolbar.h"
-#include "BottomBar.h"                // ← add
+#include "BottomBar.h"
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
 
@@ -22,6 +22,7 @@ public:
 private slots:
     void onSolve();
     void onChooseLocation();
+    void onReceiverSettings();
     void onLoadTerrain();
     void onSaveScenario();
     void onOpenScenario();
@@ -37,16 +38,16 @@ private slots:
 private:
     SimEngine        m_engine;
     AntennaLibrary   m_antennaLib;
-    TerrainSource    m_terrainSource;   // tracks what terrain is currently loaded
-    ViewportWidget*  m_viewport      = nullptr;
-    ScenarioTree*    m_scenarioTree  = nullptr;
-    PropertiesPanel* m_propsPanel    = nullptr;
-    OverlayToolbar*  m_overlayBar    = nullptr;
-    BottomBar*       m_bottomBar     = nullptr;  // ← add
-    QLabel*          m_statusLabel   = nullptr;
+    TerrainSource    m_terrainSource;
+    ViewportWidget*  m_viewport = nullptr;
+    ScenarioTree*    m_scenarioTree = nullptr;
+    PropertiesPanel* m_propsPanel = nullptr;
+    OverlayToolbar*  m_overlayBar = nullptr;
+    BottomBar*       m_bottomBar = nullptr;
+    QLabel*          m_statusLabel = nullptr;
     QLabel*          m_locationLabel = nullptr;
-    QPushButton*     m_solveBtn      = nullptr;
-    QComboBox*       m_modeCombo     = nullptr;
+    QPushButton*     m_solveBtn = nullptr;
+    QComboBox*       m_modeCombo = nullptr;
     int              m_selectedIndex = -1;
     Antenna          m_propsAntennaView;
     bool             m_placementActive = false;
