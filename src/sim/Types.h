@@ -1,7 +1,17 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <cstdint>
 #include <glm/glm.hpp>
+
+struct ReceiverSettings {
+    float sensitivityDbm = -100.0f;
+    float bandwidthHz = 25000.0f;
+    float noiseFigureDb = 5.0f;
+    float requiredSnrDb = 10.0f;
+    float fadeMarginTargetDb = 10.0f;
+    std::string polarization = "vertical";
+};
 
 struct Antenna {
     glm::vec3   position;   // world XYZ; Y is absolute terrain elevation + AGL
@@ -10,6 +20,23 @@ struct Antenna {
     float       gainDbi      = 3.0f;
     bool        isJammer     = false;
     std::string antennaType  = "omni";
+
+    // Feed and radiation-pattern parameters. Azimuth is clockwise from world
+    // +Z (north); positive downtilt points the boresight below horizontal.
+    float       azimuthDeg = 0.0f;
+    float       downtiltDeg = 0.0f;
+    float       horizontalBeamwidthDeg = 360.0f;
+    float       verticalBeamwidthDeg = 90.0f;
+    float       frontToBackDb = 30.0f;
+    float       cableLossDb = 0.0f;
+    std::string polarization = "vertical";
+
+    // Optional imported attenuation patterns in dB. Azimuth samples are evenly
+    // distributed over [0,360); elevation samples over [-90,+90]. Empty arrays
+    // use the analytic beamwidth/front-to-back model above.
+    std::vector<float> azimuthPatternDb;
+    std::vector<float> elevationPatternDb;
+    std::string patternSource;
 
     // Optional authoritative geospatial position. When present, latitude/
     // longitude survive terrain-resolution and analysis-area changes and can be
@@ -24,10 +51,23 @@ struct Antenna {
 struct FieldGrid {
     int   width    = 0;
     int   height   = 0;
-    float cellSize = 10.0f;  // metres per cell
-    glm::vec2 originXZ{0.0f, 0.0f};  // world XZ of cell (0,0)
-    std::vector<float> dbm;  // [y*width+x], NaN = no signal
+    float cellSize = 10.0f;
+    glm::vec2 originXZ{0.0f, 0.0f};
+
+    // Desired received signal remains the primary/backwards-compatible field.
+    std::vector<float> dbm;
+    std::vector<float> jammerDbm;
+    std::vector<float> snrDb;
+    std::vector<float> sinrDb;
+    std::vector<float> jOverSDb;
+    std::vector<float> fadeMarginDb;
+    std::vector<std::uint8_t> service;
+
+    float noiseFloorDbm = -120.0f;
+    float receiverSensitivityDbm = -100.0f;
+    float requiredSnrDb = 10.0f;
 
     float at(int x, int y) const { return dbm[y * width + x]; }
     bool  valid() const { return !dbm.empty(); }
+    std::size_t cellCount() const { return static_cast<std::size_t>(width) * height; }
 };
