@@ -3,6 +3,8 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 #include <glm/glm.hpp>
 #include <algorithm>
 
@@ -16,8 +18,8 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
     FieldGrid grid;
     grid.cellSize = gridResolution;
     const glm::vec3 world = terrain.worldSize();
-    grid.width    = std::max(1, static_cast<int>(std::ceil(world.x / gridResolution)));
-    grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
+    grid.width = std::max(1, static_cast<int>(std::ceil(world.x / gridResolution)));
+    grid.height = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
     grid.originXZ = {gridResolution * 0.5f, gridResolution * 0.5f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
     RFModels::initializeMetrics(grid);
@@ -38,7 +40,10 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
             const glm::vec3 rxPos{wx, wy, wz};
 
             float bestDesiredDbm = NEG_INF;
-            float jammerMw = 0.0f;
+            float servingFrequencyMHz = 0.0f;
+            std::vector<std::pair<float, float>> jammerContributions;
+            jammerContributions.reserve(antennas.size());
+
             for (const auto& ant : antennas) {
                 float distM = glm::distance(ant.position, rxPos);
                 if (distM < 1.0f) distM = 1.0f;
@@ -50,15 +55,27 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
                 const float matLossDb = mat.lossDbPer100m(ant.frequencyMHz)
                                       * distM / 100.0f;
                 float loss = fsplDb(distM, ant.frequencyMHz)
-                           - directionalGain
-                           + matLossDb;
+                           - directionalGain + matLossDb;
 
                 if (!terrain.lineOfSight(ant.position, rxPos)) loss += 20.0f;
                 const float rxDbm = txPowerDbm - loss;
-                if (ant.isJammer)
-                    jammerMw += RFModels::dbmToMw(rxDbm);
-                else if (rxDbm > bestDesiredDbm)
+                if (ant.isJammer) {
+                    jammerContributions.emplace_back(
+                        ant.frequencyMHz, RFModels::dbmToMw(rxDbm));
+                } else if (rxDbm > bestDesiredDbm) {
                     bestDesiredDbm = rxDbm;
+                    servingFrequencyMHz = ant.frequencyMHz;
+                }
+            }
+
+            float jammerMw = 0.0f;
+            const float halfBandwidthMHz = std::max(receiver.bandwidthHz, 1.0f)
+                                         / 2.0e6f;
+            for (const auto& contribution : jammerContributions) {
+                if (!std::isfinite(bestDesiredDbm) ||
+                    std::abs(contribution.first - servingFrequencyMHz) <= halfBandwidthMHz) {
+                    jammerMw += contribution.second;
+                }
             }
 
             const std::size_t index = static_cast<std::size_t>(gz) * grid.width + gx;
