@@ -7,7 +7,6 @@ namespace {
 
 void syncGeoFromWorld(Antenna& antenna, const TerrainModel& terrain) {
     if (!terrain.hasGeoReference()) return;
-
     const auto ll = terrain.worldToLatLon(antenna.position.x, antenna.position.z);
     antenna.hasGeoPosition = true;
     antenna.latitudeDeg = ll.latDeg;
@@ -19,7 +18,6 @@ void syncGeoFromWorld(Antenna& antenna, const TerrainModel& terrain) {
 
 void projectGeoToWorld(Antenna& antenna, const TerrainModel& terrain) {
     if (!terrain.hasGeoReference() || !antenna.hasGeoPosition) return;
-
     const glm::vec2 world = terrain.latLonToWorld(
         antenna.latitudeDeg, antenna.longitudeDeg);
     antenna.position.x = world.x;
@@ -31,17 +29,11 @@ void projectGeoToWorld(Antenna& antenna, const TerrainModel& terrain) {
 } // namespace
 
 void SimEngine::setTerrain(TerrainModel terrain) {
-    // Capture authoritative WGS84 positions from the old terrain before it is
-    // replaced. This preserves sources across changes in DEM resolution or
-    // analysis extent instead of leaving stale local X/Z coordinates behind.
     if (m_terrain.hasGeoReference()) {
         for (auto& antenna : m_antennas)
             syncGeoFromWorld(antenna, m_terrain);
     }
-
     m_terrain = std::move(terrain);
-
-    // Reproject any geospatial sources into the new terrain coordinate system.
     if (m_terrain.hasGeoReference()) {
         for (auto& antenna : m_antennas)
             projectGeoToWorld(antenna, m_terrain);
@@ -69,7 +61,6 @@ void SimEngine::loadMaterials(const std::string& path) {
     try {
         m_materials.load(path);
     } catch (const std::exception&) {
-        // Default dry-soil remains available — silently ignore missing/bad file.
     }
 }
 
@@ -84,11 +75,10 @@ void SimEngine::solve(const std::function<void(int, int)>& progress,
         return std::max(preferredM, longestAxis / static_cast<float>(maxCellsPerAxis));
     };
 
-    // Configure solver snapshots locally. This keeps a background solve from
-    // mutating the engine's persistent solver configuration while the UI owns
-    // the SimEngine instance. Only the completed FieldGrid is committed back.
     FastSolver fast = m_fast;
     FullSolver full = m_full;
+    fast.receiver = receiver;
+    full.receiver = receiver;
     FieldGrid result;
 
     if (mode == Mode::Preview) {
@@ -99,6 +89,8 @@ void SimEngine::solve(const std::function<void(int, int)>& progress,
         full.enableGroundReflection = false;
         full.enableRain = false;
         full.enableFresnelPenalty = true;
+        full.enableMultipleDiffraction = true;
+        full.enableItm = false;
         full.requiredFresnelClearance = 0.6f;
         result = full.solve(m_terrain, m_antennas, m_materials, progress, cancelled);
     } else {
@@ -106,6 +98,8 @@ void SimEngine::solve(const std::function<void(int, int)>& progress,
         full.enableGroundReflection = true;
         full.enableRain = true;
         full.enableFresnelPenalty = true;
+        full.enableMultipleDiffraction = true;
+        full.enableItm = true;
         full.requiredFresnelClearance = 0.6f;
         result = full.solve(m_terrain, m_antennas, m_materials, progress, cancelled);
     }
