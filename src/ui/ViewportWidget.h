@@ -16,6 +16,8 @@
 #include "HeatmapLegend.h"
 #include <glm/glm.hpp>
 
+class QLabel;
+
 class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
@@ -26,9 +28,13 @@ public:
     void refreshOverlays();   // call after SimEngine::solve()
     void reloadTerrain();     // call after SimEngine::setTerrain() to rebuild GPU meshes
     void setOverlayVisible(Overlay overlay, bool visible);
+    void setBasemapOpacity(float opacity);
+    void setPlacementMode(bool active, bool jammer = false);
 
 signals:
     void terrainClicked(float worldX, float worldZ);
+    void basemapInfoChanged(QString provider, QString attribution, QString error);
+    void placementCancelled();
 
 protected:
     void initializeGL()              override;
@@ -55,6 +61,11 @@ private:
     QPoint             m_pressPos;   // for distinguishing click vs drag
     bool          m_dragging = false;
     HeatmapLegend* m_heatmapLegend = nullptr;
+    QLabel*       m_mapInfoLabel = nullptr;
+    QLabel*       m_attributionLabel = nullptr;
+    QLabel*       m_placementHint = nullptr;
+    bool          m_placementActive = false;
+    bool          m_placingJammer = false;
     glm::mat4      m_lastMVP{1.0f}; // saved each paintGL for 2D overlay projection
 
     // Vertical exaggeration applied to Y in the render MVP only (not sim data).
@@ -64,6 +75,8 @@ private:
     void buildMarkers();
     bool raycastTerrain(const QPoint& screenPos,
                         float& outWorldX, float& outWorldZ) const;
+    void updateMapHud();
+    void repositionHud();
 
     // Antenna marker GL objects
     GLuint        m_markerVAO   = 0;

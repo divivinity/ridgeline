@@ -5,13 +5,18 @@
 #include "sim/SimEngine.h"
 
 struct TerrainSource {
-    enum class Type { Hills, Flat, Hgt, Dted, GeoTiff };
+    enum class Type { Hills, Flat, Hgt, Dted, GeoTiff, Global };
 
     Type        type         = Type::Hills;
     std::string hgtPath;            // for Hgt and Dted terrain types
     double      hgtLat       = 35.05;
     double      hgtLon       = -78.88;
     int         hgtSize      = 512;
+
+    // Worldwide streamed terrain selection (WGS84 centre + square extent).
+    double      centerLat    = 35.5951;
+    double      centerLon    = -82.5515;
+    double      extentKm     = 15.0;
 
     // Procedural terrain dimensions (Hills + Flat).
     int   widthCells  = 200;

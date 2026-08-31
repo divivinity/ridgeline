@@ -60,19 +60,32 @@ bool Exporter::exportPng(const FieldGrid& grid, const std::string& path) {
 
 // ── CSV export ────────────────────────────────────────────────────────────────
 bool Exporter::exportCsv(const FieldGrid& grid, const std::string& path) {
+    TerrainModel unreferenced;
+    return exportCsv(grid, unreferenced, path);
+}
+
+bool Exporter::exportCsv(const FieldGrid& grid, const TerrainModel& terrain,
+                         const std::string& path) {
     if (!grid.valid()) return false;
 
     std::ofstream f(path);
     if (!f) return false;
 
-    f << "x_m,z_m,dbm\n";
-    f << std::fixed << std::setprecision(3);
+    if (terrain.hasGeoReference())
+        f << "x_m,z_m,latitude,longitude,terrain_elevation_m,dbm\n";
+    else
+        f << "x_m,z_m,dbm\n";
     for (int y = 0; y < grid.height; ++y) {
         const float z_m = grid.originXZ.y + static_cast<float>(y) * grid.cellSize;
         for (int x = 0; x < grid.width; ++x) {
             const float x_m = grid.originXZ.x + static_cast<float>(x) * grid.cellSize;
             const float v   = grid.at(x, y);
-            f << x_m << ',' << z_m << ',';
+            f << std::fixed << std::setprecision(3) << x_m << ',' << z_m << ',';
+            if (terrain.hasGeoReference()) {
+                const auto ll = terrain.worldToLatLon(x_m, z_m);
+                f << std::setprecision(8) << ll.latDeg << ',' << ll.lonDeg << ','
+                  << std::setprecision(2) << terrain.heightAtWorld(x_m, z_m) << ',';
+            }
             if (std::isfinite(v)) f << v;
             else                  f << "nan";
             f << '\n';
