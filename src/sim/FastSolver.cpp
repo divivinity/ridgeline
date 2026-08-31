@@ -1,6 +1,7 @@
 #include "FastSolver.h"
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <glm/glm.hpp>
 #include <algorithm>
 
@@ -9,7 +10,8 @@ static constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
 FieldGrid FastSolver::solve(const TerrainModel& terrain,
                              const std::vector<Antenna>& antennas,
                              const MaterialLibrary& materials,
-                             const std::function<void(int, int)>& progress) const {
+                             const std::function<void(int, int)>& progress,
+                             const std::function<bool()>& cancelled) const {
     FieldGrid grid;
     grid.cellSize = gridResolution;
     const glm::vec3 world = terrain.worldSize();
@@ -22,7 +24,12 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
     const Material& mat = materials.defaultMaterial();
 
     for (int gz = 0; gz < grid.height; ++gz) {
+        if (cancelled && cancelled())
+            throw std::runtime_error("Coverage solve cancelled");
         for (int gx = 0; gx < grid.width; ++gx) {
+            if ((gx & 15) == 0 && cancelled && cancelled())
+                throw std::runtime_error("Coverage solve cancelled");
+
             float wx = gx * gridResolution + gridResolution * 0.5f;
             float wz = gz * gridResolution + gridResolution * 0.5f;
             float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
