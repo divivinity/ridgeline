@@ -29,6 +29,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <memory>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Ridgeline");
@@ -433,8 +434,8 @@ void MainWindow::onSolve() {
     m_statusLabel->setText("  Calculating terrain-aware coverage…");
     m_solveBtn->setEnabled(false);
     m_solveBtn->setText("Calculating…");
-    QElapsedTimer timer;
-    timer.start();
+    auto timer = std::make_shared<QElapsedTimer>();
+    timer->start();
 
     QProgressDialog progress(this);
     progress.setWindowTitle("Calculating coverage");
@@ -457,15 +458,15 @@ void MainWindow::onSolve() {
 
     QPointer<QProgressDialog> progressGuard(&progress);
     const QString quality = m_modeCombo->currentText();
-    auto reportProgress = [progressGuard, quality, &timer](int completed, int total) {
-        QMetaObject::invokeMethod(qApp, [progressGuard, quality, completed, total, &timer]() {
+    auto reportProgress = [progressGuard, quality, timer](int completed, int total) {
+        QMetaObject::invokeMethod(qApp, [progressGuard, quality, completed, total, timer]() {
             if (!progressGuard) return;
             if (progressGuard->maximum() != total) progressGuard->setRange(0, total);
             progressGuard->setValue(completed);
             const int percent = total > 0 ? completed * 100 / total : 0;
             progressGuard->setLabelText(
                 QString("%1 analysis · %2% complete · %3 s elapsed")
-                    .arg(quality).arg(percent).arg(timer.elapsed() / 1000.0, 0, 'f', 1));
+                    .arg(quality).arg(percent).arg(timer->elapsed() / 1000.0, 0, 'f', 1));
         }, Qt::QueuedConnection);
     };
 
@@ -499,7 +500,7 @@ void MainWindow::onSolve() {
             ? QString(" · %1 to %2 dBm").arg(minDbm, 0, 'f', 0).arg(maxDbm, 0, 'f', 0)
             : QString();
         m_statusLabel->setText(QString("  Coverage ready in %1 s · %2 × %3 cells%4")
-            .arg(timer.elapsed() / 1000.0, 0, 'f', 1)
+            .arg(timer->elapsed() / 1000.0, 0, 'f', 1)
             .arg(grid.width).arg(grid.height).arg(signalRange));
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Coverage failed", e.what());
