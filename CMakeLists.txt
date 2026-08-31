@@ -73,8 +73,7 @@ endif()
 # ── Tests (no Qt / no OpenGL) ──────────────────────────────────────────────
 enable_testing()
 
-add_executable(ridgeline_tests
-    tests/test_main.cpp
+set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/sim/SpectrumCalc.cpp
     src/sim/MaterialLibrary.cpp
     src/sim/TerrainModel.cpp
@@ -85,6 +84,11 @@ add_executable(ridgeline_tests
     src/data/ScenarioIO.cpp
     src/data/TerrainLoader.cpp
 )
+
+add_executable(ridgeline_tests
+    tests/test_main.cpp
+    ${RIDGELINE_PHYSICS_TEST_SOURCES}
+)
 target_include_directories(ridgeline_tests PRIVATE src)
 target_link_libraries(ridgeline_tests
     glm::glm
@@ -92,6 +96,22 @@ target_link_libraries(ridgeline_tests
 )
 add_test(NAME physics_tests
     COMMAND ridgeline_tests "${CMAKE_SOURCE_DIR}/assets/materials.json"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# Diagnostic mirror of physics_tests. It includes the same test implementation
+# but prints and flushes each test name before execution, making platform-only
+# crashes actionable in CI instead of producing an opaque process exit code.
+add_executable(ridgeline_trace_tests
+    tests/test_main_trace.cpp
+    ${RIDGELINE_PHYSICS_TEST_SOURCES}
+)
+target_include_directories(ridgeline_trace_tests PRIVATE src)
+target_link_libraries(ridgeline_trace_tests
+    glm::glm
+    nlohmann_json::nlohmann_json
+)
+add_test(NAME physics_trace_tests
+    COMMAND ridgeline_trace_tests "${CMAKE_SOURCE_DIR}/assets/materials.json"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_hgt_georef_tests
