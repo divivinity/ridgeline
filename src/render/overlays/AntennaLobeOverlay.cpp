@@ -1,4 +1,5 @@
 #include "AntennaLobeOverlay.h"
+#include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -28,7 +29,7 @@ void AntennaLobeOverlay::build() {
     initializeOpenGLFunctions();
     m_shader.load("assets/shaders/sphere.vert", "assets/shaders/sphere.frag");
 
-    std::vector<float>    verts;
+    std::vector<float> verts;
     std::vector<unsigned> idx;
     buildUnitSphere(16, 24, verts, idx);
     m_indexCount = static_cast<int>(idx.size());
@@ -48,13 +49,29 @@ void AntennaLobeOverlay::build() {
 
 void AntennaLobeOverlay::update(const std::vector<Antenna>& antennas) {
     m_models.clear();
+    const float pi = 3.14159265f;
     for (const auto& ant : antennas) {
         if (ant.isJammer) continue;
-        // Radius scales with linear gain: 100m at 0 dBi, ~141m at 3 dBi, 200m at 6 dBi
-        float r = 100.0f * std::pow(10.0f, ant.gainDbi / 20.0f);
-        m_models.push_back(
-            glm::translate(glm::mat4(1.0f), ant.position) *
-            glm::scale(glm::mat4(1.0f), glm::vec3(r)));
+        const float r = 100.0f * std::pow(10.0f, ant.gainDbi / 20.0f);
+
+        float crossX = r;
+        float crossY = r;
+        float forward = r;
+        if (ant.horizontalBeamwidthDeg < 359.0f) {
+            crossX = r * std::max(0.12f, std::sin(
+                std::clamp(ant.horizontalBeamwidthDeg, 1.0f, 180.0f) * 0.5f * pi / 180.0f));
+            forward = r * 1.35f;
+        }
+        if (ant.verticalBeamwidthDeg < 179.0f) {
+            crossY = r * std::max(0.12f, std::sin(
+                std::clamp(ant.verticalBeamwidthDeg, 1.0f, 180.0f) * 0.5f * pi / 180.0f));
+        }
+
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), ant.position);
+        model = glm::rotate(model, glm::radians(ant.azimuthDeg), glm::vec3(0, 1, 0));
+        model = glm::rotate(model, glm::radians(ant.downtiltDeg), glm::vec3(1, 0, 0));
+        model = glm::scale(model, glm::vec3(crossX, crossY, forward));
+        m_models.push_back(model);
     }
 }
 
