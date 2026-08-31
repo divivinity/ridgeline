@@ -21,7 +21,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
     const glm::vec3 world = terrain.worldSize();
     grid.width    = std::max(1, static_cast<int>(std::ceil(world.x / gridResolution)));
     grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
-    grid.originXZ = {0.0f, 0.0f};
+    grid.originXZ = {gridResolution * 0.5f, gridResolution * 0.5f};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
 
     const Material& mat = materials.defaultMaterial();

@@ -1,8 +1,10 @@
 #include "MainWindow.h"
 #include "data/TerrainLoader.h"
+#include "data/GlobalTerrainLoader.h"
 #include "data/ScenarioIO.h"
 #include "data/Exporter.h"
 #include "data/AntennaLibrary.h"
+#include "LocationDialog.h"
 #include <QWidget>
 #include <QStatusBar>
 #include <QToolBar>
@@ -13,8 +15,14 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QTimer>
+#include <QElapsedTimer>
+#include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QSplitter>
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Ridgeline");
@@ -30,6 +38,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     // ── File menu ─────────────────────────────────────────────────────────────
     QMenu* fileMenu = menuBar()->addMenu("&File");
+    QAction* locationAct = fileMenu->addAction("&Choose Location…");
+    locationAct->setShortcut(QKeySequence("Ctrl+L"));
+    connect(locationAct, &QAction::triggered, this, &MainWindow::onChooseLocation);
+
+    fileMenu->addSeparator();
     QAction* loadAct = fileMenu->addAction("&Load Terrain…");
     loadAct->setShortcut(QKeySequence::Open);
     connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
@@ -53,34 +66,45 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
 
-    // ── Left dock — Scenario Tree ─────────────────────────────────────────────
+    // ── Left dock — Sources and selected-source settings ─────────────────────
     m_scenarioTree = new ScenarioTree(this);
-    auto* leftDock = new QDockWidget("Scenario", this);
-    leftDock->setWidget(m_scenarioTree);
+    m_propsPanel = new PropertiesPanel(this);
+    m_propsPanel->setAntennaLibrary(&m_antennaLib);
+    m_scenarioTree->setMinimumHeight(285);
+    m_propsPanel->setMinimumHeight(285);
+
+    auto* sourceWorkspace = new QSplitter(Qt::Vertical, this);
+    sourceWorkspace->setChildrenCollapsible(false);
+    sourceWorkspace->addWidget(m_scenarioTree);
+    sourceWorkspace->addWidget(m_propsPanel);
+    sourceWorkspace->setStretchFactor(0, 3);
+    sourceWorkspace->setStretchFactor(1, 2);
+    sourceWorkspace->setSizes({350, 290});
+    sourceWorkspace->setStyleSheet(
+        "QSplitter::handle { background: #1f2d42; height: 1px; }"
+        "QSplitter::handle:hover { background: #2dd4bf; }"
+    );
+
+    auto* leftDock = new QDockWidget("Sources", this);
+    leftDock->setMinimumWidth(270);
+    leftDock->setMaximumWidth(370);
+    leftDock->setWidget(sourceWorkspace);
     leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     leftDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     leftDock->setStyleSheet(
-        "QDockWidget { color: rgba(255,255,255,0.7); font-family: monospace; font-size: 11px; }"
-        "QDockWidget::title { background: rgba(15,25,35,0.9); padding: 4px; }"
+        "QDockWidget { color: #94a3b8; font-size: 10px; }"
+        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }"
     );
     addDockWidget(Qt::LeftDockWidgetArea, leftDock);
 
-    connect(m_scenarioTree, &ScenarioTree::addRequested,
+    connect(m_scenarioTree, &ScenarioTree::addEmitterRequested,
             this, &MainWindow::onAddAntenna);
+    connect(m_scenarioTree, &ScenarioTree::addJammerRequested,
+            this, &MainWindow::onAddJammer);
     connect(m_scenarioTree, &ScenarioTree::removeRequested,
             this, &MainWindow::onRemoveAntenna);
     connect(m_scenarioTree, &ScenarioTree::selectionChanged,
             this, &MainWindow::onAntennaSelected);
-
-    // ── Right dock — Properties Panel ─────────────────────────────────────────
-    m_propsPanel = new PropertiesPanel(this);
-    m_propsPanel->setAntennaLibrary(&m_antennaLib);
-    auto* rightDock = new QDockWidget("Properties", this);
-    rightDock->setWidget(m_propsPanel);
-    rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    rightDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
-    rightDock->setStyleSheet(leftDock->styleSheet());
-    addDockWidget(Qt::RightDockWidgetArea, rightDock);
 
     connect(m_propsPanel, &PropertiesPanel::antennaChanged,
             this, &MainWindow::onAntennaChanged);
@@ -89,30 +113,46 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QToolBar* tb = addToolBar("Main");
     tb->setMovable(false);
 
-    QLabel* freqLabel = new QLabel("  150 MHz  |  50 W  ");
-    freqLabel->setStyleSheet("color: rgba(255,255,255,0.7); font-family: monospace;");
-    tb->addWidget(freqLabel);
+    auto* brand = new QLabel("  RIDGELINE  ");
+    brand->setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 750; letter-spacing: 2px;");
+    tb->addWidget(brand);
+
+    auto* locationButton = new QPushButton("⌖  Location");
+    locationButton->setObjectName("LocationButton");
+    locationButton->setToolTip("Choose any location worldwide (Ctrl+L)");
+    connect(locationButton, &QPushButton::clicked, this, &MainWindow::onChooseLocation);
+    tb->addWidget(locationButton);
+    m_locationLabel = new QLabel("Loading analysis area…");
+    m_locationLabel->setObjectName("LocationSummary");
+    tb->addWidget(m_locationLabel);
+
+    auto* toolbarSpacer = new QWidget();
+    toolbarSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    tb->addWidget(toolbarSpacer);
+
+    auto* qualityLabel = new QLabel("QUALITY");
+    qualityLabel->setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; letter-spacing: 1px;");
+    tb->addWidget(qualityLabel);
 
     m_modeCombo = new QComboBox();
-    m_modeCombo->addItem("Preview");
-    m_modeCombo->addItem("Planner");
-    m_modeCombo->addItem("Engineering");
+    m_modeCombo->addItem("Quick preview");
+    m_modeCombo->addItem("Balanced");
+    m_modeCombo->addItem("High accuracy");
     m_modeCombo->setCurrentIndex(1);
     m_modeCombo->setStyleSheet(
         "QComboBox {"
-        "  background: rgba(255,255,255,0.1);"
-        "  border: 1px solid rgba(255,255,255,0.2);"
-        "  border-radius: 4px;"
-        "  color: rgba(255,255,255,0.85);"
-        "  padding: 2px 10px;"
-        "  font-family: monospace;"
-        "  min-width: 130px;"
+        "  background: #111c2e;"
+        "  border: 1px solid #2a3b52;"
+        "  border-radius: 7px;"
+        "  color: #dbe7f5;"
+        "  padding: 5px 12px;"
+        "  min-width: 135px;"
         "}"
         "QComboBox::drop-down { border: none; }"
         "QComboBox QAbstractItemView {"
-        "  background: #1a2a3a;"
-        "  color: rgba(255,255,255,0.85);"
-        "  selection-background-color: rgba(79,195,247,0.3);"
+        "  background: #111c2e;"
+        "  color: #dbe7f5;"
+        "  selection-background-color: #0f766e;"
         "}"
     );
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -130,17 +170,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             });
     tb->addWidget(m_modeCombo);
 
-    m_solveBtn = new QPushButton("  ⚡ Solve  ");
+    m_solveBtn = new QPushButton("Run coverage");
+    m_solveBtn->setObjectName("RunButton");
     m_solveBtn->setStyleSheet(
         "QPushButton {"
-        "  background: rgba(79,195,247,0.2);"
-        "  border: 1px solid rgba(79,195,247,0.5);"
-        "  border-radius: 6px;"
-        "  color: #4fc3f7;"
-        "  padding: 4px 14px;"
-        "  font-family: monospace;"
+        "  background: #0f766e;"
+        "  border: 1px solid #2dd4bf;"
+        "  border-radius: 8px;"
+        "  color: white;"
+        "  padding: 7px 18px;"
+        "  font-weight: 700;"
         "}"
-        "QPushButton:hover { background: rgba(79,195,247,0.35); }"
+        "QPushButton:hover { background: #0d9488; }"
+        "QPushButton:disabled { background: #1e293b; border-color: #334155; color: #64748b; }"
     );
     connect(m_solveBtn, &QPushButton::clicked, this, &MainWindow::onSolve);
     tb->addWidget(m_solveBtn);
@@ -152,12 +194,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     overlayTb->addWidget(m_overlayBar);
     connect(m_overlayBar, &OverlayToolbar::overlayToggled,
             m_viewport, &ViewportWidget::setOverlayVisible);
+    connect(m_overlayBar, &OverlayToolbar::basemapOpacityChanged,
+            m_viewport, &ViewportWidget::setBasemapOpacity);
 
     // ── Status bar ────────────────────────────────────────────────────────────
     m_statusLabel = new QLabel("  Ready");
-    m_statusLabel->setStyleSheet("color: rgba(255,255,255,0.5); font-family: monospace;");
+    m_statusLabel->setStyleSheet("color: #94a3b8; font-size: 11px;");
     statusBar()->addWidget(m_statusLabel);
-    statusBar()->setStyleSheet("background: rgba(15,25,35,0.9);");
+    statusBar()->setStyleSheet("background: #0a1220; border-top: 1px solid #1e2d42;");
+    connect(m_viewport, &ViewportWidget::basemapInfoChanged, this,
+            [this](const QString& provider, const QString& attribution, const QString& error) {
+        if (m_locationLabel) {
+            m_locationLabel->setToolTip(
+                QString("Basemap: %1\n%2%3")
+                    .arg(provider, attribution,
+                         error.isEmpty() ? QString{} : QString("\n%1").arg(error)));
+        }
+    });
 
     // ── Bottom dock — Spectrum display ────────────────────────────────────────
     m_bottomBar = new BottomBar(this);
@@ -166,10 +219,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     bottomDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
     bottomDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     bottomDock->setStyleSheet(
-        "QDockWidget { color: rgba(255,255,255,0.7); font-family: monospace; font-size: 11px; }"
-        "QDockWidget::title { background: rgba(15,25,35,0.9); padding: 4px; }"
+        "QDockWidget { color: #94a3b8; font-size: 10px; }"
+        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }"
     );
     addDockWidget(Qt::BottomDockWidgetArea, bottomDock);
+    bottomDock->hide();
+
+    QTimer::singleShot(0, this, [this, leftDock]() {
+        addDockWidget(Qt::LeftDockWidgetArea, leftDock);
+        leftDock->show();
+        resizeDocks({leftDock}, {320}, Qt::Horizontal);
+    });
+
+    QMenu* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->addAction(leftDock->toggleViewAction());
+    viewMenu->addAction(bottomDock->toggleViewAction());
 
     // Populate tree with default antennas
     refreshTree();
@@ -177,15 +241,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Connect click-to-place signal
     connect(m_viewport, &ViewportWidget::terrainClicked,
             this, &MainWindow::onTerrainClicked);
+    connect(m_viewport, &ViewportWidget::placementCancelled, this, [this]() {
+        m_placementActive = false;
+        m_statusLabel->setText("  Placement cancelled");
+    });
 
-    // Auto-load NC terrain for immediate geo-referenced basemap.
-    // Deferred so the OpenGL context is fully initialised before reloadTerrain() runs.
+    // Start with a real global terrain selection. Deferred until OpenGL is ready.
     QTimer::singleShot(0, this, [this]() {
-        // N35W083 = Asheville / Blue Ridge Parkway — dramatic mountain terrain
-        QString ncTile = QCoreApplication::applicationDirPath()
-                         + "/assets/terrain/nc/N35W083.hgt";
-        if (QFileInfo::exists(ncTile))
-            loadTerrain(ncTile);
+        loadGlobalLocation(35.5951, -82.5515, 15.0, "Asheville, North Carolina");
     });
 }
 
@@ -203,18 +266,93 @@ void MainWindow::placeDefaultAntennas() {
     const float d = t.worldSize().z;
 
     Antenna a1;
-    a1.position     = { w * 0.1f, t.heightAtWorld(w*0.1f, d*0.1f) + 10.0f, d * 0.1f };
+    a1.position     = { w * 0.5f, t.heightAtWorld(w*0.5f, d*0.5f) + 10.0f, d * 0.5f };
     a1.frequencyMHz = 150.0f;
     a1.powerW       = 50.0f;
     a1.gainDbi      = 3.0f;
 
-    Antenna a2;
-    a2.position     = { w * 0.8f, t.heightAtWorld(w*0.8f, d*0.8f) + 10.0f, d * 0.8f };
-    a2.frequencyMHz = 150.0f;
-    a2.powerW       = 50.0f;
-    a2.gainDbi      = 3.0f;
+    m_engine.setAntennas({a1});
+}
 
-    m_engine.setAntennas({a1, a2});
+void MainWindow::loadGlobalLocation(double latitude, double longitude,
+                                    double extentKm, const QString& name) {
+    m_statusLabel->setText("  Loading real-world elevation…");
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    try {
+        m_placementActive = false;
+        if (m_viewport) m_viewport->setPlacementMode(false);
+        TerrainModel terrain = GlobalTerrainLoader::load(
+            latitude, longitude, extentKm, 513);
+        m_engine.setTerrain(std::move(terrain));
+        m_terrainSource = TerrainSource{};
+        m_terrainSource.type = TerrainSource::Type::Global;
+        m_terrainSource.centerLat = latitude;
+        m_terrainSource.centerLon = longitude;
+        m_terrainSource.extentKm = extentKm;
+        m_locationName = name;
+        placeDefaultAntennas();
+
+        if (m_viewport) m_viewport->reloadTerrain();
+        m_selectedIndex = 0;
+        refreshTree();
+        m_scenarioTree->selectRow(m_selectedIndex);
+        refreshPropsPanel();
+        refreshBottomBar();
+        updateLocationSummary();
+        setWindowTitle(m_locationName.isEmpty()
+            ? QString("Ridgeline — %1°, %2°")
+                .arg(latitude, 0, 'f', 4).arg(longitude, 0, 'f', 4)
+            : QString("Ridgeline — %1").arg(m_locationName.section(',', 0, 0)));
+        m_statusLabel->setText(
+            "  Real elevation and satellite imagery aligned · Place emitters or run coverage");
+    } catch (const std::exception& e) {
+        m_statusLabel->setText("  Location load failed");
+        QMessageBox::critical(this, "Could not load location", e.what());
+    }
+    QApplication::restoreOverrideCursor();
+}
+
+void MainWindow::onChooseLocation() {
+    double latitude = m_terrainSource.centerLat;
+    double longitude = m_terrainSource.centerLon;
+    double extentKm = m_terrainSource.extentKm;
+    if (m_engine.terrain().hasGeoReference() &&
+        m_terrainSource.type != TerrainSource::Type::Global) {
+        const auto center = m_engine.terrain().worldToLatLon(
+            m_engine.terrain().worldSize().x * 0.5f,
+            m_engine.terrain().worldSize().z * 0.5f);
+        latitude = center.latDeg;
+        longitude = center.lonDeg;
+    }
+
+    LocationDialog dialog(latitude, longitude, extentKm, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    loadGlobalLocation(dialog.latitude(), dialog.longitude(),
+                       dialog.extentKm(), dialog.locationName());
+}
+
+void MainWindow::updateLocationSummary() {
+    if (!m_locationLabel) return;
+    const QString area = QString("%1 × %1 km").arg(m_terrainSource.extentKm, 0, 'f', 0);
+    if (!m_locationName.isEmpty()) {
+        m_locationLabel->setText(QString("%1  ·  %2")
+            .arg(m_locationName.section(',', 0, 0), area));
+    } else {
+        m_locationLabel->setText(QString("%1°, %2°  ·  %3")
+            .arg(m_terrainSource.centerLat, 0, 'f', 4)
+            .arg(m_terrainSource.centerLon, 0, 'f', 4)
+            .arg(area));
+    }
+}
+
+void MainWindow::startPlacement(bool jammer) {
+    m_placementActive = true;
+    m_placingJammer = jammer;
+    m_viewport->setPlacementMode(true, jammer);
+    m_statusLabel->setText(jammer
+        ? "  Click the terrain to place a jammer · Esc cancels"
+        : "  Click the terrain to place an emitter · Esc cancels");
 }
 
 void MainWindow::loadTerrain(const QString& path) {
@@ -240,6 +378,18 @@ void MainWindow::loadTerrain(const QString& path) {
             m_terrainSource.type    = TerrainSource::Type::Dted;
             m_terrainSource.hgtPath = path.toStdString();
         }
+        const auto& loadedTerrain = m_engine.terrain();
+        if (loadedTerrain.hasGeoReference()) {
+            const auto center = loadedTerrain.worldToLatLon(
+                loadedTerrain.worldSize().x * 0.5f,
+                loadedTerrain.worldSize().z * 0.5f);
+            m_terrainSource.centerLat = center.latDeg;
+            m_terrainSource.centerLon = center.lonDeg;
+            m_terrainSource.extentKm =
+                std::max(loadedTerrain.worldSize().x, loadedTerrain.worldSize().z) / 1000.0;
+            m_locationName = QFileInfo(path).completeBaseName();
+            updateLocationSummary();
+        }
         placeDefaultAntennas();
 
         if (m_viewport) m_viewport->reloadTerrain();
@@ -258,12 +408,48 @@ void MainWindow::loadTerrain(const QString& path) {
 }
 
 void MainWindow::onSolve() {
-    m_statusLabel->setText("  Solving...");
+    if (m_engine.antennas().empty()) {
+        QMessageBox::information(this, "Place an emitter",
+            "Place at least one emitter before running coverage.");
+        startPlacement(false);
+        return;
+    }
+    const bool hasEmitter = std::any_of(
+        m_engine.antennas().begin(), m_engine.antennas().end(),
+        [](const Antenna& antenna) { return !antenna.isJammer; });
+    if (!hasEmitter) {
+        QMessageBox::information(this, "Place an emitter",
+            "The scenario only contains jammers. Place an emitter to calculate coverage.");
+        startPlacement(false);
+        return;
+    }
+
+    m_statusLabel->setText("  Calculating terrain-aware coverage…");
     m_solveBtn->setEnabled(false);
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    m_engine.solve();
-    m_viewport->refreshOverlays();
-    m_statusLabel->setText("  Done");
+    QElapsedTimer timer;
+    timer.start();
+    try {
+        m_engine.solve();
+        m_viewport->refreshOverlays();
+        const auto& grid = m_engine.fieldGrid();
+        float minDbm = std::numeric_limits<float>::infinity();
+        float maxDbm = -std::numeric_limits<float>::infinity();
+        for (const float value : grid.dbm) {
+            if (!std::isfinite(value)) continue;
+            minDbm = std::min(minDbm, value);
+            maxDbm = std::max(maxDbm, value);
+        }
+        const QString signalRange = std::isfinite(minDbm) && std::isfinite(maxDbm)
+            ? QString(" · %1 to %2 dBm").arg(minDbm, 0, 'f', 0).arg(maxDbm, 0, 'f', 0)
+            : QString();
+        m_statusLabel->setText(QString("  Coverage ready in %1 s · %2 × %3 cells%4")
+            .arg(timer.elapsed() / 1000.0, 0, 'f', 1)
+            .arg(grid.width).arg(grid.height).arg(signalRange));
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, "Coverage failed", e.what());
+        m_statusLabel->setText("  Coverage calculation failed");
+    }
     m_solveBtn->setEnabled(true);
 }
 
@@ -279,21 +465,11 @@ void MainWindow::onLoadTerrain() {
 }
 
 void MainWindow::onAddAntenna() {
-    const auto& t = m_engine.terrain();
-    const float cx = t.worldSize().x * 0.5f;
-    const float cz = t.worldSize().z * 0.5f;
-    Antenna a;
-    a.position     = { cx, t.heightAtWorld(cx, cz) + 10.0f, cz };
-    a.frequencyMHz = 150.0f;
-    a.powerW       = 10.0f;
-    a.gainDbi      = 3.0f;
-    m_engine.addAntenna(a);
-    m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
-    refreshTree();
-    m_scenarioTree->selectRow(m_selectedIndex);
-    refreshPropsPanel();
-    refreshBottomBar();
-    m_statusLabel->setText("  Antenna added");
+    startPlacement(false);
+}
+
+void MainWindow::onAddJammer() {
+    startPlacement(true);
 }
 
 void MainWindow::onRemoveAntenna(int index) {
@@ -303,6 +479,7 @@ void MainWindow::onRemoveAntenna(int index) {
     refreshTree();
     refreshPropsPanel();
     refreshBottomBar();
+    m_viewport->refreshOverlays();
     m_statusLabel->setText("  Antenna removed");
 }
 
@@ -318,7 +495,10 @@ void MainWindow::onAntennaChanged(Antenna updated) {
         updated.position.x, updated.position.z);
     updated.position.y = ground + std::max(0.0f, updated.position.y);
     m_engine.updateAntenna(m_selectedIndex, updated);
+    refreshTree();
+    m_scenarioTree->selectRow(m_selectedIndex);
     refreshBottomBar();
+    m_viewport->refreshOverlays();
 }
 
 void MainWindow::refreshTree() {
@@ -401,6 +581,10 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
         case TerrainSource::Type::GeoTiff:
             t = TerrainLoader::fromGeoTIFF(ts.hgtPath);
             break;
+        case TerrainSource::Type::Global:
+            t = GlobalTerrainLoader::load(ts.centerLat, ts.centerLon,
+                                          ts.extentKm, 513);
+            break;
         case TerrainSource::Type::Flat:
             t = TerrainLoader::makeFlat(ts.widthCells, ts.heightCells, ts.cellSize);
             break;
@@ -412,6 +596,9 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     }
     m_engine.setTerrain(std::move(t));
     m_terrainSource = doc.terrain;  // only update after successful terrain build
+    m_locationName.clear();
+    if (m_terrainSource.type == TerrainSource::Type::Global)
+        updateLocationSummary();
 
     m_engine.mode = doc.mode;
     if (doc.mode == SimEngine::Mode::Preview)
@@ -430,20 +617,29 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
 }
 
 void MainWindow::onTerrainClicked(float worldX, float worldZ) {
+    if (!m_placementActive) return;
     const auto& t = m_engine.terrain();
     Antenna a;
     a.position     = { worldX, t.heightAtWorld(worldX, worldZ) + 10.0f, worldZ };
     a.frequencyMHz = 150.0f;
     a.powerW       = 10.0f;
     a.gainDbi      = 3.0f;
+    a.isJammer     = m_placingJammer;
     m_engine.addAntenna(a);
     m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
     refreshTree();
     m_scenarioTree->selectRow(m_selectedIndex);
     refreshPropsPanel();
     refreshBottomBar();
-    m_statusLabel->setText(QString("  Antenna %1 placed")
-                           .arg(m_engine.antennas().size()));
+    m_viewport->refreshOverlays();
+    m_placementActive = false;
+    m_viewport->setPlacementMode(false);
+    const auto ll = t.worldToLatLon(worldX, worldZ);
+    const QString role = a.isJammer ? "Jammer" : "Emitter";
+    m_statusLabel->setText(t.hasGeoReference()
+        ? QString("  %1 placed at %2°, %3°")
+            .arg(role).arg(ll.latDeg, 0, 'f', 6).arg(ll.lonDeg, 0, 'f', 6)
+        : QString("  %1 placed").arg(role));
 }
 
 void MainWindow::onExportPng() {
@@ -475,7 +671,7 @@ void MainWindow::onExportCsv() {
         "CSV file (*.csv);;All files (*)");
     if (path.isEmpty()) return;
 
-    if (Exporter::exportCsv(m_engine.fieldGrid(), path.toStdString())) {
+    if (Exporter::exportCsv(m_engine.fieldGrid(), m_engine.terrain(), path.toStdString())) {
         m_statusLabel->setText("  CSV exported");
     } else {
         QMessageBox::critical(this, "Export failed", "Could not write CSV file.");
@@ -484,13 +680,22 @@ void MainWindow::onExportCsv() {
 
 void MainWindow::applyTheme() {
     setStyleSheet(
-        "QMainWindow, QWidget { background: #0f1923; color: rgba(255,255,255,0.85); }"
+        "QMainWindow { background: #08111f; color: #dbe7f5; }"
+        "QWidget { color: #dbe7f5; font-family: 'Segoe UI'; }"
         "QToolBar {"
-        "  background: rgba(15,25,35,0.75);"
-        "  border-bottom: 1px solid rgba(255,255,255,0.08);"
-        "  spacing: 8px; padding: 4px 8px;"
+        "  background: #0b1422;"
+        "  border: none; border-bottom: 1px solid #1e2d42;"
+        "  spacing: 10px; padding: 7px 10px;"
         "}"
-        "QMenuBar { background: transparent; }"
-        "QDockWidget { background: rgba(15,25,35,0.85); }"
+        "QMenuBar { background: #08111f; color: #94a3b8; padding: 2px; }"
+        "QMenuBar::item:selected { background: #172338; color: #f8fafc; border-radius: 4px; }"
+        "QMenu { background: #101b2d; border: 1px solid #2a3a51; padding: 5px; }"
+        "QMenu::item { padding: 6px 24px; border-radius: 4px; }"
+        "QMenu::item:selected { background: #0f766e; color: white; }"
+        "QDockWidget { background: #0b1422; }"
+        "QPushButton#LocationButton { background: #132238; border: 1px solid #2a3b52;"
+        "  border-radius: 7px; color: #ccfbf1; padding: 6px 12px; font-weight: 650; }"
+        "QPushButton#LocationButton:hover { background: #17404a; border-color: #2dd4bf; }"
+        "QLabel#LocationSummary { color: #94a3b8; font-size: 11px; padding-right: 8px; }"
     );
 }

@@ -25,12 +25,14 @@ public:
 
 signals:
     void selectionChanged(int index);   // -1 = deselected
-    void addRequested();                // user clicked Add
+    void addEmitterRequested();         // user starts click-to-place emitter mode
+    void addJammerRequested();          // user starts click-to-place jammer mode
     void removeRequested(int index);    // user clicked Remove; index is valid
 
 private:
     QListWidget* m_list      = nullptr;
     QPushButton* m_addBtn    = nullptr;
+    QPushButton* m_addJammerBtn = nullptr;
     QPushButton* m_removeBtn = nullptr;
 
     void onSelectionChanged();

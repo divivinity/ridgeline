@@ -12,12 +12,17 @@ public:
     void build(const TerrainModel& terrain);
     void draw(const glm::mat4& mvp);
     void destroy();
+    void setOpacity(float opacity);
+
+    bool hasTexture() const { return m_hasTexture; }
+    QString attribution() const { return m_attribution; }
+    QString providerName() const { return m_providerName; }
+    QString lastError() const { return m_lastError; }
 
 private:
     struct MercatorPixel { double x = 0.0; double y = 0.0; };
 
     static MercatorPixel mercatorPixel(double latDeg, double lonDeg, int zoom);
-    static QString tileUrlTemplate();
     static int chooseZoom(const TerrainModel& terrain);
 
     bool loadTextureForTerrain(const TerrainModel& terrain);
@@ -28,4 +33,7 @@ private:
     int    m_indexCount = 0;
     bool   m_hasTexture = false;
     float  m_opacity = 0.82f;
+    QString m_attribution;
+    QString m_providerName;
+    QString m_lastError;
 };

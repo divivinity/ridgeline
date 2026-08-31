@@ -63,7 +63,6 @@ if(WIN32)
     if(WINDEPLOYQT)
         add_custom_command(TARGET ridgeline POST_BUILD
             COMMAND ${WINDEPLOYQT}
-                --no-compiler-runtime
                 $<TARGET_FILE:ridgeline>
             COMMENT "Deploying Qt runtime DLLs..."
         )
@@ -83,6 +82,7 @@ add_executable(ridgeline_tests
     src/sim/SimEngine.cpp
     src/data/AntennaLibrary.cpp
     src/data/ScenarioIO.cpp
+    src/data/TerrainLoader.cpp
 )
 target_include_directories(ridgeline_tests PRIVATE src)
 target_link_libraries(ridgeline_tests

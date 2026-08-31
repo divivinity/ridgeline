@@ -80,6 +80,11 @@ void HeatmapOverlay::draw(const glm::mat4& mvp) {
     if (!visible || m_texW == 0) return;
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Bias the analysis surface toward the camera so it remains visible over
+    // terrain and imagery even across large real-world extents.
+    glDepthMask(GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-2.0f, -2.0f);
     m_shader.bind();
     m_shader.setMat4("uMVP",   mvp);
     m_shader.setFloat("uMinDbm", -120.0f);
@@ -91,6 +96,8 @@ void HeatmapOverlay::draw(const glm::mat4& mvp) {
     glDrawElements(GL_TRIANGLES, m_indexCount, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
     m_shader.release();
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 }
 

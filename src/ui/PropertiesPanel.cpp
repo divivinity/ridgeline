@@ -4,30 +4,36 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QGroupBox>
+#include <QToolButton>
 
 PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(4, 4, 4, 4);
-    outerLayout->setSpacing(4);
+    outerLayout->setContentsMargins(14, 14, 14, 14);
+    outerLayout->setSpacing(10);
 
-    auto* title = new QLabel("Properties");
-    title->setStyleSheet("color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px; padding: 2px 4px;");
+    auto* title = new QLabel("EMITTER SETTINGS");
+    title->setStyleSheet("color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
     outerLayout->addWidget(title);
+    auto* help = new QLabel("Tune the selected source. Advanced antenna details are optional.");
+    help->setWordWrap(true);
+    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    outerLayout->addWidget(help);
 
     // "Nothing selected" placeholder
-    m_noSelLabel = new QLabel("No antenna selected.");
+    m_noSelLabel = new QLabel("Select an emitter or jammer from the list.");
+    m_noSelLabel->setWordWrap(true);
     m_noSelLabel->setAlignment(Qt::AlignCenter);
-    m_noSelLabel->setStyleSheet("color: rgba(255,255,255,0.3); font-family: monospace; font-size: 11px;");
+    m_noSelLabel->setStyleSheet("color: #64748b; font-size: 11px; padding: 24px 8px;");
     outerLayout->addWidget(m_noSelLabel);
 
     // Actual form (hidden when nothing is selected)
     m_form = new QWidget();
     auto* form = new QFormLayout(m_form);
-    form->setContentsMargins(4, 4, 4, 4);
-    form->setSpacing(6);
+    form->setContentsMargins(0, 6, 0, 0);
+    form->setSpacing(10);
     form->setLabelAlignment(Qt::AlignRight);
 
-    const QString labelStyle = "color: rgba(255,255,255,0.6); font-family: monospace; font-size: 11px;";
+    const QString labelStyle = "color: #94a3b8; font-size: 11px;";
 
     m_freqSpin   = makeSpinBox(1.0,      6000.0,   1.0,  " MHz");
     m_powerSpin  = makeSpinBox(0.001, 100000.0,    1.0,  " W");
@@ -65,13 +71,29 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     form->addRow(gainLabel,   m_gainSpin);
     form->addRow(heightLabel, m_heightSpin);
 
-    m_jammerCheck = new QCheckBox();
+    m_jammerCheck = new QCheckBox("Jammer");
     m_jammerCheck->setStyleSheet(
         "QCheckBox::indicator { width: 14px; height: 14px; }"
         "QCheckBox::indicator:checked { background: #ef5350; border: 1px solid #ef5350; border-radius: 2px; }"
         "QCheckBox::indicator:unchecked { background: transparent; border: 1px solid rgba(255,255,255,0.3); border-radius: 2px; }"
     );
+    jammerLabel->setText("Role:");
     form->addRow(jammerLabel, m_jammerCheck);
+
+    auto* advanced = new QToolButton();
+    advanced->setText("Advanced antenna settings");
+    advanced->setCheckable(true);
+    advanced->setArrowType(Qt::RightArrow);
+    advanced->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    form->addRow(advanced);
+    form->setRowVisible(m_typeCombo, false);
+    form->setRowVisible(m_gainSpin, false);
+    connect(advanced, &QToolButton::toggled, this,
+            [form, advanced, this](bool shown) {
+        advanced->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
+        form->setRowVisible(m_typeCombo, shown);
+        form->setRowVisible(m_gainSpin, shown);
+    });
 
     outerLayout->addWidget(m_form);
     outerLayout->addStretch();
@@ -90,9 +112,13 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     connect(m_jammerCheck, &QCheckBox::toggled,
             this, &PropertiesPanel::onValueChanged);
 
-    setMinimumWidth(180);
-    setMaximumWidth(280);
-    setStyleSheet("background: rgba(15,25,35,0.85);");
+    setMinimumWidth(230);
+    setMaximumWidth(330);
+    setStyleSheet(
+        "QWidget { background: #0b1422; }"
+        "QToolButton { color: #94a3b8; border: none; padding: 6px 2px; }"
+        "QToolButton:hover { color: #e2e8f0; }"
+    );
 }
 
 void PropertiesPanel::setAntennaLibrary(const AntennaLibrary* lib) {
@@ -197,16 +223,15 @@ QDoubleSpinBox* PropertiesPanel::makeSpinBox(double min, double max,
     sb->setDecimals(suffix == " MHz" || suffix == " m" ? 1 : 3);
     sb->setStyleSheet(
         "QDoubleSpinBox {"
-        "  background: rgba(0,0,0,0.3);"
-        "  border: 1px solid rgba(255,255,255,0.12);"
-        "  border-radius: 3px;"
-        "  color: rgba(255,255,255,0.85);"
-        "  font-family: monospace;"
+        "  background: #111c2e;"
+        "  border: 1px solid #2a3b52;"
+        "  border-radius: 7px;"
+        "  color: #e2e8f0;"
         "  font-size: 11px;"
-        "  padding: 2px 4px;"
+        "  padding: 5px 7px;"
         "}"
         "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
-        "  background: rgba(255,255,255,0.05);"
+        "  background: #172338;"
         "  border: none;"
         "}"
     );

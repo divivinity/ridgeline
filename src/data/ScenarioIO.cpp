@@ -12,6 +12,7 @@ static const char* typeToStr(TerrainSource::Type t) {
         case TerrainSource::Type::Hgt:   return "hgt";
         case TerrainSource::Type::Dted:  return "dted";
         case TerrainSource::Type::GeoTiff: return "geotiff";
+        case TerrainSource::Type::Global: return "global";
         default: throw std::logic_error("Unknown TerrainSource::Type");
     }
 }
@@ -21,6 +22,7 @@ static TerrainSource::Type strToType(const std::string& s) {
     if (s == "hgt")  return TerrainSource::Type::Hgt;
     if (s == "dted") return TerrainSource::Type::Dted;
     if (s == "geotiff" || s == "tif" || s == "tiff") return TerrainSource::Type::GeoTiff;
+    if (s == "global" || s == "streamed") return TerrainSource::Type::Global;
     return TerrainSource::Type::Hills;
 }
 
@@ -41,7 +43,7 @@ static SimEngine::Mode strToMode(const std::string& s) {
 
 void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     json j;
-    j["version"] = 1;
+    j["version"] = 2;
     j["mode"]    = modeToStr(doc.mode);
 
     auto& jt = j["terrain"];
@@ -60,6 +62,10 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
         jt["dted_path"] = doc.terrain.hgtPath;
     } else if (doc.terrain.type == TerrainSource::Type::GeoTiff) {
         jt["geotiff_path"] = doc.terrain.hgtPath;
+    } else if (doc.terrain.type == TerrainSource::Type::Global) {
+        jt["center_lat"] = doc.terrain.centerLat;
+        jt["center_lon"] = doc.terrain.centerLon;
+        jt["extent_km"] = doc.terrain.extentKm;
     }
 
     json antennas = json::array();
@@ -112,6 +118,10 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                     doc.terrain.hgtPath = jt.value("dted_path", std::string{});
                 } else if (doc.terrain.type == TerrainSource::Type::GeoTiff) {
                     doc.terrain.hgtPath = jt.value("geotiff_path", std::string{});
+                } else if (doc.terrain.type == TerrainSource::Type::Global) {
+                    doc.terrain.centerLat = jt.value("center_lat", def.centerLat);
+                    doc.terrain.centerLon = jt.value("center_lon", def.centerLon);
+                    doc.terrain.extentKm = jt.value("extent_km", def.extentKm);
                 }
             }
         }

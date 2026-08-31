@@ -396,6 +396,24 @@ static void test_scenario_io_planner_round_trip() {
     std::remove(path.c_str());
 }
 
+static void test_scenario_io_global_round_trip() {
+    ScenarioDoc doc;
+    doc.terrain.type = TerrainSource::Type::Global;
+    doc.terrain.centerLat = -33.8688;
+    doc.terrain.centerLon = 151.2093;
+    doc.terrain.extentKm = 25.0;
+
+    const std::string path = "test_scenario_global_tmp.json";
+    ScenarioIO::save(doc, path);
+    ScenarioDoc loaded = ScenarioIO::load(path);
+
+    CHECK(loaded.terrain.type == TerrainSource::Type::Global);
+    CHECK_NEAR(loaded.terrain.centerLat, -33.8688, 0.000001);
+    CHECK_NEAR(loaded.terrain.centerLon, 151.2093, 0.000001);
+    CHECK_NEAR(loaded.terrain.extentKm, 25.0, 0.001);
+    std::remove(path.c_str());
+}
+
 // ── SpectrumCalc ──────────────────────────────────────────────────────────────
 
 static void test_spectrum_length() {
@@ -481,6 +499,7 @@ int main(int argc, char** argv) {
     test_scenario_io_hills_round_trip();
     test_scenario_io_hgt_round_trip();
     test_scenario_io_planner_round_trip();
+    test_scenario_io_global_round_trip();
     test_spectrum_length();
     test_spectrum_freq_range();
     test_spectrum_higher_freq_lower_power();

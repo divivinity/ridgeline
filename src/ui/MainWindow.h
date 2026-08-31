@@ -21,12 +21,14 @@ public:
 
 private slots:
     void onSolve();
+    void onChooseLocation();
     void onLoadTerrain();
     void onSaveScenario();
     void onOpenScenario();
     void onExportPng();
     void onExportCsv();
     void onAddAntenna();
+    void onAddJammer();
     void onRemoveAntenna(int index);
     void onAntennaSelected(int index);
     void onAntennaChanged(Antenna updated);
@@ -42,14 +44,22 @@ private:
     OverlayToolbar*  m_overlayBar    = nullptr;
     BottomBar*       m_bottomBar     = nullptr;  // ← add
     QLabel*          m_statusLabel   = nullptr;
+    QLabel*          m_locationLabel = nullptr;
     QPushButton*     m_solveBtn      = nullptr;
     QComboBox*       m_modeCombo     = nullptr;
     int              m_selectedIndex = -1;
     Antenna          m_propsAntennaView;
+    bool             m_placementActive = false;
+    bool             m_placingJammer = false;
+    QString          m_locationName;
 
     void setupScene();
     void applyTheme();
     void placeDefaultAntennas();
+    void loadGlobalLocation(double latitude, double longitude,
+                            double extentKm, const QString& name = {});
+    void startPlacement(bool jammer);
+    void updateLocationSummary();
     void refreshTree();
     void refreshPropsPanel();
     void refreshBottomBar();

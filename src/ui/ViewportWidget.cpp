@@ -1,6 +1,8 @@
 #include "ViewportWidget.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QLabel>
+#include <QCursor>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -15,6 +17,31 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
     m_heatmapLegend->show();
+    m_losRay.visible = false;
+    m_antennaLobe.visible = false;
+    m_jammerBubble.visible = false;
+    m_fresnel.visible = false;
+
+    m_mapInfoLabel = new QLabel(this);
+    m_mapInfoLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_mapInfoLabel->setStyleSheet(
+        "QLabel { background: rgba(7, 14, 25, 205); border: 1px solid rgba(148,163,184,35);"
+        " border-radius: 9px; color: #dbeafe; padding: 9px 12px; font-size: 11px; }"
+    );
+    m_attributionLabel = new QLabel(this);
+    m_attributionLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_attributionLabel->setStyleSheet(
+        "QLabel { background: rgba(7, 14, 25, 185); border-radius: 5px;"
+        " color: #cbd5e1; padding: 4px 7px; font-size: 9px; }"
+    );
+    m_placementHint = new QLabel(this);
+    m_placementHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_placementHint->setAlignment(Qt::AlignCenter);
+    m_placementHint->setStyleSheet(
+        "QLabel { background: rgba(15,118,110,225); border: 1px solid #2dd4bf;"
+        " border-radius: 9px; color: white; padding: 8px 16px; font-weight: 650; }"
+    );
+    m_placementHint->hide();
 }
 
 void ViewportWidget::initializeGL() {
@@ -60,11 +87,13 @@ void ViewportWidget::initializeGL() {
     m_camera.radius  = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
     m_defaultCamera = m_camera;   // save for R key
+    updateMapHud();
 }
 
 void ViewportWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
     m_heatmapLegend->reposition(QSize(w, h));
+    repositionHud();
 }
 
 void ViewportWidget::paintGL() {
@@ -83,6 +112,7 @@ void ViewportWidget::paintGL() {
     if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
     if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
     if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
+    drawAntennaMarkers();
 }
 
 void ViewportWidget::buildMarkers() {
@@ -171,6 +201,7 @@ void ViewportWidget::reloadTerrain() {
     m_camera.radius    = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
     m_defaultCamera    = m_camera;   // save for R key
+    updateMapHud();
     doneCurrent();
     update();
 }
@@ -186,13 +217,74 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
         m_dragging = false;
         // Short click (not a drag) → place antenna
         QPoint delta = e->pos() - m_pressPos;
-        if (delta.manhattanLength() < 6) {
+        if (m_placementActive && delta.manhattanLength() < 6) {
             float wx = 0.0f, wz = 0.0f;
             if (raycastTerrain(e->pos(), wx, wz))
                 emit terrainClicked(wx, wz);
         }
     } else {
         m_dragging = false;
+    }
+}
+
+void ViewportWidget::setBasemapOpacity(float opacity) {
+    m_basemap.setOpacity(opacity);
+    update();
+}
+
+void ViewportWidget::setPlacementMode(bool active, bool jammer) {
+    m_placementActive = active;
+    m_placingJammer = jammer;
+    if (active) {
+        setCursor(Qt::CrossCursor);
+        m_placementHint->setText(jammer
+            ? "Click the terrain to place a jammer"
+            : "Click the terrain to place an emitter");
+        m_placementHint->adjustSize();
+        m_placementHint->show();
+    } else {
+        unsetCursor();
+        m_placementHint->hide();
+    }
+    repositionHud();
+}
+
+void ViewportWidget::updateMapHud() {
+    const TerrainModel& terrain = m_engine->terrain();
+    QString mapText = "Procedural terrain";
+    if (terrain.hasGeoReference()) {
+        const auto center = terrain.worldToLatLon(
+            terrain.worldSize().x * 0.5f, terrain.worldSize().z * 0.5f);
+        mapText = QString("%1°, %2°\n%3 × %4 km  ·  %5 m terrain grid")
+            .arg(center.latDeg, 0, 'f', 5)
+            .arg(center.lonDeg, 0, 'f', 5)
+            .arg(terrain.worldSize().x / 1000.0f, 0, 'f', 1)
+            .arg(terrain.worldSize().z / 1000.0f, 0, 'f', 1)
+            .arg(std::max(terrain.metersPerCellX(), terrain.metersPerCellZ()), 0, 'f', 1);
+    }
+    m_mapInfoLabel->setText(mapText);
+    m_mapInfoLabel->adjustSize();
+
+    m_attributionLabel->setText(m_basemap.attribution().isEmpty()
+        ? QStringLiteral("Elevation © Mapzen and source contributors")
+        : m_basemap.attribution() + "  ·  Elevation © Mapzen and contributors");
+    m_attributionLabel->adjustSize();
+    emit basemapInfoChanged(m_basemap.providerName(),
+                            m_basemap.attribution(),
+                            m_basemap.lastError());
+    repositionHud();
+}
+
+void ViewportWidget::repositionHud() {
+    const int margin = 14;
+    if (m_mapInfoLabel) m_mapInfoLabel->move(margin, margin);
+    if (m_attributionLabel) {
+        m_attributionLabel->move(
+            std::max(margin, width() - m_attributionLabel->width() - margin),
+            std::max(margin, height() - m_attributionLabel->height() - margin));
+    }
+    if (m_placementHint && m_placementHint->isVisible()) {
+        m_placementHint->move(std::max(0, (width() - m_placementHint->width()) / 2), margin);
     }
 }
 
@@ -227,6 +319,12 @@ void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
 
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {
     switch (e->key()) {
+        case Qt::Key_Escape:
+            if (m_placementActive) {
+                setPlacementMode(false);
+                emit placementCancelled();
+            }
+            break;
         case Qt::Key_T:
             m_camera.orbit(0.0f, 89.0f - m_camera.elevation);  // snap to ceiling via orbit
             break;
@@ -277,11 +375,11 @@ bool ViewportWidget::raycastTerrain(const QPoint& screenPos,
     if (std::abs(rayDir.y) < 1e-6f) return false;
 
     // Ray-march against terrain (200 steps over the terrain diagonal)
-    const float terrainW = terrain.width  * terrain.metersPerCellX();
-    const float terrainH = terrain.height * terrain.metersPerCellZ();
+    const float terrainW = terrain.worldSize().x;
+    const float terrainH = terrain.worldSize().z;
     const float maxDist  = 2.0f * std::sqrt(terrainW * terrainW + terrainH * terrainH
                                             + 8000.0f * 8000.0f);
-    const int   steps    = 200;
+    const int   steps    = 1024;
     const float stepSize = maxDist / steps;
 
     float prevAbove = 0.0f;

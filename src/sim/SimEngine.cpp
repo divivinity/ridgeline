@@ -1,5 +1,6 @@
 #include "SimEngine.h"
 #include <stdexcept>
+#include <algorithm>
 
 void SimEngine::setTerrain(TerrainModel terrain) {
     m_terrain = std::move(terrain);
@@ -18,18 +19,23 @@ void SimEngine::loadMaterials(const std::string& path) {
 }
 
 void SimEngine::solve() {
+    const glm::vec3 world = m_terrain.worldSize();
+    const float longestAxis = std::max(world.x, world.z);
+    auto adaptiveResolution = [longestAxis](float preferredM, int maxCellsPerAxis) {
+        return std::max(preferredM, longestAxis / static_cast<float>(maxCellsPerAxis));
+    };
     if (mode == Mode::Preview) {
-        m_fast.gridResolution = 30.0f;
+        m_fast.gridResolution = adaptiveResolution(30.0f, 240);
         m_field = m_fast.solve(m_terrain, m_antennas, m_materials);
     } else if (mode == Mode::Planner) {
-        m_full.gridResolution = 20.0f;
+        m_full.gridResolution = adaptiveResolution(20.0f, 360);
         m_full.enableGroundReflection = false;
         m_full.enableRain = false;
         m_full.enableFresnelPenalty = true;
         m_full.requiredFresnelClearance = 0.6f;
         m_field = m_full.solve(m_terrain, m_antennas, m_materials);
     } else {
-        m_full.gridResolution = 10.0f;
+        m_full.gridResolution = adaptiveResolution(10.0f, 600);
         m_full.enableGroundReflection = true;
         m_full.enableRain = true;
         m_full.enableFresnelPenalty = true;
