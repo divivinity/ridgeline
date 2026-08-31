@@ -9,6 +9,7 @@
 
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
+    std::string antennasPath = (argc > 2) ? argv[2] : "assets/antennas.json";
 
     RUN_TEST(test_default_material());
     RUN_TEST(test_loss_interpolation());
@@ -20,7 +21,7 @@ int main(int argc, char** argv) {
     RUN_TEST(test_rain_reduces_power());
     RUN_TEST(test_ridge_reduces_power_vs_flat());
     RUN_TEST(test_antenna_library_defaults());
-    RUN_TEST(test_antenna_library_load_json("assets/antennas.json"));
+    RUN_TEST(test_antenna_library_load_json(antennasPath));
     RUN_TEST(test_antenna_library_load_defaults());
     RUN_TEST(test_add_antenna());
     RUN_TEST(test_remove_antenna());
