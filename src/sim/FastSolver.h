@@ -7,7 +7,8 @@
 
 class FastSolver {
 public:
-    float gridResolution = 10.0f;  // metres per grid cell
+    float gridResolution = 10.0f;
+    ReceiverSettings receiver;
 
     FieldGrid solve(const TerrainModel& terrain,
                     const std::vector<Antenna>& antennas,
