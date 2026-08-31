@@ -136,10 +136,21 @@ static void test_fullsolver_produces_finite_grid() {
     MaterialLibrary lib;
     FullSolver solver;
     solver.rainRateMmH = 0.0f;
-    FieldGrid grid = solver.solve(terrain, {tx}, lib);
+    int progressCalls = 0;
+    int completedRows = -1;
+    int totalRows = -1;
+    FieldGrid grid = solver.solve(terrain, {tx}, lib,
+        [&](int completed, int total) {
+            ++progressCalls;
+            completedRows = completed;
+            totalRows = total;
+        });
 
     CHECK(grid.valid());
     CHECK(grid.width > 0 && grid.height > 0);
+    CHECK(progressCalls > 1);
+    CHECK(completedRows == grid.height);
+    CHECK(totalRows == grid.height);
 
     bool anyFinite = false;
     for (float v : grid.dbm)

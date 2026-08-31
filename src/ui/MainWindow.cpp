@@ -16,12 +16,18 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QEventLoop>
+#include <QFutureWatcher>
+#include <QProgressDialog>
+#include <QPointer>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QtConcurrent/QtConcurrentRun>
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -426,11 +432,60 @@ void MainWindow::onSolve() {
 
     m_statusLabel->setText("  Calculating terrain-aware coverage…");
     m_solveBtn->setEnabled(false);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    m_solveBtn->setText("Calculating…");
     QElapsedTimer timer;
     timer.start();
+
+    QProgressDialog progress(this);
+    progress.setWindowTitle("Calculating coverage");
+    progress.setLabelText("Preparing terrain paths…");
+    progress.setRange(0, 0);
+    progress.setCancelButton(nullptr);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setMinimumWidth(460);
+    progress.setStyleSheet(
+        "QProgressDialog { background: #0b1422; color: #dbeafe; }"
+        "QLabel { color: #cbd5e1; font-size: 12px; padding: 10px 4px; }"
+        "QProgressBar { background: #111c2e; border: 1px solid #2a3b52;"
+        " border-radius: 7px; color: #e2e8f0; min-height: 18px; text-align: center; }"
+        "QProgressBar::chunk { background: #14b8a6; border-radius: 6px; }"
+    );
+
+    QPointer<QProgressDialog> progressGuard(&progress);
+    const QString quality = m_modeCombo->currentText();
+    auto reportProgress = [progressGuard, quality, &timer](int completed, int total) {
+        QMetaObject::invokeMethod(qApp, [progressGuard, quality, completed, total, &timer]() {
+            if (!progressGuard) return;
+            if (progressGuard->maximum() != total) progressGuard->setRange(0, total);
+            progressGuard->setValue(completed);
+            const int percent = total > 0 ? completed * 100 / total : 0;
+            progressGuard->setLabelText(
+                QString("%1 analysis · %2% complete · %3 s elapsed")
+                    .arg(quality).arg(percent).arg(timer.elapsed() / 1000.0, 0, 'f', 1));
+        }, Qt::QueuedConnection);
+    };
+
+    std::exception_ptr solveError;
+    QFutureWatcher<void> watcher;
+    QEventLoop waitLoop;
+    connect(&watcher, &QFutureWatcher<void>::finished, &waitLoop, &QEventLoop::quit);
+    watcher.setFuture(QtConcurrent::run([this, reportProgress, &solveError]() {
+        try {
+            m_engine.solve(reportProgress);
+        } catch (...) {
+            solveError = std::current_exception();
+        }
+    }));
+    progress.show();
+    waitLoop.exec();
+    progress.close();
+
     try {
-        m_engine.solve();
+        if (solveError) std::rethrow_exception(solveError);
         m_viewport->refreshOverlays();
         const auto& grid = m_engine.fieldGrid();
         float minDbm = std::numeric_limits<float>::infinity();
@@ -449,8 +504,12 @@ void MainWindow::onSolve() {
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Coverage failed", e.what());
         m_statusLabel->setText("  Coverage calculation failed");
+    } catch (...) {
+        QMessageBox::critical(this, "Coverage failed", "The solver stopped unexpectedly.");
+        m_statusLabel->setText("  Coverage calculation failed");
     }
     m_solveBtn->setEnabled(true);
+    m_solveBtn->setText("Run coverage");
 }
 
 void MainWindow::onLoadTerrain() {
