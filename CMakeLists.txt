@@ -95,7 +95,9 @@ target_link_libraries(ridgeline_tests
     nlohmann_json::nlohmann_json
 )
 add_test(NAME physics_tests
-    COMMAND ridgeline_tests "${CMAKE_SOURCE_DIR}/assets/materials.json"
+    COMMAND ridgeline_tests
+        "${CMAKE_SOURCE_DIR}/assets/materials.json"
+        "${CMAKE_SOURCE_DIR}/assets/antennas.json"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # Diagnostic mirror of physics_tests. It includes the same test implementation
@@ -111,7 +113,9 @@ target_link_libraries(ridgeline_trace_tests
     nlohmann_json::nlohmann_json
 )
 add_test(NAME physics_trace_tests
-    COMMAND ridgeline_trace_tests "${CMAKE_SOURCE_DIR}/assets/materials.json"
+    COMMAND ridgeline_trace_tests
+        "${CMAKE_SOURCE_DIR}/assets/materials.json"
+        "${CMAKE_SOURCE_DIR}/assets/antennas.json"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_hgt_georef_tests
