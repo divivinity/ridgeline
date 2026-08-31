@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -176,7 +177,20 @@ void LocationDialog::search() {
     }
 
     QString endpoint = qEnvironmentVariable("RIDGELINE_GEOCODER_URL");
+    const bool usingPublicNominatim = endpoint.isEmpty();
     if (endpoint.isEmpty()) endpoint = "https://nominatim.openstreetmap.org/search";
+
+    // The public Nominatim service permits at most one request per second.
+    // Cached queries do not consume this budget, and custom geocoders are not
+    // forced to inherit the public service's policy.
+    static QElapsedTimer publicNominatimThrottle;
+    if (usingPublicNominatim && publicNominatimThrottle.isValid() &&
+        publicNominatimThrottle.elapsed() < 1000) {
+        const qint64 waitMs = 1000 - publicNominatimThrottle.elapsed();
+        setSearching(false, QString("Search rate limited · try again in %1 ms").arg(waitMs));
+        return;
+    }
+
     QUrl url(endpoint);
     QUrlQuery params;
     params.addQueryItem("q", query);
@@ -191,6 +205,7 @@ void LocationDialog::search() {
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setTransferTimeout(12000);
     setSearching(true, "Searching the world…");
+    if (usingPublicNominatim) publicNominatimThrottle.restart();
 
     QNetworkReply* reply = m_network->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, cacheKey]() {
