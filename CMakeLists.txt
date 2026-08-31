@@ -93,3 +93,17 @@ target_link_libraries(ridgeline_tests
 add_test(NAME physics_tests
     COMMAND ridgeline_tests "${CMAKE_SOURCE_DIR}/assets/materials.json"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(ridgeline_hgt_georef_tests
+    tests/test_hgt_georef.cpp
+    src/sim/TerrainModel.cpp
+    src/data/TerrainLoader.cpp
+)
+target_include_directories(ridgeline_hgt_georef_tests PRIVATE src)
+target_link_libraries(ridgeline_hgt_georef_tests
+    glm::glm
+    nlohmann_json::nlohmann_json
+)
+add_test(NAME hgt_georef_tests
+    COMMAND ridgeline_hgt_georef_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
