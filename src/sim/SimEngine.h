@@ -31,9 +31,12 @@ public:
     // Silent no-op on failure (default dry-soil always available).
     void loadMaterials(const std::string& path);
 
-    // Progress reports completed and total terrain rows. The callback may run
-    // on a worker thread when the UI launches an asynchronous solve.
-    void solve(const std::function<void(int, int)>& progress = {});
+    // Progress reports completed and total terrain rows. Both callbacks may run
+    // on a worker thread when the UI launches an asynchronous solve. Returning
+    // true from cancelled cooperatively aborts the solve without publishing a
+    // partial FieldGrid.
+    void solve(const std::function<void(int, int)>& progress = {},
+               const std::function<bool()>& cancelled = {});
 
     const FieldGrid&            fieldGrid() const { return m_field; }
     const TerrainModel&         terrain()   const { return m_terrain; }
