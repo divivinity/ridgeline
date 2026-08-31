@@ -1,21 +1,14 @@
 #include "GlobalTerrainLoader.h"
+#include "TileBatchDownloader.h"
 
-#include <QCoreApplication>
-#include <QDir>
-#include <QEventLoop>
 #include <QImage>
 #include <QNetworkAccessManager>
-#include <QNetworkDiskCache>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QStandardPaths>
-#include <QTimer>
 #include <QUrl>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -41,26 +34,6 @@ int wrapTileX(int tileX, int zoom) {
     int wrapped = tileX % tileCount;
     if (wrapped < 0) wrapped += tileCount;
     return wrapped;
-}
-
-QByteArray waitForReply(QNetworkReply* reply, QString& error) {
-    QEventLoop loop;
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    QObject::connect(&timeout, &QTimer::timeout, reply, &QNetworkReply::abort);
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    timeout.start(15000);
-    loop.exec();
-
-    QByteArray body;
-    if (reply->error() == QNetworkReply::NoError) {
-        body = reply->readAll();
-    } else {
-        error = reply->error() == QNetworkReply::OperationCanceledError
-            ? QStringLiteral("request timed out") : reply->errorString();
-    }
-    reply->deleteLater();
-    return body;
 }
 
 double decodeTerrarium(QRgb pixel) {
@@ -93,7 +66,9 @@ double bilinearHeight(const QImage& mosaic, double x, double y) {
 TerrainModel GlobalTerrainLoader::load(double centerLat,
                                        double centerLon,
                                        double extentKm,
-                                       int samplesPerAxis) {
+                                       int samplesPerAxis,
+                                       const ProgressCallback& progress,
+                                       const CancelCallback& cancel) {
     if (!std::isfinite(centerLat) || !std::isfinite(centerLon) ||
         centerLat <= -kMaxMercatorLat || centerLat >= kMaxMercatorLat ||
         centerLon < -180.0 || centerLon > 180.0 ||
@@ -111,8 +86,8 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     const double north = std::min( kMaxMercatorLat, centerLat + halfLatDeg);
 
     // Keep longitude bounds unwrapped. Web Mercator X is periodic, so a small
-    // analysis area centered near +/-180 degrees should continue smoothly past
-    // the date line instead of being truncated at the map edge.
+    // analysis area centered near +/-180 degrees continues smoothly through the
+    // date line while individual tile requests wrap back into provider indices.
     const double west = centerLon - halfLonDeg;
     const double east = centerLon + halfLonDeg;
     if (east <= west || north <= south)
@@ -140,15 +115,6 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
         tileMaxY = static_cast<int>(std::floor(se.y / kTileSize));
     }
 
-    QNetworkAccessManager network;
-    auto* cache = new QNetworkDiskCache(&network);
-    const QString cacheRoot = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
-                            + QStringLiteral("/terrain");
-    QDir().mkpath(cacheRoot);
-    cache->setCacheDirectory(cacheRoot);
-    cache->setMaximumCacheSize(256LL * 1024LL * 1024LL);
-    network.setCache(cache);
-
     QImage mosaic((tileMaxX - tileMinX + 1) * kTileSize,
                   (tileMaxY - tileMinY + 1) * kTileSize,
                   QImage::Format_ARGB32);
@@ -160,8 +126,12 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
             "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png");
     }
 
-    int loadedTiles = 0;
-    QString lastError;
+    std::vector<TileDownloadRequest> requests;
+    std::vector<std::pair<int, int>> tileCoords;
+    const int expectedTiles = (tileMaxX - tileMinX + 1) * (tileMaxY - tileMinY + 1);
+    requests.reserve(expectedTiles);
+    tileCoords.reserve(expectedTiles);
+
     for (int ty = tileMinY; ty <= tileMaxY; ++ty) {
         for (int tx = tileMinX; tx <= tileMaxX; ++tx) {
             const int requestX = wrapTileX(tx, zoom);
@@ -169,36 +139,52 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
             url.replace("{z}", QString::number(zoom));
             url.replace("{x}", QString::number(requestX));
             url.replace("{y}", QString::number(ty));
-            QNetworkRequest request{QUrl(url)};
-            request.setHeader(QNetworkRequest::UserAgentHeader,
-                              "Ridgeline-RF-Planner/1.0");
-            request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                                 QNetworkRequest::NoLessSafeRedirectPolicy);
-            QString error;
-            const QByteArray bytes = waitForReply(network.get(request), error);
-            QImage tile;
-            tile.loadFromData(bytes);
-            if (tile.isNull()) {
-                lastError = error.isEmpty() ? QStringLiteral("invalid terrain tile") : error;
-                continue;
-            }
-            tile = tile.convertToFormat(QImage::Format_ARGB32);
-            for (int row = 0; row < kTileSize; ++row) {
-                std::copy_n(reinterpret_cast<const QRgb*>(tile.constScanLine(row)),
-                            kTileSize,
-                            reinterpret_cast<QRgb*>(mosaic.scanLine(
-                                (ty - tileMinY) * kTileSize + row))
-                                + (tx - tileMinX) * kTileSize);
-            }
-            ++loadedTiles;
-            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            requests.push_back({
+                QUrl(url),
+                QStringLiteral("terrain/%1/%2/%3.png")
+                    .arg(zoom).arg(requestX).arg(ty)
+            });
+            tileCoords.emplace_back(tx, ty);
         }
     }
-    const int expectedTiles = (tileMaxX - tileMinX + 1) * (tileMaxY - tileMinY + 1);
+
+    QNetworkAccessManager network;
+    const auto results = TileBatchDownloader::download(
+        network, requests, 8, 15000, progress, cancel);
+    if (cancel && cancel())
+        throw std::runtime_error("Terrain load cancelled");
+
+    int loadedTiles = 0;
+    QString lastError;
+    for (size_t i = 0; i < results.size(); ++i) {
+        QImage tile;
+        tile.loadFromData(results[i].bytes);
+        if (tile.isNull()) {
+            lastError = results[i].error.isEmpty()
+                ? QStringLiteral("invalid terrain tile") : results[i].error;
+            continue;
+        }
+        tile = tile.convertToFormat(QImage::Format_ARGB32);
+        const int tx = tileCoords[i].first;
+        const int ty = tileCoords[i].second;
+        for (int row = 0; row < kTileSize; ++row) {
+            std::copy_n(reinterpret_cast<const QRgb*>(tile.constScanLine(row)),
+                        kTileSize,
+                        reinterpret_cast<QRgb*>(mosaic.scanLine(
+                            (ty - tileMinY) * kTileSize + row))
+                            + (tx - tileMinX) * kTileSize);
+        }
+        ++loadedTiles;
+    }
+
     if (loadedTiles != expectedTiles) {
+        const QString offlineHint = TileBatchDownloader::offlineMode()
+            ? QStringLiteral("; offline mode is enabled and one or more tiles are missing from %1")
+                  .arg(TileBatchDownloader::cacheRoot())
+            : QString{};
         throw std::runtime_error(QString(
-            "Could not load global elevation data (%1 of %2 tiles; %3)")
-            .arg(loadedTiles).arg(expectedTiles).arg(lastError).toStdString());
+            "Could not load global elevation data (%1 of %2 tiles; %3%4)")
+            .arg(loadedTiles).arg(expectedTiles).arg(lastError, offlineHint).toStdString());
     }
 
     TerrainModel terrain;
