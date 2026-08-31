@@ -96,10 +96,28 @@ static void test_scenario_geo_round_trip() {
     CHECK_NEAR(restored.heightAglM, a.heightAglM, 1e-5);
 }
 
+static void test_antimeridian_round_trip() {
+    TerrainModel t;
+    t.width = 101;
+    t.height = 11;
+    t.setCellSpacing(445.0f, 1111.0f);
+    t.setGeoReference(10.0, 179.8, 0.01, 0.004);
+    t.heights.assign(t.width * t.height, 0.0f);
+
+    const auto world = t.latLonToWorld(10.05, -179.9);
+    const auto ll = t.worldToLatLon(world.x, world.y);
+
+    CHECK(world.x > 0.0f);
+    CHECK(world.x < t.worldSize().x);
+    CHECK_NEAR(ll.latDeg, 10.05, 1e-7);
+    CHECK_NEAR(ll.lonDeg, -179.9, 1e-7);
+}
+
 int main() {
     test_engine_tracks_geo_metadata();
     test_engine_reprojects_across_terrain_resolution();
     test_scenario_geo_round_trip();
+    test_antimeridian_round_trip();
 
     if (g_fail == 0)
         std::cout << "Geospatial antenna tests passed.\n";
