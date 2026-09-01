@@ -1,4 +1,5 @@
 #include "ViewportWidget.h"
+#include "ScenarioTree.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QLabel>
@@ -16,6 +17,15 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+
+    // MainWindow already owns the authoritative source-selection path. Route
+    // map clicks through that same slot so subsequent edits target the source
+    // the user clicked rather than whatever happened to be selected before.
+    if (parent) {
+        QObject::connect(this, SIGNAL(antennaClicked(int)),
+                         parent, SLOT(onAntennaSelected(int)));
+    }
+
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
     m_heatmapLegend->show();
@@ -225,8 +235,11 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
                     emit terrainClicked(wx, wz);
             } else {
                 const int antennaIndex = antennaAtScreenPosition(e->pos());
-                if (antennaIndex >= 0)
+                if (antennaIndex >= 0) {
+                    if (auto* tree = window()->findChild<ScenarioTree*>())
+                        tree->selectRow(antennaIndex);
                     emit antennaClicked(antennaIndex);
+                }
             }
         }
     } else {
