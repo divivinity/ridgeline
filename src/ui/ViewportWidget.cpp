@@ -1,11 +1,12 @@
 #include "ViewportWidget.h"
 #include "ScenarioTree.h"
+#include "render/TerrainRaycast.h"
+#include <QApplication>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QLabel>
 #include <QCursor>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
@@ -222,13 +223,15 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e) {
     m_pressPos  = e->pos();
     m_lastMouse = e->pos();
     m_dragging  = true;
+    m_cameraDragging = false;
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton) {
         m_dragging = false;
         const QPoint delta = e->pos() - m_pressPos;
-        if (delta.manhattanLength() < 6) {
+        if (!m_cameraDragging &&
+            delta.manhattanLength() < QApplication::startDragDistance()) {
             if (m_placementActive) {
                 float wx = 0.0f, wz = 0.0f;
                 if (raycastTerrain(e->pos(), wx, wz))
@@ -245,6 +248,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
     } else {
         m_dragging = false;
     }
+    m_cameraDragging = false;
 }
 
 int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
@@ -357,7 +361,15 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
     }
 
     QPoint delta = e->pos() - m_lastMouse;
-    m_lastMouse  = e->pos();
+    if (!m_cameraDragging) {
+        if ((e->pos() - m_pressPos).manhattanLength() <
+            QApplication::startDragDistance()) {
+            return;
+        }
+        m_cameraDragging = true;
+        delta = e->pos() - m_pressPos;
+    }
+    m_lastMouse = e->pos();
     if (e->buttons() & Qt::LeftButton)
         m_camera.orbit(-delta.x() * 0.4f, delta.y() * 0.4f);
     else if (e->buttons() & Qt::MiddleButton)
@@ -419,62 +431,17 @@ void ViewportWidget::keyPressEvent(QKeyEvent* e) {
 
 bool ViewportWidget::raycastTerrain(const QPoint& screenPos,
                                     float& outWorldX, float& outWorldZ) const {
-    const TerrainModel& terrain = m_engine->terrain();
-    if (terrain.width < 2 || terrain.height < 2) return false;
-
+    if (!m_engine || width() <= 0 || height() <= 0) return false;
     const float aspect = static_cast<float>(width()) / static_cast<float>(height());
-    const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
-                                            glm::vec3(1.0f, kVertScale, 1.0f));
-    const glm::mat4 invMVP = glm::inverse(m_camera.mvp(aspect) * vertScale);
-
-    // Convert screen pixel to NDC
-    const float ndcX =  2.0f * screenPos.x() / static_cast<float>(width())  - 1.0f;
-    const float ndcY = -2.0f * screenPos.y() / static_cast<float>(height()) + 1.0f;
-
-    // Unproject near and far points
-    const glm::vec4 nearH = invMVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
-    const glm::vec4 farH  = invMVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
-    const glm::vec3 nearW = glm::vec3(nearH) / nearH.w;
-    const glm::vec3 farW  = glm::vec3(farH)  / farH.w;
-
-    const glm::vec3 rayDir = glm::normalize(farW - nearW);
-    if (std::abs(rayDir.y) < 1e-6f) return false;
-
-    // Ray-march against terrain (200 steps over the terrain diagonal)
-    const float terrainW = terrain.worldSize().x;
-    const float terrainH = terrain.worldSize().z;
-    const float maxDist  = 2.0f * std::sqrt(terrainW * terrainW + terrainH * terrainH
-                                            + 8000.0f * 8000.0f);
-    const int   steps    = 1024;
-    const float stepSize = maxDist / steps;
-
-    float prevAbove = 0.0f;
-    glm::vec3 prevP = nearW;
-    for (int i = 1; i <= steps; ++i) {
-        const float t = i * stepSize;
-        const glm::vec3 p = nearW + rayDir * t;
-
-        // Skip if outside terrain XZ bounds
-        if (p.x < 0.0f || p.x > terrainW || p.z < 0.0f || p.z > terrainH)
-            continue;
-
-        const int gx = std::clamp(static_cast<int>(p.x / terrain.metersPerCellX()),
-                                  0, terrain.width  - 1);
-        const int gz = std::clamp(static_cast<int>(p.z / terrain.metersPerCellZ()),
-                                  0, terrain.height - 1);
-        const float groundY = terrain.heightAt(gx, gz) * kVertScale;
-        const float above   = p.y - groundY;
-
-        if (i > 1 && above < 0.0f) {
-            // Crossed the surface — interpolate for better accuracy
-            const float frac = prevAbove / (prevAbove - above);
-            const glm::vec3 hit = prevP + (p - prevP) * frac;
-            outWorldX = hit.x;
-            outWorldZ = hit.z;
-            return true;
-        }
-        prevAbove = above;
-        prevP     = p;
+    glm::vec3 terrainPoint{0.0f};
+    if (!TerrainRaycast::fromScreen(m_engine->terrain(), m_camera.mvp(aspect),
+                                    width(), height(),
+                                    static_cast<float>(screenPos.x()),
+                                    static_cast<float>(screenPos.y()),
+                                    kVertScale, terrainPoint)) {
+        return false;
     }
-    return false;
+    outWorldX = terrainPoint.x;
+    outWorldZ = terrainPoint.z;
+    return true;
 }
