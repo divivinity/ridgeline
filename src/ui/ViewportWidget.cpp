@@ -8,12 +8,14 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     : QOpenGLWidget(parent), m_engine(engine)
 {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
     m_heatmapLegend->show();
@@ -215,16 +217,60 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e) {
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton) {
         m_dragging = false;
-        // Short click (not a drag) → place antenna
-        QPoint delta = e->pos() - m_pressPos;
-        if (m_placementActive && delta.manhattanLength() < 6) {
-            float wx = 0.0f, wz = 0.0f;
-            if (raycastTerrain(e->pos(), wx, wz))
-                emit terrainClicked(wx, wz);
+        const QPoint delta = e->pos() - m_pressPos;
+        if (delta.manhattanLength() < 6) {
+            if (m_placementActive) {
+                float wx = 0.0f, wz = 0.0f;
+                if (raycastTerrain(e->pos(), wx, wz))
+                    emit terrainClicked(wx, wz);
+            } else {
+                const int antennaIndex = antennaAtScreenPosition(e->pos());
+                if (antennaIndex >= 0)
+                    emit antennaClicked(antennaIndex);
+            }
         }
     } else {
         m_dragging = false;
     }
+}
+
+int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
+                                             float radiusPx) const {
+    if (!m_engine || width() <= 0 || height() <= 0) return -1;
+    const auto& antennas = m_engine->antennas();
+    if (antennas.empty()) return -1;
+
+    const float aspect = static_cast<float>(width()) / static_cast<float>(height());
+    const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
+                                            glm::vec3(1.0f, kVertScale, 1.0f));
+    const glm::mat4 mvp = m_camera.mvp(aspect) * vertScale;
+
+    const float radiusSq = radiusPx * radiusPx;
+    float bestDistanceSq = radiusSq;
+    int bestIndex = -1;
+
+    for (int i = 0; i < static_cast<int>(antennas.size()); ++i) {
+        const glm::vec4 clip = mvp * glm::vec4(antennas[i].position, 1.0f);
+        if (clip.w <= 0.0f) continue;
+
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        if (ndc.x < -1.05f || ndc.x > 1.05f ||
+            ndc.y < -1.05f || ndc.y > 1.05f ||
+            ndc.z < -1.0f || ndc.z > 1.0f) {
+            continue;
+        }
+
+        const float sx = (ndc.x * 0.5f + 0.5f) * static_cast<float>(width());
+        const float sy = (0.5f - ndc.y * 0.5f) * static_cast<float>(height());
+        const float dx = sx - static_cast<float>(screenPos.x());
+        const float dy = sy - static_cast<float>(screenPos.y());
+        const float distanceSq = dx * dx + dy * dy;
+        if (distanceSq <= bestDistanceSq) {
+            bestDistanceSq = distanceSq;
+            bestIndex = i;
+        }
+    }
+    return bestIndex;
 }
 
 void ViewportWidget::setBasemapOpacity(float opacity) {
@@ -289,7 +335,14 @@ void ViewportWidget::repositionHud() {
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
-    if (!m_dragging) return;
+    if (!m_dragging) {
+        if (!m_placementActive) {
+            setCursor(antennaAtScreenPosition(e->pos()) >= 0
+                ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        }
+        return;
+    }
+
     QPoint delta = e->pos() - m_lastMouse;
     m_lastMouse  = e->pos();
     if (e->buttons() & Qt::LeftButton)
