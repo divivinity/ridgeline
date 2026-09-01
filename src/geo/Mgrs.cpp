@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 
@@ -117,6 +119,76 @@ bool inverseUtm(int zone,
     return std::isfinite(latitudeDeg) && std::isfinite(longitudeDeg);
 }
 
+int utmZoneFor(double latitudeDeg, double longitudeDeg) {
+    int zone = static_cast<int>(std::floor((longitudeDeg + 180.0) / 6.0)) + 1;
+    zone = std::clamp(zone, 1, 60);
+    if (latitudeDeg >= 56.0 && latitudeDeg < 64.0 &&
+        longitudeDeg >= 3.0 && longitudeDeg < 12.0) {
+        zone = 32;
+    }
+    if (latitudeDeg >= 72.0 && latitudeDeg < 84.0) {
+        if (longitudeDeg >= 0.0 && longitudeDeg < 9.0) zone = 31;
+        else if (longitudeDeg < 21.0) zone = 33;
+        else if (longitudeDeg < 33.0) zone = 35;
+        else if (longitudeDeg < 42.0) zone = 37;
+    }
+    return zone;
+}
+
+bool forwardUtm(double latitudeDeg,
+                double longitudeDeg,
+                int zone,
+                double& eastingM,
+                double& northingM) {
+    if (latitudeDeg < -80.0 || latitudeDeg > 84.0 ||
+        longitudeDeg < -180.0 || longitudeDeg > 180.0 ||
+        zone < 1 || zone > 60) {
+        return false;
+    }
+
+    const double latitudeRad = latitudeDeg * kPi / 180.0;
+    const double longitudeRad = longitudeDeg * kPi / 180.0;
+    const double centralMeridianRad = (zone * 6.0 - 183.0) * kPi / 180.0;
+    const double eccentricityPrimeSq =
+        kWgs84EccentricitySq / (1.0 - kWgs84EccentricitySq);
+    const double sinLatitude = std::sin(latitudeRad);
+    const double cosLatitude = std::cos(latitudeRad);
+    const double tanLatitude = std::tan(latitudeRad);
+    const double n = kWgs84SemiMajorM /
+        std::sqrt(1.0 - kWgs84EccentricitySq * sinLatitude * sinLatitude);
+    const double t = tanLatitude * tanLatitude;
+    const double c = eccentricityPrimeSq * cosLatitude * cosLatitude;
+    const double a = cosLatitude * (longitudeRad - centralMeridianRad);
+
+    const double meridionalArc = kWgs84SemiMajorM *
+        ((1.0 - kWgs84EccentricitySq / 4.0
+          - 3.0 * std::pow(kWgs84EccentricitySq, 2.0) / 64.0
+          - 5.0 * std::pow(kWgs84EccentricitySq, 3.0) / 256.0) * latitudeRad
+         - (3.0 * kWgs84EccentricitySq / 8.0
+            + 3.0 * std::pow(kWgs84EccentricitySq, 2.0) / 32.0
+            + 45.0 * std::pow(kWgs84EccentricitySq, 3.0) / 1024.0) *
+           std::sin(2.0 * latitudeRad)
+         + (15.0 * std::pow(kWgs84EccentricitySq, 2.0) / 256.0
+            + 45.0 * std::pow(kWgs84EccentricitySq, 3.0) / 1024.0) *
+           std::sin(4.0 * latitudeRad)
+         - (35.0 * std::pow(kWgs84EccentricitySq, 3.0) / 3072.0) *
+           std::sin(6.0 * latitudeRad));
+
+    eastingM = kUtmScale * n *
+        (a + (1.0 - t + c) * std::pow(a, 3.0) / 6.0
+         + (5.0 - 18.0 * t + t * t + 72.0 * c
+            - 58.0 * eccentricityPrimeSq) * std::pow(a, 5.0) / 120.0)
+        + 500000.0;
+    northingM = kUtmScale *
+        (meridionalArc + n * tanLatitude *
+         (a * a / 2.0
+          + (5.0 - t + 9.0 * c + 4.0 * c * c) * std::pow(a, 4.0) / 24.0
+          + (61.0 - 58.0 * t + t * t + 600.0 * c
+             - 330.0 * eccentricityPrimeSq) * std::pow(a, 6.0) / 720.0));
+    if (latitudeDeg < 0.0) northingM += 10000000.0;
+    return std::isfinite(eastingM) && std::isfinite(northingM);
+}
+
 } // namespace
 
 bool mgrsToWgs84(const std::string& text,
@@ -214,5 +286,58 @@ bool mgrsToWgs84(const std::string& text,
     coordinate.latitudeDeg = latitude;
     coordinate.longitudeDeg = longitude;
     coordinate.precisionDigits = precision;
+    return true;
+}
+
+bool wgs84ToMgrs(double latitudeDeg,
+                 double longitudeDeg,
+                 int precisionDigits,
+                 std::string& mgrs,
+                 std::string& error) {
+    mgrs.clear();
+    error.clear();
+    if (!std::isfinite(latitudeDeg) || !std::isfinite(longitudeDeg) ||
+        latitudeDeg < -80.0 || latitudeDeg > 84.0 ||
+        longitudeDeg < -180.0 || longitudeDeg > 180.0) {
+        error = "WGS84 coordinate is outside the UTM MGRS latitude/longitude range.";
+        return false;
+    }
+    if (precisionDigits < 0 || precisionDigits > 5) {
+        error = "MGRS precision must be between 0 and 5 digits per axis.";
+        return false;
+    }
+
+    const int zone = utmZoneFor(latitudeDeg, longitudeDeg);
+    double eastingM = 0.0;
+    double northingM = 0.0;
+    if (!forwardUtm(latitudeDeg, longitudeDeg, zone, eastingM, northingM)) {
+        error = "Could not project the WGS84 coordinate into its UTM zone.";
+        return false;
+    }
+
+    const int bandIndex = std::clamp(
+        static_cast<int>(std::floor((latitudeDeg + 80.0) / 8.0)), 0, 19);
+    const int columnIndex = static_cast<int>(std::floor(eastingM / 100000.0)) - 1;
+    const int rowIndex = static_cast<int>(std::floor(northingM / 100000.0)) % 20;
+    if (columnIndex < 0 || columnIndex >= 8 || rowIndex < 0) {
+        error = "Projected coordinate does not map to a valid MGRS 100 km square.";
+        return false;
+    }
+
+    std::ostringstream stream;
+    stream << zone << kLatitudeBands[bandIndex]
+           << kColumnSets[(zone - 1) % 3][columnIndex]
+           << kRowSets[(zone - 1) % 2][rowIndex];
+    if (precisionDigits > 0) {
+        const int resolutionM = static_cast<int>(powerOfTen(5 - precisionDigits));
+        const int divisor = std::max(resolutionM, 1);
+        const int eastingDigits =
+            static_cast<int>(std::floor(std::fmod(eastingM, 100000.0))) / divisor;
+        const int northingDigits =
+            static_cast<int>(std::floor(std::fmod(northingM, 100000.0))) / divisor;
+        stream << std::setfill('0') << std::setw(precisionDigits) << eastingDigits
+               << std::setw(precisionDigits) << northingDigits;
+    }
+    mgrs = stream.str();
     return true;
 }

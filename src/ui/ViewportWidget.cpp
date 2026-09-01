@@ -1,5 +1,4 @@
 #include "ViewportWidget.h"
-#include "ScenarioTree.h"
 #include "render/TerrainRaycast.h"
 #include <QApplication>
 #include <QMouseEvent>
@@ -18,14 +17,6 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-
-    // MainWindow already owns the authoritative source-selection path. Route
-    // map clicks through that same slot so subsequent edits target the source
-    // the user clicked rather than whatever happened to be selected before.
-    if (parent) {
-        QObject::connect(this, SIGNAL(antennaClicked(int)),
-                         parent, SLOT(onAntennaSelected(int)));
-    }
 
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
@@ -224,12 +215,30 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e) {
     m_lastMouse = e->pos();
     m_dragging  = true;
     m_cameraDragging = false;
+    m_markerPressIndex = (e->button() == Qt::LeftButton && !m_placementActive)
+        ? antennaAtScreenPosition(e->pos()) : -1;
+    if (m_markerPressIndex >= 0) setCursor(Qt::ClosedHandCursor);
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton) {
         m_dragging = false;
         const QPoint delta = e->pos() - m_pressPos;
+        if (!m_placementActive && m_markerPressIndex >= 0) {
+            const int antennaIndex = m_markerPressIndex;
+            m_markerPressIndex = -1;
+            if (delta.manhattanLength() < QApplication::startDragDistance()) {
+                emit antennaClicked(antennaIndex);
+            } else {
+                float wx = 0.0f, wz = 0.0f;
+                if (raycastTerrain(e->pos(), wx, wz))
+                    emit antennaMoveRequested(antennaIndex, wx, wz);
+            }
+            m_cameraDragging = false;
+            setCursor(antennaAtScreenPosition(e->pos()) >= 0
+                ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            return;
+        }
         if (!m_cameraDragging &&
             delta.manhattanLength() < QApplication::startDragDistance()) {
             if (m_placementActive) {
@@ -239,8 +248,6 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
             } else {
                 const int antennaIndex = antennaAtScreenPosition(e->pos());
                 if (antennaIndex >= 0) {
-                    if (auto* tree = window()->findChild<ScenarioTree*>())
-                        tree->selectRow(antennaIndex);
                     emit antennaClicked(antennaIndex);
                 }
             }
@@ -248,6 +255,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
     } else {
         m_dragging = false;
     }
+    m_markerPressIndex = -1;
     m_cameraDragging = false;
 }
 
@@ -356,6 +364,14 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
         if (!m_placementActive) {
             setCursor(antennaAtScreenPosition(e->pos()) >= 0
                 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        }
+        return;
+    }
+
+    if (m_markerPressIndex >= 0 && (e->buttons() & Qt::LeftButton)) {
+        if ((e->pos() - m_pressPos).manhattanLength() >=
+            QApplication::startDragDistance()) {
+            setCursor(Qt::ClosedHandCursor);
         }
         return;
     }

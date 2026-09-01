@@ -17,9 +17,11 @@ public:
     explicit PropertiesPanel(QWidget* parent = nullptr);
     void setAntennaLibrary(const AntennaLibrary* lib);
     void load(const Antenna* antenna);
+    void setPositionSummary(const QString& summary);
 
 signals:
     void antennaChanged(Antenna updated);
+    void positionEditRequested();
 
 private slots:
     void onValueChanged();
@@ -49,6 +51,8 @@ private:
     QLabel*         m_patternLabel = nullptr;
     QLabel*         m_eirpLabel = nullptr;
     QLabel*         m_erpLabel = nullptr;
+    QLabel*         m_positionLabel = nullptr;
+    QPushButton*    m_editPositionButton = nullptr;
 
     const AntennaLibrary* m_lib = nullptr;
     bool                  m_loading = false;

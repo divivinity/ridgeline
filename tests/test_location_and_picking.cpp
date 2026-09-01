@@ -61,6 +61,34 @@ void testMgrsPrecisionAndValidation() {
     CHECK(!mgrsToWgs84("18SUJ123", coordinate, error));
 }
 
+void testWgs84MgrsEncodingAndRoundTrip() {
+    const struct Fixture {
+        double latitude;
+        double longitude;
+        const char* expected;
+    } fixtures[] = {
+        {38.8977, -77.0365, "18SUJ2339407395"},
+        {48.8582,   2.2945, "31UDQ4825111932"},
+        {-33.8688, 151.2093, "56HLH3436850948"},
+    };
+
+    for (const auto& fixture : fixtures) {
+        std::string encoded;
+        std::string error;
+        CHECK(wgs84ToMgrs(fixture.latitude, fixture.longitude, 5, encoded, error));
+        CHECK(encoded == fixture.expected);
+        MgrsCoordinate decoded;
+        CHECK(mgrsToWgs84(encoded, decoded, error));
+        CHECK_NEAR(decoded.latitudeDeg, fixture.latitude, 0.00002);
+        CHECK_NEAR(decoded.longitudeDeg, fixture.longitude, 0.00002);
+    }
+
+    std::string encoded;
+    std::string error;
+    CHECK(!wgs84ToMgrs(85.0, 0.0, 5, encoded, error));
+    CHECK(!error.empty());
+}
+
 TerrainModel makeSlopedTerrain() {
     TerrainModel terrain;
     terrain.width = 101;
@@ -135,6 +163,7 @@ void testScreenRayRejectsSkyOutsideTerrain() {
 int main() {
     testMgrsKnownLocations();
     testMgrsPrecisionAndValidation();
+    testWgs84MgrsEncodingAndRoundTrip();
     testScreenRayHitsRenderedTerrain();
     testScreenRayRejectsSkyOutsideTerrain();
     if (failures == 0)

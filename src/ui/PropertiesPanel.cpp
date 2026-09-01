@@ -79,6 +79,16 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
 
     m_eirpLabel = new QLabel();
     m_erpLabel = new QLabel();
+    m_positionLabel = new QLabel("—");
+    m_positionLabel->setObjectName("SourcePositionSummary");
+    m_positionLabel->setWordWrap(true);
+    m_positionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_positionLabel->setStyleSheet(
+        "color: #a5b4c8; font-family: monospace; font-size: 9px;");
+    m_editPositionButton = new QPushButton("Edit precise position…");
+    m_editPositionButton->setObjectName("EditSourcePositionButton");
+    m_editPositionButton->setToolTip(
+        "Move this source using map coordinates, latitude/longitude, or MGRS");
     const QString powerReadoutStyle =
         "color: #ccfbf1; font-family: monospace; font-size: 10px; font-weight: 600;";
     m_eirpLabel->setStyleSheet(powerReadoutStyle);
@@ -100,6 +110,8 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     basicForm->addRow("EIRP:", m_eirpLabel);
     basicForm->addRow("ERP:", m_erpLabel);
     basicForm->addRow("Height AGL:", m_heightSpin);
+    basicForm->addRow("Position:", m_positionLabel);
+    basicForm->addRow("", m_editPositionButton);
     basicForm->addRow("Role:", m_jammerCheck);
     formLayout->addLayout(basicForm);
 
@@ -185,6 +197,8 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
             this, &PropertiesPanel::onValueChanged);
     connect(m_importPatternButton, &QPushButton::clicked,
             this, &PropertiesPanel::onImportPattern);
+    connect(m_editPositionButton, &QPushButton::clicked,
+            this, &PropertiesPanel::positionEditRequested);
 
     updatePowerReadout();
     setMinimumWidth(250);
@@ -340,4 +354,8 @@ QDoubleSpinBox* PropertiesPanel::makeSpinBox(double min, double max,
         " background: #172338; border: none; }"
     );
     return sb;
+}
+
+void PropertiesPanel::setPositionSummary(const QString& summary) {
+    if (m_positionLabel) m_positionLabel->setText(summary);
 }
