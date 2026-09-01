@@ -5,6 +5,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QToolButton>
 #include "sim/Types.h"
 
 class AntennaLibrary;
@@ -26,7 +28,10 @@ private slots:
 
 private:
     QLabel*         m_noSelLabel  = nullptr;
+    QScrollArea*    m_scrollArea  = nullptr;
     QWidget*        m_form        = nullptr;
+    QWidget*        m_advancedPanel = nullptr;
+    QToolButton*    m_advancedToggle = nullptr;
     QComboBox*      m_typeCombo   = nullptr;
     QDoubleSpinBox* m_freqSpin    = nullptr;
     QDoubleSpinBox* m_powerSpin   = nullptr;
