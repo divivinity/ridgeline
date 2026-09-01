@@ -45,6 +45,7 @@ public:
 
 signals:
     void terrainClicked(float worldX, float worldZ);
+    void antennaClicked(int index);
     void basemapInfoChanged(QString provider, QString attribution, QString error);
     void placementCancelled();
 
@@ -84,6 +85,7 @@ private:
 
     void drawAntennaMarkers();
     void buildMarkers();
+    int antennaAtScreenPosition(const QPoint& screenPos, float radiusPx = 16.0f) const;
     bool raycastTerrain(const QPoint& screenPos,
                         float& outWorldX, float& outWorldZ) const;
     void updateMapHud();
