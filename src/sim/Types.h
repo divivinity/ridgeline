@@ -2,6 +2,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <algorithm>
+#include <limits>
 #include <glm/glm.hpp>
 
 struct ReceiverSettings {
@@ -53,6 +55,9 @@ struct FieldGrid {
     int   height   = 0;
     float cellSize = 10.0f;
     glm::vec2 originXZ{0.0f, 0.0f};
+    glm::vec2 maxXZ{
+        std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::infinity()};
 
     // Desired received signal remains the primary/backwards-compatible field.
     std::vector<float> dbm;
@@ -61,13 +66,24 @@ struct FieldGrid {
     std::vector<float> sinrDb;
     std::vector<float> jOverSDb;
     std::vector<float> fadeMarginDb;
+    std::vector<float> strongestDesiredDbm;
     std::vector<std::uint8_t> service;
+    // Winning contributors for result inspection. Indices refer to the
+    // scenario antenna vector; -1 means no in-band contributor was present.
+    std::vector<std::int32_t> servingSourceIndex;
+    std::vector<std::int32_t> strongestJammerIndex;
 
     float noiseFloorDbm = -120.0f;
     float receiverSensitivityDbm = -100.0f;
     float requiredSnrDb = 10.0f;
 
     float at(int x, int y) const { return dbm[y * width + x]; }
+    glm::vec2 cellCenter(int x, int z) const {
+        return {
+            std::min(originXZ.x + static_cast<float>(x) * cellSize, maxXZ.x),
+            std::min(originXZ.y + static_cast<float>(z) * cellSize, maxXZ.y)
+        };
+    }
     bool  valid() const { return !dbm.empty(); }
     std::size_t cellCount() const { return static_cast<std::size_t>(width) * height; }
 };

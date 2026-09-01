@@ -32,6 +32,8 @@ public:
     void setOverlayVisible(Overlay overlay, bool visible);
     void setBasemapOpacity(float opacity);
     void setPlacementMode(bool active, bool jammer = false);
+    void setAnalysisPoint(int sourceIndex, const glm::vec3& receiverPosition);
+    void clearAnalysisPoint();
     void setBasemapLoadCallbacks(BasemapOverlay::ProgressCallback progress,
                                  BasemapOverlay::CancelCallback cancel) {
         m_basemap.setLoadCallbacks(std::move(progress), std::move(cancel));
@@ -47,6 +49,7 @@ signals:
     void terrainClicked(float worldX, float worldZ);
     void antennaClicked(int index);
     void antennaMoveRequested(int index, float worldX, float worldZ);
+    void terrainInspected(float worldX, float worldZ);
     void basemapInfoChanged(QString provider, QString attribution, QString error);
     void placementCancelled();
 
@@ -83,6 +86,9 @@ private:
     bool m_placementActive = false;
     bool m_placingJammer = false;
     glm::mat4 m_lastMVP{1.0f};
+    bool m_analysisPointActive = false;
+    int m_analysisSourceIndex = -1;
+    glm::vec3 m_analysisReceiver{0.0f};
 
     static constexpr float kVertScale = 2.5f;
 

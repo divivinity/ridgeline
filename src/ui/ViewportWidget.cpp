@@ -112,7 +112,7 @@ void ViewportWidget::paintGL() {
     m_terrain.draw(m_lastMVP);
     if (m_basemap.visible)      m_basemap.draw(m_lastMVP);
     if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
-    if (m_losRay.visible)       m_losRay.draw(m_lastMVP);
+    m_losRay.draw(m_lastMVP);
     if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
     if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
     if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
@@ -127,12 +127,17 @@ void ViewportWidget::buildMarkers() {
     // Pack: x, y, z, r, g, b  per marker
     struct MarkerVert { float x, y, z, r, g, b; };
     std::vector<MarkerVert> verts;
-    verts.reserve(antennas.size());
+    verts.reserve(antennas.size() + (m_analysisPointActive ? 1 : 0));
     for (const auto& ant : antennas) {
         glm::vec3 col = ant.isJammer ? glm::vec3(1.0f, 0.2f, 0.2f)   // red
                                      : glm::vec3(0.0f, 0.9f, 1.0f);   // cyan
         verts.push_back({ ant.position.x, ant.position.y, ant.position.z,
                           col.r, col.g, col.b });
+    }
+    if (m_analysisPointActive) {
+        verts.push_back({m_analysisReceiver.x, m_analysisReceiver.y,
+                         m_analysisReceiver.z, 1.0f, 0.78f, 0.12f});
+        m_markerCount = static_cast<int>(antennas.size()) + 1;
     }
 
     glBindVertexArray(m_markerVAO);
@@ -171,8 +176,11 @@ void ViewportWidget::drawAntennaMarkers() {
 
 void ViewportWidget::refreshOverlays() {
     makeCurrent();
-    m_heatmap.update(m_engine->fieldGrid());
+    m_heatmap.update(m_engine->fieldGrid(), m_heatmap.metric());
     m_losRay.update(m_engine->antennas(), m_engine->terrain());
+    m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(),
+                         m_analysisSourceIndex,
+                         m_analysisPointActive ? &m_analysisReceiver : nullptr);
     m_antennaLobe.update(m_engine->antennas());
     m_jammerBubble.update(m_engine->antennas());
     m_fresnel.update(m_engine->antennas(), m_engine->terrain());
@@ -182,6 +190,8 @@ void ViewportWidget::refreshOverlays() {
 }
 
 void ViewportWidget::reloadTerrain() {
+    m_analysisPointActive = false;
+    m_analysisSourceIndex = -1;
     makeCurrent();
     m_terrain.destroy();
     m_basemap.destroy();
@@ -249,6 +259,10 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
                 const int antennaIndex = antennaAtScreenPosition(e->pos());
                 if (antennaIndex >= 0) {
                     emit antennaClicked(antennaIndex);
+                } else {
+                    float wx = 0.0f, wz = 0.0f;
+                    if (raycastTerrain(e->pos(), wx, wz))
+                        emit terrainInspected(wx, wz);
                 }
             }
         }
@@ -460,4 +474,28 @@ bool ViewportWidget::raycastTerrain(const QPoint& screenPos,
     outWorldX = terrainPoint.x;
     outWorldZ = terrainPoint.z;
     return true;
+}
+
+void ViewportWidget::setAnalysisPoint(int sourceIndex,
+                                      const glm::vec3& receiverPosition) {
+    m_analysisPointActive = true;
+    m_analysisSourceIndex = sourceIndex;
+    m_analysisReceiver = receiverPosition;
+    makeCurrent();
+    m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(),
+                         m_analysisSourceIndex, &m_analysisReceiver);
+    buildMarkers();
+    doneCurrent();
+    update();
+}
+
+void ViewportWidget::clearAnalysisPoint() {
+    if (!m_analysisPointActive) return;
+    m_analysisPointActive = false;
+    m_analysisSourceIndex = -1;
+    makeCurrent();
+    m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(), -1, nullptr);
+    buildMarkers();
+    doneCurrent();
+    update();
 }

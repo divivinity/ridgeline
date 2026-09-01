@@ -28,6 +28,12 @@ struct EdgeCandidate {
     float lossDb = 0.0f;
 };
 
+struct Contribution {
+    float frequencyMHz = 0.0f;
+    float powerMw = 0.0f;
+    int sourceIndex = -1;
+};
+
 } // namespace
 
 FieldGrid FullSolver::solve(const TerrainModel& terrain,
@@ -41,6 +47,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
     grid.width    = std::max(1, static_cast<int>(std::ceil(world.x / gridResolution)));
     grid.height   = std::max(1, static_cast<int>(std::ceil(world.z / gridResolution)));
     grid.originXZ = {gridResolution * 0.5f, gridResolution * 0.5f};
+    grid.maxXZ = {world.x, world.z};
     grid.dbm.assign(grid.width * grid.height, NEG_INF);
     RFModels::initializeMetrics(grid);
     if (progress) progress(0, grid.height);
@@ -54,19 +61,24 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
             if ((gx & 7) == 0 && cancelled && cancelled())
                 throw std::runtime_error("Coverage solve cancelled");
 
-            const float wx = gx * gridResolution + gridResolution * 0.5f;
-            const float wz = gz * gridResolution + gridResolution * 0.5f;
+            const glm::vec2 center = grid.cellCenter(gx, gz);
+            const float wx = center.x;
+            const float wz = center.y;
             const float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
             const glm::vec3 rx{wx, wy, wz};
 
             float strongestDesiredDbm = NEG_INF;
             float servingFrequencyMHz = 0.0f;
-            std::vector<std::pair<float, float>> desiredContributions;
-            std::vector<std::pair<float, float>> jammerContributions;
+            int servingSourceIndex = -1;
+            std::vector<Contribution> desiredContributions;
+            std::vector<Contribution> jammerContributions;
             desiredContributions.reserve(antennas.size());
             jammerContributions.reserve(antennas.size());
 
-            for (const auto& ant : antennas) {
+            for (int antennaIndex = 0;
+                 antennaIndex < static_cast<int>(antennas.size());
+                 ++antennaIndex) {
+                const auto& ant = antennas[antennaIndex];
                 if (cancelled && cancelled())
                     throw std::runtime_error("Coverage solve cancelled");
 
@@ -154,37 +166,47 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                 }
 
                 if (ant.isJammer) {
-                    jammerContributions.emplace_back(freq, pathMw);
+                    jammerContributions.push_back({freq, pathMw, antennaIndex});
                 } else {
-                    desiredContributions.emplace_back(freq, pathMw);
+                    desiredContributions.push_back({freq, pathMw, antennaIndex});
                     const float pathDbm = RFModels::mwToDbm(pathMw);
                     if (pathDbm > strongestDesiredDbm) {
                         strongestDesiredDbm = pathDbm;
                         servingFrequencyMHz = freq;
+                        servingSourceIndex = antennaIndex;
                     }
                 }
             }
 
             float desiredMw = 0.0f;
             float jammerMw = 0.0f;
+            float strongestJammerMw = 0.0f;
+            int strongestJammerIndex = -1;
             const float halfBandwidthMHz = std::max(receiver.bandwidthHz, 1.0f)
                                          / 2.0e6f;
             for (const auto& contribution : desiredContributions) {
                 if (!std::isfinite(strongestDesiredDbm) ||
-                    std::abs(contribution.first - servingFrequencyMHz) <= halfBandwidthMHz) {
-                    desiredMw += contribution.second;
+                    std::abs(contribution.frequencyMHz - servingFrequencyMHz) <= halfBandwidthMHz) {
+                    desiredMw += contribution.powerMw;
                 }
             }
             for (const auto& contribution : jammerContributions) {
                 if (!std::isfinite(strongestDesiredDbm) ||
-                    std::abs(contribution.first - servingFrequencyMHz) <= halfBandwidthMHz) {
-                    jammerMw += contribution.second;
+                    std::abs(contribution.frequencyMHz - servingFrequencyMHz) <= halfBandwidthMHz) {
+                    jammerMw += contribution.powerMw;
+                    if (contribution.powerMw > strongestJammerMw) {
+                        strongestJammerMw = contribution.powerMw;
+                        strongestJammerIndex = contribution.sourceIndex;
+                    }
                 }
             }
 
             const std::size_t index = static_cast<std::size_t>(gz) * grid.width + gx;
             grid.dbm[index] = RFModels::mwToDbm(desiredMw);
+            grid.strongestDesiredDbm[index] = strongestDesiredDbm;
             grid.jammerDbm[index] = RFModels::mwToDbm(jammerMw);
+            grid.servingSourceIndex[index] = servingSourceIndex;
+            grid.strongestJammerIndex[index] = strongestJammerIndex;
         }
         if (progress) progress(gz + 1, grid.height);
     }

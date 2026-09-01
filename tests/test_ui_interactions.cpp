@@ -2,7 +2,9 @@
 #include "ui/LocationDialog.h"
 #include "ui/PropertiesPanel.h"
 #include "ui/SourcePositionDialog.h"
+#include "ui/PointAnalysisPanel.h"
 #include "sim/TerrainModel.h"
+#include "data/Exporter.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -11,6 +13,7 @@
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QLineEdit>
+#include <QLabel>
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPushButton>
@@ -19,7 +22,9 @@
 #include <QToolButton>
 
 #include <cmath>
+#include <cstdio>
 #include <functional>
+#include <fstream>
 #include <iostream>
 
 namespace {
@@ -128,6 +133,79 @@ void testPreciseSourcePositionDialog() {
     CHECK(std::abs(dialog.worldZ() - expected.y) < 0.1f);
 }
 
+void testPointAnalysisPanelShowsExplanation() {
+    PointAnalysisPanel panel;
+    PointAnalysisResult analysis;
+    analysis.valid = true;
+    analysis.inService = false;
+    analysis.servingSourceIndex = 0;
+    analysis.desiredDbm = -104.5f;
+    analysis.jammerDbm = -98.0f;
+    analysis.snrDb = 20.0f;
+    analysis.sinrDb = -6.6f;
+    analysis.fadeMarginDb = -4.5f;
+    analysis.distanceM = 2400.0f;
+    analysis.fresnelClearanceRatio = 0.42f;
+    analysis.losStatus = TerrainModel::LOSStatus::Clear;
+    analysis.explanations = {"SINR is below the requirement.",
+                             "The Fresnel zone is obstructed."};
+    analysis.profileDistanceM = {0.0f, 1200.0f, 2400.0f};
+    analysis.terrainElevationM = {100.0f, 125.0f, 100.0f};
+    analysis.lineOfSightElevationM = {130.0f, 125.0f, 120.0f};
+    analysis.fresnel60LowerElevationM = {130.0f, 115.0f, 120.0f};
+    panel.setAnalysis(analysis, "35.0°, -80.0°", "Emitter 1 · 450 MHz", "Jammer 1");
+
+    auto* result = panel.findChild<QLabel*>("PointServiceResult");
+    auto* serving = panel.findChild<QLabel*>("PointServingSource");
+    auto* signal = panel.findChild<QLabel*>("PointSignalMetric");
+    auto* explanation = panel.findChild<QLabel*>("PointExplanation");
+    CHECK(result && serving && signal && explanation);
+    if (!result || !serving || !signal || !explanation) return;
+    CHECK(result->text() == "OUT OF SERVICE");
+    CHECK(serving->text().contains("Emitter 1"));
+    CHECK(signal->text().contains("-104.5"));
+    CHECK(explanation->text().contains("SINR"));
+
+    analysis.servingSourceIndex = -1;
+    analysis.strongestJammerIndex = 0;
+    analysis.explanations = {"No emitter reaches this result cell.",
+                             "An in-band jammer is present."};
+    analysis.profileDistanceM.clear();
+    analysis.terrainElevationM.clear();
+    analysis.lineOfSightElevationM.clear();
+    analysis.fresnel60LowerElevationM.clear();
+    panel.setAnalysis(analysis, "35.0°, -80.0°", {}, "Jammer 1 · 450 MHz");
+    auto* path = panel.findChild<QLabel*>("PointPathSummary");
+    CHECK(path && path->text().contains("Jammer 1"));
+    panel.clear();
+    CHECK(result->text() == "No result selected");
+    CHECK(signal->text() == "—");
+    CHECK(explanation->text().contains("Run coverage"));
+}
+
+void testCsvUsesClampedEdgeCellCenter() {
+    FieldGrid grid;
+    grid.width = 2;
+    grid.height = 1;
+    grid.cellSize = 60.0f;
+    grid.originXZ = {30.0f, 30.0f};
+    grid.maxXZ = {80.0f, 30.0f};
+    grid.dbm = {-70.0f, -80.0f};
+    const std::string path = "test_edge_cell_export.csv";
+    CHECK(Exporter::exportCsv(grid, path));
+    std::ifstream input(path);
+    std::string header;
+    std::string first;
+    std::string second;
+    std::getline(input, header);
+    std::getline(input, first);
+    std::getline(input, second);
+    input.close();
+    std::remove(path.c_str());
+    CHECK(first.rfind("30.000,30.000,", 0) == 0);
+    CHECK(second.rfind("80.000,30.000,", 0) == 0);
+}
+
 void testMgrsDialogInput() {
     LocationDialog dialog(0.0, 0.0, 10.0);
     auto* format = dialog.findChild<QComboBox*>("CoordinateFormatCombo");
@@ -202,6 +280,8 @@ int main(int argc, char** argv) {
 
     testAdvancedPanelRemainsEditableAndCollapsible();
     testPreciseSourcePositionDialog();
+    testPointAnalysisPanelShowsExplanation();
+    testCsvUsesClampedEdgeCellCenter();
     testMgrsDialogInput();
     testDebouncedCustomGeocoderSuggestions();
 

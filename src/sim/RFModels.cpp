@@ -131,7 +131,10 @@ void initializeMetrics(FieldGrid& grid) {
     grid.sinrDb.assign(n, kNegInf);
     grid.jOverSDb.assign(n, kNegInf);
     grid.fadeMarginDb.assign(n, kNegInf);
+    grid.strongestDesiredDbm.assign(n, kNegInf);
     grid.service.assign(n, 0);
+    grid.servingSourceIndex.assign(n, -1);
+    grid.strongestJammerIndex.assign(n, -1);
 }
 
 void finalizeMetrics(FieldGrid& grid, const ReceiverSettings& receiver) {

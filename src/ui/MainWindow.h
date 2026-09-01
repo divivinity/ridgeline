@@ -10,6 +10,7 @@
 #include "PropertiesPanel.h"
 #include "OverlayToolbar.h"
 #include "BottomBar.h"
+#include "PointAnalysisPanel.h"
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
 
@@ -38,6 +39,7 @@ private slots:
     void onEditAntennaPosition();
     void onAntennaMoved(int index, float worldX, float worldZ);
     void onTerrainClicked(float worldX, float worldZ);
+    void onTerrainInspected(float worldX, float worldZ);
 
 private:
     SimEngine        m_engine;
@@ -48,6 +50,8 @@ private:
     PropertiesPanel* m_propsPanel = nullptr;
     OverlayToolbar*  m_overlayBar = nullptr;
     BottomBar*       m_bottomBar = nullptr;
+    PointAnalysisPanel* m_pointPanel = nullptr;
+    QDockWidget*     m_pointDock = nullptr;
     QLabel*          m_statusLabel = nullptr;
     QLabel*          m_locationLabel = nullptr;
     QPushButton*     m_solveBtn = nullptr;

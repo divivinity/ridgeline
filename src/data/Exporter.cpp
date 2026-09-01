@@ -74,9 +74,10 @@ bool Exporter::exportCsv(const FieldGrid& grid, const TerrainModel& terrain,
     f << "desired_dbm,jammer_dbm,snr_db,sinr_db,j_over_s_db,fade_margin_db,in_service\n";
 
     for (int y = 0; y < grid.height; ++y) {
-        const float z_m = grid.originXZ.y + static_cast<float>(y) * grid.cellSize;
         for (int x = 0; x < grid.width; ++x) {
-            const float x_m = grid.originXZ.x + static_cast<float>(x) * grid.cellSize;
+            const glm::vec2 center = grid.cellCenter(x, y);
+            const float x_m = center.x;
+            const float z_m = center.y;
             const std::size_t index = static_cast<std::size_t>(y) * grid.width + x;
             f << std::fixed << std::setprecision(3) << x_m << ',' << z_m << ',';
             if (terrain.hasGeoReference()) {
