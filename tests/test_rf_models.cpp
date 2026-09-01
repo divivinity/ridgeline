@@ -1,6 +1,7 @@
 #include "sim/RFModels.h"
 #include "sim/ItmPropagation.h"
 #include "sim/FastSolver.h"
+#include "sim/FullSolver.h"
 #include "sim/MaterialLibrary.h"
 #include "data/AntennaPatternIO.h"
 #include "data/ScenarioIO.h"
@@ -113,6 +114,54 @@ void testFastSolverMetrics() {
     CHECK(found);
 }
 
+void testFullSolverBandwidthFiltering() {
+    TerrainModel terrain = flatTerrain(31, 31, 20.0f);
+    MaterialLibrary materials;
+    FullSolver solver;
+    solver.gridResolution = 60.0f;
+    solver.enableItm = false;
+    solver.enableGroundReflection = false;
+    solver.enableRain = false;
+    solver.enableFresnelPenalty = false;
+    solver.receiver.bandwidthHz = 25000.0f;
+    solver.receiver.sensitivityDbm = -140.0f;
+
+    Antenna desired;
+    desired.position = {300.0f, 20.0f, 300.0f};
+    desired.powerW = 10.0f;
+    desired.frequencyMHz = 450.0f;
+
+    Antenna jammer = desired;
+    jammer.position = {100.0f, 20.0f, 300.0f};
+    jammer.powerW = 10.0f;
+    jammer.isJammer = true;
+    jammer.frequencyMHz = 451.0f;
+
+    const FieldGrid outOfBand = solver.solve(terrain, {desired, jammer}, materials);
+    bool sawDesired = false;
+    bool sawOutOfBandJammer = false;
+    for (std::size_t i = 0; i < outOfBand.dbm.size(); ++i) {
+        sawDesired = sawDesired || std::isfinite(outOfBand.dbm[i]);
+        sawOutOfBandJammer = sawOutOfBandJammer || std::isfinite(outOfBand.jammerDbm[i]);
+    }
+    CHECK(sawDesired);
+    CHECK(!sawOutOfBandJammer);
+
+    jammer.frequencyMHz = 450.005f; // 5 kHz offset, inside a 25 kHz receiver.
+    const FieldGrid inBand = solver.solve(terrain, {desired, jammer}, materials);
+    bool sawInBandJammer = false;
+    bool sawSinrPenalty = false;
+    for (std::size_t i = 0; i < inBand.dbm.size(); ++i) {
+        if (std::isfinite(inBand.jammerDbm[i])) sawInBandJammer = true;
+        if (std::isfinite(inBand.sinrDb[i]) && std::isfinite(inBand.snrDb[i]) &&
+            inBand.sinrDb[i] < inBand.snrDb[i] - 0.1f) {
+            sawSinrPenalty = true;
+        }
+    }
+    CHECK(sawInBandJammer);
+    CHECK(sawSinrPenalty);
+}
+
 void testItmAdapter() {
     TerrainModel terrain = flatTerrain(1001, 2, 10.0f);
     MaterialLibrary materials;
@@ -173,6 +222,7 @@ int main() {
     testDirectionalGainAndPolarization();
     testPatternImport();
     testFastSolverMetrics();
+    testFullSolverBandwidthFiltering();
     testItmAdapter();
     testScenarioV4RoundTrip();
     if (failures == 0) std::cout << "RF model tests passed.\n";
