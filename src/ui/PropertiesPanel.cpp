@@ -4,10 +4,11 @@
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
-#include <QToolButton>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QFrame>
+#include <QSizePolicy>
 #include <algorithm>
 #include <cmath>
 
@@ -17,24 +18,40 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     outerLayout->setSpacing(10);
 
     auto* title = new QLabel("EMITTER SETTINGS");
-    title->setStyleSheet("color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+    title->setStyleSheet(
+        "color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
     outerLayout->addWidget(title);
-    auto* help = new QLabel("Tune the selected source. Direction, feed loss, polarization and measured patterns are available under Advanced.");
+
+    auto* help = new QLabel(
+        "Tune the selected source. Direction, feed loss, polarization and measured patterns are available under Advanced.");
     help->setWordWrap(true);
     help->setStyleSheet("color: #64748b; font-size: 10px;");
     outerLayout->addWidget(help);
 
-    m_noSelLabel = new QLabel("Select an emitter or jammer from the list.");
+    m_noSelLabel = new QLabel("Select an emitter or jammer from the list, or click one in the map.");
     m_noSelLabel->setWordWrap(true);
     m_noSelLabel->setAlignment(Qt::AlignCenter);
-    m_noSelLabel->setStyleSheet("color: #64748b; font-size: 11px; padding: 24px 8px;");
-    outerLayout->addWidget(m_noSelLabel);
+    m_noSelLabel->setStyleSheet(
+        "color: #64748b; font-size: 11px; padding: 24px 8px;");
+    outerLayout->addWidget(m_noSelLabel, 1);
+
+    m_scrollArea = new QScrollArea(this);
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_scrollArea->setStyleSheet(
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollBar:vertical { background: #0b1422; width: 8px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #334155; border-radius: 4px; min-height: 24px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+    );
 
     m_form = new QWidget();
-    auto* form = new QFormLayout(m_form);
-    form->setContentsMargins(0, 6, 0, 0);
-    form->setSpacing(10);
-    form->setLabelAlignment(Qt::AlignRight);
+    auto* formLayout = new QVBoxLayout(m_form);
+    formLayout->setContentsMargins(0, 4, 4, 4);
+    formLayout->setSpacing(8);
 
     m_freqSpin   = makeSpinBox(1.0, 20000.0, 1.0, " MHz");
     m_powerSpin  = makeSpinBox(0.001, 100000.0, 1.0, " W");
@@ -62,50 +79,63 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
         "color: #ccfbf1; font-family: monospace; font-size: 10px; font-weight: 600;";
     m_eirpLabel->setStyleSheet(powerReadoutStyle);
     m_erpLabel->setStyleSheet(powerReadoutStyle);
-    m_eirpLabel->setToolTip("Boresight effective isotropic radiated power: transmitter power + antenna gain − cable/feed loss.");
-    m_erpLabel->setToolTip("Boresight effective radiated power referenced to a half-wave dipole (ERP = EIRP − 2.15 dB).");
+    m_eirpLabel->setWordWrap(true);
+    m_erpLabel->setWordWrap(true);
+    m_eirpLabel->setToolTip(
+        "Boresight effective isotropic radiated power: transmitter power + antenna gain − cable/feed loss.");
+    m_erpLabel->setToolTip(
+        "Boresight effective radiated power referenced to a half-wave dipole (ERP = EIRP − 2.15 dB).");
 
-    form->addRow("Type:", m_typeCombo);
-    form->addRow("Frequency:", m_freqSpin);
-    form->addRow("Power:", m_powerSpin);
-    form->addRow("Gain:", m_gainSpin);
-    form->addRow("EIRP:", m_eirpLabel);
-    form->addRow("ERP:", m_erpLabel);
-    form->addRow("Height AGL:", m_heightSpin);
-    form->addRow("Role:", m_jammerCheck);
+    auto* basicForm = new QFormLayout();
+    basicForm->setContentsMargins(0, 0, 0, 0);
+    basicForm->setSpacing(10);
+    basicForm->setLabelAlignment(Qt::AlignRight);
+    basicForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    basicForm->addRow("Frequency:", m_freqSpin);
+    basicForm->addRow("Power:", m_powerSpin);
+    basicForm->addRow("EIRP:", m_eirpLabel);
+    basicForm->addRow("ERP:", m_erpLabel);
+    basicForm->addRow("Height AGL:", m_heightSpin);
+    basicForm->addRow("Role:", m_jammerCheck);
+    formLayout->addLayout(basicForm);
 
-    auto* advanced = new QToolButton();
-    advanced->setText("Advanced antenna settings");
-    advanced->setCheckable(true);
-    advanced->setArrowType(Qt::RightArrow);
-    advanced->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    form->addRow(advanced);
+    m_advancedToggle = new QToolButton();
+    m_advancedToggle->setText("Advanced antenna settings");
+    m_advancedToggle->setCheckable(true);
+    m_advancedToggle->setArrowType(Qt::RightArrow);
+    m_advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_advancedToggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    formLayout->addWidget(m_advancedToggle);
 
-    form->addRow("Azimuth:", m_azimuthSpin);
-    form->addRow("Downtilt:", m_downtiltSpin);
-    form->addRow("H beamwidth:", m_hBeamSpin);
-    form->addRow("V beamwidth:", m_vBeamSpin);
-    form->addRow("Front/back:", m_frontBackSpin);
-    form->addRow("Cable loss:", m_cableLossSpin);
-    form->addRow("Polarization:", m_polarizationCombo);
-    form->addRow("Measured pattern:", m_importPatternButton);
-    form->addRow("", m_patternLabel);
+    m_advancedPanel = new QWidget(m_form);
+    auto* advancedForm = new QFormLayout(m_advancedPanel);
+    advancedForm->setContentsMargins(0, 2, 0, 0);
+    advancedForm->setSpacing(10);
+    advancedForm->setLabelAlignment(Qt::AlignRight);
+    advancedForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    advancedForm->addRow("Type:", m_typeCombo);
+    advancedForm->addRow("Gain:", m_gainSpin);
+    advancedForm->addRow("Azimuth:", m_azimuthSpin);
+    advancedForm->addRow("Downtilt:", m_downtiltSpin);
+    advancedForm->addRow("H beamwidth:", m_hBeamSpin);
+    advancedForm->addRow("V beamwidth:", m_vBeamSpin);
+    advancedForm->addRow("Front/back:", m_frontBackSpin);
+    advancedForm->addRow("Cable loss:", m_cableLossSpin);
+    advancedForm->addRow("Polarization:", m_polarizationCombo);
+    advancedForm->addRow("Measured pattern:", m_importPatternButton);
+    advancedForm->addRow("", m_patternLabel);
+    m_advancedPanel->hide();
+    formLayout->addWidget(m_advancedPanel);
+    formLayout->addStretch();
 
-    const QList<QWidget*> advancedWidgets = {
-        m_typeCombo, m_gainSpin, m_azimuthSpin, m_downtiltSpin,
-        m_hBeamSpin, m_vBeamSpin, m_frontBackSpin, m_cableLossSpin,
-        m_polarizationCombo, m_importPatternButton, m_patternLabel
-    };
-    for (QWidget* widget : advancedWidgets) form->setRowVisible(widget, false);
-    connect(advanced, &QToolButton::toggled, this,
-            [form, advanced, advancedWidgets](bool shown) {
-        advanced->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
-        for (QWidget* widget : advancedWidgets) form->setRowVisible(widget, shown);
+    connect(m_advancedToggle, &QToolButton::toggled, this, [this](bool shown) {
+        m_advancedToggle->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
+        m_advancedPanel->setVisible(shown);
     });
 
-    outerLayout->addWidget(m_form);
-    outerLayout->addStretch();
-    m_form->hide();
+    m_scrollArea->setWidget(m_form);
+    outerLayout->addWidget(m_scrollArea, 1);
+    m_scrollArea->hide();
 
     connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &PropertiesPanel::onTypeChanged);
@@ -141,7 +171,7 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     setMaximumWidth(380);
     setStyleSheet(
         "QWidget { background: #0b1422; }"
-        "QToolButton { color: #94a3b8; border: none; padding: 6px 2px; }"
+        "QToolButton { color: #94a3b8; border: none; padding: 6px 2px; text-align: left; }"
         "QToolButton:hover { color: #e2e8f0; }"
         "QPushButton { background: #111c2e; border: 1px solid #2a3b52; border-radius: 6px; padding: 5px; }"
     );
@@ -155,7 +185,7 @@ void PropertiesPanel::setAntennaLibrary(const AntennaLibrary* lib) {
     for (const auto& t : lib->types())
         m_typeCombo->addItem(QString::fromStdString(t.name));
     m_loading = false;
-    if (m_form->isVisible()) load(&m_current);
+    if (m_scrollArea && m_scrollArea->isVisible()) load(&m_current);
 }
 
 void PropertiesPanel::onTypeChanged(int index) {
@@ -180,10 +210,11 @@ void PropertiesPanel::onTypeChanged(int index) {
 
 void PropertiesPanel::load(const Antenna* antenna) {
     if (!antenna) {
-        m_form->hide();
+        if (m_scrollArea) m_scrollArea->hide();
         m_noSelLabel->show();
         return;
     }
+
     m_current = *antenna;
     m_loading = true;
     m_freqSpin->setValue(antenna->frequencyMHz);
@@ -213,13 +244,14 @@ void PropertiesPanel::load(const Antenna* antenna) {
         }
         m_typeCombo->setCurrentIndex(found >= 0 ? found : 0);
     }
+
     m_patternLabel->setText(antenna->patternSource.empty()
         ? QStringLiteral("Analytic pattern")
         : QFileInfo(QString::fromStdString(antenna->patternSource)).fileName());
     m_loading = false;
     updatePowerReadout();
     m_noSelLabel->hide();
-    m_form->show();
+    m_scrollArea->show();
 }
 
 void PropertiesPanel::onValueChanged() {
