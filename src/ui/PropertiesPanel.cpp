@@ -8,6 +8,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <algorithm>
+#include <cmath>
 
 PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* outerLayout = new QVBoxLayout(this);
@@ -54,10 +56,21 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     m_patternLabel->setWordWrap(true);
     m_patternLabel->setStyleSheet("color: #64748b; font-size: 9px;");
 
+    m_eirpLabel = new QLabel();
+    m_erpLabel = new QLabel();
+    const QString powerReadoutStyle =
+        "color: #ccfbf1; font-family: monospace; font-size: 10px; font-weight: 600;";
+    m_eirpLabel->setStyleSheet(powerReadoutStyle);
+    m_erpLabel->setStyleSheet(powerReadoutStyle);
+    m_eirpLabel->setToolTip("Boresight effective isotropic radiated power: transmitter power + antenna gain − cable/feed loss.");
+    m_erpLabel->setToolTip("Boresight effective radiated power referenced to a half-wave dipole (ERP = EIRP − 2.15 dB).");
+
     form->addRow("Type:", m_typeCombo);
     form->addRow("Frequency:", m_freqSpin);
     form->addRow("Power:", m_powerSpin);
     form->addRow("Gain:", m_gainSpin);
+    form->addRow("EIRP:", m_eirpLabel);
+    form->addRow("ERP:", m_erpLabel);
     form->addRow("Height AGL:", m_heightSpin);
     form->addRow("Role:", m_jammerCheck);
 
@@ -123,6 +136,7 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     connect(m_importPatternButton, &QPushButton::clicked,
             this, &PropertiesPanel::onImportPattern);
 
+    updatePowerReadout();
     setMinimumWidth(250);
     setMaximumWidth(380);
     setStyleSheet(
@@ -160,6 +174,7 @@ void PropertiesPanel::onTypeChanged(int index) {
     m_hBeamSpin->setValue(type.beamwidthDeg);
     m_patternLabel->setText("Analytic pattern");
     m_loading = false;
+    updatePowerReadout();
     emit antennaChanged(m_current);
 }
 
@@ -202,6 +217,7 @@ void PropertiesPanel::load(const Antenna* antenna) {
         ? QStringLiteral("Analytic pattern")
         : QFileInfo(QString::fromStdString(antenna->patternSource)).fileName());
     m_loading = false;
+    updatePowerReadout();
     m_noSelLabel->hide();
     m_form->show();
 }
@@ -220,6 +236,7 @@ void PropertiesPanel::onValueChanged() {
     m_current.cableLossDb = static_cast<float>(m_cableLossSpin->value());
     m_current.polarization = m_polarizationCombo->currentText().toStdString();
     m_current.isJammer = m_jammerCheck->isChecked();
+    updatePowerReadout();
     emit antennaChanged(m_current);
 }
 
@@ -234,6 +251,25 @@ void PropertiesPanel::onImportPattern() {
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Pattern import failed", e.what());
     }
+}
+
+void PropertiesPanel::updatePowerReadout() {
+    if (!m_eirpLabel || !m_erpLabel || !m_powerSpin || !m_gainSpin || !m_cableLossSpin)
+        return;
+
+    const double powerW = std::max(m_powerSpin->value(), 1.0e-12);
+    const double txPowerDbm = 10.0 * std::log10(powerW * 1000.0);
+    const double eirpDbm = txPowerDbm + m_gainSpin->value() - m_cableLossSpin->value();
+    const double erpDbm = eirpDbm - 2.15;
+    const double eirpW = std::pow(10.0, (eirpDbm - 30.0) / 10.0);
+    const double erpW = std::pow(10.0, (erpDbm - 30.0) / 10.0);
+
+    m_eirpLabel->setText(QString("%1 dBm  ·  %2 W")
+        .arg(eirpDbm, 0, 'f', 1)
+        .arg(eirpW, 0, 'f', eirpW < 10.0 ? 2 : 1));
+    m_erpLabel->setText(QString("%1 dBm  ·  %2 W")
+        .arg(erpDbm, 0, 'f', 1)
+        .arg(erpW, 0, 'f', erpW < 10.0 ? 2 : 1));
 }
 
 QDoubleSpinBox* PropertiesPanel::makeSpinBox(double min, double max,
