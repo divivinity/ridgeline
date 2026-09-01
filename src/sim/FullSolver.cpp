@@ -6,6 +6,7 @@
 #include <limits>
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -58,8 +59,12 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
             const float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
             const glm::vec3 rx{wx, wy, wz};
 
-            float desiredMw = 0.0f;
-            float jammerMw = 0.0f;
+            float strongestDesiredDbm = NEG_INF;
+            float servingFrequencyMHz = 0.0f;
+            std::vector<std::pair<float, float>> desiredContributions;
+            std::vector<std::pair<float, float>> jammerContributions;
+            desiredContributions.reserve(antennas.size());
+            jammerContributions.reserve(antennas.size());
 
             for (const auto& ant : antennas) {
                 if (cancelled && cancelled())
@@ -148,8 +153,33 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                     }
                 }
 
-                if (ant.isJammer) jammerMw += pathMw;
-                else desiredMw += pathMw;
+                if (ant.isJammer) {
+                    jammerContributions.emplace_back(freq, pathMw);
+                } else {
+                    desiredContributions.emplace_back(freq, pathMw);
+                    const float pathDbm = RFModels::mwToDbm(pathMw);
+                    if (pathDbm > strongestDesiredDbm) {
+                        strongestDesiredDbm = pathDbm;
+                        servingFrequencyMHz = freq;
+                    }
+                }
+            }
+
+            float desiredMw = 0.0f;
+            float jammerMw = 0.0f;
+            const float halfBandwidthMHz = std::max(receiver.bandwidthHz, 1.0f)
+                                         / 2.0e6f;
+            for (const auto& contribution : desiredContributions) {
+                if (!std::isfinite(strongestDesiredDbm) ||
+                    std::abs(contribution.first - servingFrequencyMHz) <= halfBandwidthMHz) {
+                    desiredMw += contribution.second;
+                }
+            }
+            for (const auto& contribution : jammerContributions) {
+                if (!std::isfinite(strongestDesiredDbm) ||
+                    std::abs(contribution.first - servingFrequencyMHz) <= halfBandwidthMHz) {
+                    jammerMw += contribution.second;
+                }
             }
 
             const std::size_t index = static_cast<std::size_t>(gz) * grid.width + gx;
