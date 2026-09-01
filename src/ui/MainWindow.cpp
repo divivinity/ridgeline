@@ -8,6 +8,7 @@
 #include "ReceiverDialog.h"
 #include "SourcePositionDialog.h"
 #include "geo/Mgrs.h"
+#include "sim/PointAnalysis.h"
 #include <QWidget>
 #include <QStatusBar>
 #include <QToolBar>
@@ -176,6 +177,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     );
     addDockWidget(Qt::LeftDockWidgetArea, leftDock);
 
+    m_pointPanel = new PointAnalysisPanel(this);
+    m_pointDock = new QDockWidget("Result Inspector", this);
+    m_pointDock->setObjectName("ResultInspectorDock");
+    m_pointDock->setWidget(m_pointPanel);
+    m_pointDock->setAllowedAreas(Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+    m_pointDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    m_pointDock->setMinimumWidth(310);
+    m_pointDock->setStyleSheet(
+        "QDockWidget { color: #94a3b8; font-size: 10px; }"
+        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
+    addDockWidget(Qt::RightDockWidgetArea, m_pointDock);
+    m_pointDock->hide();
+
     connect(m_scenarioTree, &ScenarioTree::addEmitterRequested,
             this, &MainWindow::onAddAntenna);
     connect(m_scenarioTree, &ScenarioTree::addJammerRequested,
@@ -237,6 +252,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     m_engine.mode = SimEngine::Mode::Engineering;
                     m_statusLabel->setText("  Engineering RF Mode · NTIA ITM");
                 }
+                if (m_engine.fieldGrid().valid()) {
+                    m_engine.setFieldGrid({});
+                    if (m_pointPanel) m_pointPanel->clear();
+                    if (m_pointDock) m_pointDock->hide();
+                    if (m_viewport) {
+                        m_viewport->clearAnalysisPoint();
+                        m_viewport->refreshOverlays();
+                    }
+                    m_statusLabel->setText("  Analysis quality changed · Run coverage to refresh results");
+                }
             });
     tb->addWidget(m_modeCombo);
 
@@ -252,6 +277,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tb->addWidget(m_solveBtn);
 
     m_overlayBar = new OverlayToolbar(this);
+    // Keep the quality and solve controls reachable at ordinary laptop widths.
+    // Two dense toolbars on one row force QWidget actions into Qt's clipped
+    // overflow popup, where combo boxes and buttons cannot be used reliably.
+    addToolBarBreak(Qt::TopToolBarArea);
     QToolBar* overlayTb = addToolBar("Overlays");
     overlayTb->setMovable(false);
     overlayTb->addWidget(m_overlayBar);
@@ -297,6 +326,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QMenu* viewMenu = menuBar()->addMenu("&View");
     viewMenu->addAction(leftDock->toggleViewAction());
     viewMenu->addAction(bottomDock->toggleViewAction());
+    viewMenu->addAction(m_pointDock->toggleViewAction());
 
     refreshTree();
 
@@ -306,6 +336,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             this, &MainWindow::onAntennaSelected);
     connect(m_viewport, &ViewportWidget::antennaMoveRequested,
             this, &MainWindow::onAntennaMoved);
+    connect(m_viewport, &ViewportWidget::terrainInspected,
+            this, &MainWindow::onTerrainInspected);
     connect(m_viewport, &ViewportWidget::placementCancelled, this, [this]() {
         m_placementActive = false;
         m_statusLabel->setText("  Placement cancelled");
@@ -369,7 +401,10 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
         }
 
         m_engine.setTerrain(std::move(terrain));
+        m_engine.setFieldGrid({});
         if (m_undoStack) m_undoStack->clear();
+        if (m_pointPanel) m_pointPanel->clear();
+        if (m_pointDock) m_pointDock->hide();
         m_terrainSource = TerrainSource{};
         m_terrainSource.type = TerrainSource::Type::Global;
         m_terrainSource.centerLat = latitude;
@@ -456,8 +491,15 @@ void MainWindow::onReceiverSettings() {
     ReceiverDialog dialog(m_engine.receiver, this);
     if (dialog.exec() != QDialog::Accepted) return;
     m_engine.receiver = dialog.settings();
+    m_engine.setFieldGrid({});
+    if (m_pointPanel) m_pointPanel->clear();
+    if (m_pointDock) m_pointDock->hide();
+    if (m_viewport) {
+        m_viewport->clearAnalysisPoint();
+        m_viewport->refreshOverlays();
+    }
     m_statusLabel->setText(QString(
-        "  Receiver updated · sensitivity %1 dBm · bandwidth %2 kHz · required SINR %3 dB")
+        "  Receiver updated · sensitivity %1 dBm · bandwidth %2 kHz · required SINR %3 dB · Run coverage to refresh")
         .arg(m_engine.receiver.sensitivityDbm, 0, 'f', 0)
         .arg(m_engine.receiver.bandwidthHz / 1000.0f, 0, 'f', 1)
         .arg(m_engine.receiver.requiredSnrDb, 0, 'f', 1));
@@ -497,7 +539,10 @@ void MainWindow::loadTerrain(const QString& path) {
                           ? TerrainLoader::fromGeoTIFF(path.toStdString())
                           : TerrainLoader::fromDTED(path.toStdString()));
         m_engine.setTerrain(std::move(t));
+        m_engine.setFieldGrid({});
         if (m_undoStack) m_undoStack->clear();
+        if (m_pointPanel) m_pointPanel->clear();
+        if (m_pointDock) m_pointDock->hide();
         if (ext == "hgt") {
             m_terrainSource.type = TerrainSource::Type::Hgt;
             m_terrainSource.hgtPath = path.toStdString();
@@ -634,6 +679,9 @@ void MainWindow::onSolve() {
     try {
         if (solveError) std::rethrow_exception(solveError);
         m_engine.setFieldGrid(std::move(solvedField));
+        if (m_pointPanel) m_pointPanel->clear();
+        if (m_pointDock) m_pointDock->hide();
+        if (m_viewport) m_viewport->clearAnalysisPoint();
         m_viewport->refreshOverlays();
         const auto& grid = m_engine.fieldGrid();
         float minDbm = std::numeric_limits<float>::infinity();
@@ -651,7 +699,7 @@ void MainWindow::onSolve() {
         const double servicePercent = grid.service.empty()
             ? 0.0 : 100.0 * static_cast<double>(served) / grid.service.size();
         m_statusLabel->setText(QString(
-            "  Coverage ready in %1 s · %2 × %3 cells · %4% service%5")
+            "  Coverage ready in %1 s · %2 × %3 cells · %4% service%5 · Click the map to inspect")
             .arg(timer->elapsed() / 1000.0, 0, 'f', 1)
             .arg(grid.width).arg(grid.height)
             .arg(servicePercent, 0, 'f', 1).arg(signalRange));
@@ -769,6 +817,9 @@ void MainWindow::applySourceState(const std::vector<Antenna>& antennas,
                                   int selectedIndex) {
     m_engine.setAntennas(antennas);
     m_engine.setFieldGrid({});
+    if (m_pointPanel) m_pointPanel->clear();
+    if (m_pointDock) m_pointDock->hide();
+    if (m_viewport) m_viewport->clearAnalysisPoint();
     const int count = static_cast<int>(m_engine.antennas().size());
     m_selectedIndex = count == 0 ? -1 : std::clamp(selectedIndex, -1, count - 1);
     refreshTree();
@@ -904,7 +955,10 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
                                           ts.cellSize, ts.amplitude); break;
     }
     m_engine.setTerrain(std::move(t));
+    m_engine.setFieldGrid({});
     if (m_undoStack) m_undoStack->clear();
+    if (m_pointPanel) m_pointPanel->clear();
+    if (m_pointDock) m_pointDock->hide();
     m_terrainSource = doc.terrain;
     m_locationName.clear();
     if (m_terrainSource.type == TerrainSource::Type::Global) updateLocationSummary();
@@ -946,6 +1000,64 @@ void MainWindow::onTerrainClicked(float worldX, float worldZ) {
         ? QString("  %1 placed at %2°, %3°")
             .arg(role).arg(ll.latDeg, 0, 'f', 6).arg(ll.lonDeg, 0, 'f', 6)
         : QString("  %1 placed").arg(role));
+}
+
+void MainWindow::onTerrainInspected(float worldX, float worldZ) {
+    if (!m_engine.fieldGrid().valid()) {
+        m_statusLabel->setText("  Run coverage first, then click the map to inspect a result");
+        return;
+    }
+    const PointAnalysisResult analysis = analyzeFieldPoint(
+        m_engine.fieldGrid(), m_engine.terrain(), m_engine.antennas(),
+        m_engine.receiver, worldX, worldZ);
+    if (!analysis.valid) return;
+
+    auto sourceName = [this](int sourceIndex) -> QString {
+        const auto& antennas = m_engine.antennas();
+        if (sourceIndex < 0 || sourceIndex >= static_cast<int>(antennas.size()))
+            return {};
+        const bool jammer = antennas[sourceIndex].isJammer;
+        int ordinal = 0;
+        for (int i = 0; i <= sourceIndex; ++i)
+            if (antennas[i].isJammer == jammer) ++ordinal;
+        return QString("%1 %2 · %3 MHz")
+            .arg(jammer ? "Jammer" : "Emitter")
+            .arg(ordinal)
+            .arg(antennas[sourceIndex].frequencyMHz, 0, 'f', 1);
+    };
+
+    const TerrainModel& terrain = m_engine.terrain();
+    const float sampledX = analysis.receiverPosition.x;
+    const float sampledZ = analysis.receiverPosition.z;
+    QString position = QString("Result cell center · X %1 m · Z %2 m · receiver %3 m MSL")
+        .arg(sampledX, 0, 'f', 1)
+        .arg(sampledZ, 0, 'f', 1)
+        .arg(analysis.receiverPosition.y, 0, 'f', 1);
+    if (terrain.hasGeoReference()) {
+        const auto coordinate = terrain.worldToLatLon(sampledX, sampledZ);
+        std::string mgrs;
+        std::string error;
+        position = QString("%1°, %2°")
+            .arg(coordinate.latDeg, 0, 'f', 6)
+            .arg(coordinate.lonDeg, 0, 'f', 6);
+        if (wgs84ToMgrs(coordinate.latDeg, coordinate.lonDeg, 5, mgrs, error))
+            position += QString("\nMGRS %1").arg(QString::fromStdString(mgrs));
+        position += QString("\nResult cell center · X %1 m · Z %2 m · receiver %3 m MSL")
+            .arg(sampledX, 0, 'f', 1)
+            .arg(sampledZ, 0, 'f', 1)
+            .arg(analysis.receiverPosition.y, 0, 'f', 1);
+    }
+
+    m_pointPanel->setAnalysis(
+        analysis, position, sourceName(analysis.servingSourceIndex),
+        sourceName(analysis.strongestJammerIndex));
+    m_pointDock->show();
+    m_pointDock->raise();
+    m_viewport->setAnalysisPoint(
+        analysis.servingSourceIndex, analysis.receiverPosition);
+    m_statusLabel->setText(analysis.inService
+        ? "  Inspected point is in service · details and path shown at right"
+        : "  Inspected point is out of service · causes shown at right");
 }
 
 void MainWindow::onExportPng() {

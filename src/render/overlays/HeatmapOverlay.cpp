@@ -58,8 +58,12 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
 }
 
 void HeatmapOverlay::update(const FieldGrid& grid, Metric metric) {
-    if (!grid.valid()) return;
     m_metric = metric;
+    if (!grid.valid()) {
+        m_texW = 0;
+        m_texH = 0;
+        return;
+    }
     m_texW = grid.width;
     m_texH = grid.height;
 

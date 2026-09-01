@@ -89,6 +89,7 @@ set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/sim/MaterialLibrary.cpp
     src/sim/TerrainModel.cpp
     src/sim/RFModels.cpp
+    src/sim/PointAnalysis.cpp
     src/sim/ItmPropagation.cpp
     src/sim/FastSolver.cpp
     src/sim/FullSolver.cpp
@@ -157,10 +158,12 @@ add_executable(ridgeline_ui_interaction_tests
     src/ui/PropertiesPanel.cpp
     src/ui/LocationDialog.cpp
     src/ui/SourcePositionDialog.cpp
+    src/ui/PointAnalysisPanel.cpp
     src/geo/Mgrs.cpp
     src/sim/TerrainModel.cpp
     src/data/AntennaLibrary.cpp
-    src/data/AntennaPatternIO.cpp)
+    src/data/AntennaPatternIO.cpp
+    src/data/Exporter.cpp)
 target_include_directories(ridgeline_ui_interaction_tests PRIVATE src)
 target_link_libraries(ridgeline_ui_interaction_tests
     Qt6::Widgets Qt6::Network glm::glm nlohmann_json::nlohmann_json)
