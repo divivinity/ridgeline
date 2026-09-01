@@ -73,6 +73,7 @@ private:
     QPoint m_lastMouse;
     QPoint m_pressPos;
     bool m_dragging = false;
+    bool m_cameraDragging = false;
     HeatmapLegend* m_heatmapLegend = nullptr;
     QLabel* m_mapInfoLabel = nullptr;
     QLabel* m_attributionLabel = nullptr;

@@ -7,7 +7,7 @@ one WGS84 coordinate system.
 ## Core workflow
 
 1. Choose **Location** or press `Ctrl+L`.
-2. Search for a place or enter exact latitude/longitude coordinates.
+2. Search for a place or enter exact WGS84 latitude/longitude or MGRS coordinates.
 3. Pick the analysis width (2–50 km) and load the area. Elevation and imagery
    tile progress is visible and cancellable.
 4. Use **+ Emitter** or **+ Jammer**, then click the terrain.
@@ -90,9 +90,10 @@ original CSV is later moved.
 - Satellite imagery defaults to Esri World Imagery.
 - Terrain and imagery tile downloads use bounded concurrency instead of serial
   one-tile-at-a-time requests.
-- Place search uses the public OpenStreetMap Nominatim service only when Search
-  is pressed. Public requests are cached and rate-limited to at most one request
-  per second; a custom geocoder endpoint can be configured.
+- Place search caches every response. Public OpenStreetMap Nominatim requests
+  remain user-initiated and are queued at no more than one request per second;
+  prior cached places suggest as you type. A configured geocoder endpoint adds
+  500 ms debounced live typeahead without freezing the search field.
 - Local DTED, SRTM HGT, and (when built with GDAL) GeoTIFF DEMs are supported
   from **File → Load Terrain**.
 - Analysis areas can cross the ±180° antimeridian; longitude conversion and tile

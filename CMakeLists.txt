@@ -142,6 +142,29 @@ target_link_libraries(ridgeline_tile_cache_tests Qt6::Network)
 add_test(NAME tile_cache_tests COMMAND ridgeline_tile_cache_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_executable(ridgeline_location_picking_tests
+    tests/test_location_and_picking.cpp
+    src/geo/Mgrs.cpp
+    src/render/TerrainRaycast.cpp
+    src/sim/TerrainModel.cpp)
+target_include_directories(ridgeline_location_picking_tests PRIVATE src)
+target_link_libraries(ridgeline_location_picking_tests glm::glm)
+add_test(NAME location_picking_tests COMMAND ridgeline_location_picking_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(ridgeline_ui_interaction_tests
+    tests/test_ui_interactions.cpp
+    src/ui/PropertiesPanel.cpp
+    src/ui/LocationDialog.cpp
+    src/geo/Mgrs.cpp
+    src/data/AntennaLibrary.cpp
+    src/data/AntennaPatternIO.cpp)
+target_include_directories(ridgeline_ui_interaction_tests PRIVATE src)
+target_link_libraries(ridgeline_ui_interaction_tests
+    Qt6::Widgets Qt6::Network glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME ui_interaction_tests COMMAND ridgeline_ui_interaction_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 if(GDAL_FOUND)
     add_executable(ridgeline_geotiff_tests
         tests/test_geotiff.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)

@@ -8,7 +8,9 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QFrame>
+#include <QScrollBar>
 #include <QSizePolicy>
+#include <QTimer>
 #include <algorithm>
 #include <cmath>
 
@@ -65,7 +67,9 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     m_cableLossSpin = makeSpinBox(0.0, 30.0, 0.1, " dB");
 
     m_typeCombo = new QComboBox();
+    m_typeCombo->setObjectName("AntennaTypeCombo");
     m_polarizationCombo = new QComboBox();
+    m_polarizationCombo->setObjectName("PolarizationCombo");
     m_polarizationCombo->addItems({"vertical", "horizontal", "RHCP", "LHCP"});
     m_jammerCheck = new QCheckBox("Jammer");
     m_importPatternButton = new QPushButton("Import CSV pattern…");
@@ -100,14 +104,22 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     formLayout->addLayout(basicForm);
 
     m_advancedToggle = new QToolButton();
+    m_advancedToggle->setObjectName("AdvancedSettingsToggle");
     m_advancedToggle->setText("Advanced antenna settings");
     m_advancedToggle->setCheckable(true);
     m_advancedToggle->setArrowType(Qt::RightArrow);
     m_advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_advancedToggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    formLayout->addWidget(m_advancedToggle);
+    m_advancedToggle->setToolTip(
+        "Show or hide direction, pattern, feed-loss, and polarization controls");
+    // Keep the disclosure control outside the scrolling form. It remains
+    // reachable even after the expanded fields have been scrolled, so the
+    // section can always be collapsed without fighting layout movement.
+    outerLayout->addWidget(m_advancedToggle);
+    m_advancedToggle->hide();
 
     m_advancedPanel = new QWidget(m_form);
+    m_advancedPanel->setObjectName("AdvancedSettingsPanel");
     auto* advancedForm = new QFormLayout(m_advancedPanel);
     advancedForm->setContentsMargins(0, 2, 0, 0);
     advancedForm->setSpacing(10);
@@ -131,6 +143,14 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     connect(m_advancedToggle, &QToolButton::toggled, this, [this](bool shown) {
         m_advancedToggle->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
         m_advancedPanel->setVisible(shown);
+        m_advancedPanel->updateGeometry();
+        m_form->updateGeometry();
+        QTimer::singleShot(0, this, [this, shown]() {
+            if (!shown && m_scrollArea)
+                m_scrollArea->verticalScrollBar()->setValue(0);
+            if (m_scrollArea && m_scrollArea->widget())
+                m_scrollArea->widget()->updateGeometry();
+        });
     });
 
     m_scrollArea->setWidget(m_form);
@@ -211,6 +231,7 @@ void PropertiesPanel::onTypeChanged(int index) {
 void PropertiesPanel::load(const Antenna* antenna) {
     if (!antenna) {
         if (m_scrollArea) m_scrollArea->hide();
+        if (m_advancedToggle) m_advancedToggle->hide();
         m_noSelLabel->show();
         return;
     }
@@ -251,6 +272,7 @@ void PropertiesPanel::load(const Antenna* antenna) {
     m_loading = false;
     updatePowerReadout();
     m_noSelLabel->hide();
+    m_advancedToggle->show();
     m_scrollArea->show();
 }
 
