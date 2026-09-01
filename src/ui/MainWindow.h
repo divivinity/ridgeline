@@ -13,6 +13,8 @@
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
 
+class QUndoStack;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -33,6 +35,8 @@ private slots:
     void onRemoveAntenna(int index);
     void onAntennaSelected(int index);
     void onAntennaChanged(Antenna updated);
+    void onEditAntennaPosition();
+    void onAntennaMoved(int index, float worldX, float worldZ);
     void onTerrainClicked(float worldX, float worldZ);
 
 private:
@@ -53,6 +57,7 @@ private:
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;
+    QUndoStack*      m_undoStack = nullptr;
 
     void setupScene();
     void applyTheme();
@@ -65,4 +70,9 @@ private:
     void refreshPropsPanel();
     void refreshBottomBar();
     void applyScenarioDoc(const ScenarioDoc& doc);
+    void applySourceState(const std::vector<Antenna>& antennas, int selectedIndex);
+    void pushSourceChange(std::vector<Antenna> after, int selectedAfter,
+                          const QString& description, int mergeId = -1);
+    void syncAntennaGeo(Antenna& antenna) const;
+    QString sourcePositionSummary(const Antenna& antenna) const;
 };

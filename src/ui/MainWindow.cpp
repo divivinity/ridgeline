@@ -6,6 +6,8 @@
 #include "data/AntennaLibrary.h"
 #include "LocationDialog.h"
 #include "ReceiverDialog.h"
+#include "SourcePositionDialog.h"
+#include "geo/Mgrs.h"
 #include <QWidget>
 #include <QStatusBar>
 #include <QToolBar>
@@ -24,6 +26,9 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QUndoCommand>
+#include <QUndoStack>
+#include <QDateTime>
 #include <QtConcurrent/QtConcurrentRun>
 #include <stdexcept>
 #include <algorithm>
@@ -33,6 +38,58 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <functional>
+#include <utility>
+
+namespace {
+
+class SourceStateCommand final : public QUndoCommand {
+public:
+    using Apply = std::function<void(const std::vector<Antenna>&, int)>;
+
+    SourceStateCommand(std::vector<Antenna> before,
+                       int selectedBefore,
+                       std::vector<Antenna> after,
+                       int selectedAfter,
+                       QString description,
+                       int mergeId,
+                       Apply apply)
+        : QUndoCommand(std::move(description)),
+          m_before(std::move(before)),
+          m_after(std::move(after)),
+          m_selectedBefore(selectedBefore),
+          m_selectedAfter(selectedAfter),
+          m_mergeId(mergeId),
+          m_timestampMs(QDateTime::currentMSecsSinceEpoch()),
+          m_apply(std::move(apply)) {}
+
+    void undo() override { m_apply(m_before, m_selectedBefore); }
+    void redo() override { m_apply(m_after, m_selectedAfter); }
+    int id() const override { return m_mergeId; }
+
+    bool mergeWith(const QUndoCommand* other) override {
+        const auto* newer = dynamic_cast<const SourceStateCommand*>(other);
+        if (!newer || m_mergeId < 0 || newer->m_mergeId != m_mergeId ||
+            newer->m_timestampMs - m_timestampMs > 900) {
+            return false;
+        }
+        m_after = newer->m_after;
+        m_selectedAfter = newer->m_selectedAfter;
+        m_timestampMs = newer->m_timestampMs;
+        return true;
+    }
+
+private:
+    std::vector<Antenna> m_before;
+    std::vector<Antenna> m_after;
+    int m_selectedBefore = -1;
+    int m_selectedAfter = -1;
+    int m_mergeId = -1;
+    qint64 m_timestampMs = 0;
+    Apply m_apply;
+};
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Ridgeline");
@@ -44,6 +101,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     } catch (...) {
         m_antennaLib.loadDefaults();
     }
+
+    m_undoStack = new QUndoStack(this);
 
     QMenu* fileMenu = menuBar()->addMenu("&File");
     QAction* locationAct = fileMenu->addAction("&Choose Location…");
@@ -69,6 +128,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(exportPngAct, &QAction::triggered, this, &MainWindow::onExportPng);
     QAction* exportCsvAct = exportMenu->addAction("Coverage &CSV…");
     connect(exportCsvAct, &QAction::triggered, this, &MainWindow::onExportCsv);
+
+    QMenu* editMenu = menuBar()->addMenu("&Edit");
+    QAction* undoAction = m_undoStack->createUndoAction(this, "&Undo");
+    undoAction->setObjectName("UndoSourceAction");
+    undoAction->setShortcut(QKeySequence::Undo);
+    editMenu->addAction(undoAction);
+    QAction* redoAction = m_undoStack->createRedoAction(this, "&Redo");
+    redoAction->setObjectName("RedoSourceAction");
+    redoAction->setShortcut(QKeySequence::Redo);
+    editMenu->addAction(redoAction);
 
     QMenu* analysisMenu = menuBar()->addMenu("&Analysis");
     QAction* receiverAct = analysisMenu->addAction("&Receiver / Service Criteria…");
@@ -117,6 +186,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             this, &MainWindow::onAntennaSelected);
     connect(m_propsPanel, &PropertiesPanel::antennaChanged,
             this, &MainWindow::onAntennaChanged);
+    connect(m_propsPanel, &PropertiesPanel::positionEditRequested,
+            this, &MainWindow::onEditAntennaPosition);
 
     QToolBar* tb = addToolBar("Main");
     tb->setMovable(false);
@@ -231,6 +302,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(m_viewport, &ViewportWidget::terrainClicked,
             this, &MainWindow::onTerrainClicked);
+    connect(m_viewport, &ViewportWidget::antennaClicked,
+            this, &MainWindow::onAntennaSelected);
+    connect(m_viewport, &ViewportWidget::antennaMoveRequested,
+            this, &MainWindow::onAntennaMoved);
     connect(m_viewport, &ViewportWidget::placementCancelled, this, [this]() {
         m_placementActive = false;
         m_statusLabel->setText("  Placement cancelled");
@@ -294,6 +369,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
         }
 
         m_engine.setTerrain(std::move(terrain));
+        if (m_undoStack) m_undoStack->clear();
         m_terrainSource = TerrainSource{};
         m_terrainSource.type = TerrainSource::Type::Global;
         m_terrainSource.centerLat = latitude;
@@ -421,6 +497,7 @@ void MainWindow::loadTerrain(const QString& path) {
                           ? TerrainLoader::fromGeoTIFF(path.toStdString())
                           : TerrainLoader::fromDTED(path.toStdString()));
         m_engine.setTerrain(std::move(t));
+        if (m_undoStack) m_undoStack->clear();
         if (ext == "hgt") {
             m_terrainSource.type = TerrainSource::Type::Hgt;
             m_terrainSource.hgtPath = path.toStdString();
@@ -611,13 +688,14 @@ void MainWindow::onAddAntenna() { startPlacement(false); }
 void MainWindow::onAddJammer() { startPlacement(true); }
 
 void MainWindow::onRemoveAntenna(int index) {
-    m_engine.removeAntenna(index);
-    if (m_selectedIndex >= static_cast<int>(m_engine.antennas().size()))
-        m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
-    refreshTree();
-    refreshPropsPanel();
-    refreshBottomBar();
-    m_viewport->refreshOverlays();
+    if (index < 0 || index >= static_cast<int>(m_engine.antennas().size())) return;
+    std::vector<Antenna> after = m_engine.antennas();
+    after.erase(after.begin() + index);
+    int selectedAfter = m_selectedIndex;
+    if (selectedAfter > index) --selectedAfter;
+    else if (selectedAfter == index)
+        selectedAfter = std::min(index, static_cast<int>(after.size()) - 1);
+    pushSourceChange(std::move(after), selectedAfter, "Remove source");
     m_statusLabel->setText("  Antenna removed");
 }
 
@@ -628,15 +706,45 @@ void MainWindow::onAntennaSelected(int index) {
 }
 
 void MainWindow::onAntennaChanged(Antenna updated) {
-    if (m_selectedIndex < 0) return;
+    if (m_selectedIndex < 0 ||
+        m_selectedIndex >= static_cast<int>(m_engine.antennas().size())) return;
     const float ground = m_engine.terrain().heightAtWorld(
         updated.position.x, updated.position.z);
     updated.position.y = ground + std::max(0.0f, updated.position.y);
-    m_engine.updateAntenna(m_selectedIndex, updated);
-    refreshTree();
-    m_scenarioTree->selectRow(m_selectedIndex);
-    refreshBottomBar();
-    m_viewport->refreshOverlays();
+    syncAntennaGeo(updated);
+    std::vector<Antenna> after = m_engine.antennas();
+    after[m_selectedIndex] = std::move(updated);
+    pushSourceChange(std::move(after), m_selectedIndex, "Edit source",
+                     1000 + m_selectedIndex);
+}
+
+void MainWindow::onEditAntennaPosition() {
+    if (m_selectedIndex < 0 ||
+        m_selectedIndex >= static_cast<int>(m_engine.antennas().size())) return;
+    const Antenna current = m_engine.antennas()[m_selectedIndex];
+    SourcePositionDialog dialog(m_engine.terrain(), current, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    onAntennaMoved(m_selectedIndex, dialog.worldX(), dialog.worldZ());
+}
+
+void MainWindow::onAntennaMoved(int index, float worldX, float worldZ) {
+    if (index < 0 || index >= static_cast<int>(m_engine.antennas().size())) return;
+    const auto& terrain = m_engine.terrain();
+    const glm::vec3 size = terrain.worldSize();
+    worldX = std::clamp(worldX, 0.0f, size.x);
+    worldZ = std::clamp(worldZ, 0.0f, size.z);
+
+    std::vector<Antenna> after = m_engine.antennas();
+    Antenna& moved = after[index];
+    const float oldGround = terrain.heightAtWorld(moved.position.x, moved.position.z);
+    const float heightAgl = std::max(0.0f, moved.position.y - oldGround);
+    moved.position.x = worldX;
+    moved.position.z = worldZ;
+    moved.position.y = terrain.heightAtWorld(worldX, worldZ) + heightAgl;
+    if (!terrain.hasGeoReference()) moved.hasGeoPosition = false;
+    syncAntennaGeo(moved);
+    pushSourceChange(std::move(after), index, "Move source");
+    m_statusLabel->setText("  Source moved · Undo is available from Edit or Ctrl+Z");
 }
 
 void MainWindow::refreshTree() { m_scenarioTree->refresh(m_engine.antennas()); }
@@ -644,15 +752,87 @@ void MainWindow::refreshTree() { m_scenarioTree->refresh(m_engine.antennas()); }
 void MainWindow::refreshPropsPanel() {
     if (m_selectedIndex >= 0 &&
         m_selectedIndex < static_cast<int>(m_engine.antennas().size())) {
-        m_propsAntennaView = m_engine.antennas()[m_selectedIndex];
+        const Antenna& source = m_engine.antennas()[m_selectedIndex];
+        m_propsAntennaView = source;
         const float ground = m_engine.terrain().heightAtWorld(
             m_propsAntennaView.position.x, m_propsAntennaView.position.z);
         m_propsAntennaView.position.y =
             std::max(0.0f, m_propsAntennaView.position.y - ground);
         m_propsPanel->load(&m_propsAntennaView);
+        m_propsPanel->setPositionSummary(sourcePositionSummary(source));
     } else {
         m_propsPanel->load(nullptr);
     }
+}
+
+void MainWindow::applySourceState(const std::vector<Antenna>& antennas,
+                                  int selectedIndex) {
+    m_engine.setAntennas(antennas);
+    m_engine.setFieldGrid({});
+    const int count = static_cast<int>(m_engine.antennas().size());
+    m_selectedIndex = count == 0 ? -1 : std::clamp(selectedIndex, -1, count - 1);
+    refreshTree();
+    if (m_scenarioTree) m_scenarioTree->selectRow(m_selectedIndex);
+    refreshPropsPanel();
+    refreshBottomBar();
+    if (m_viewport) m_viewport->refreshOverlays();
+}
+
+void MainWindow::pushSourceChange(std::vector<Antenna> after,
+                                  int selectedAfter,
+                                  const QString& description,
+                                  int mergeId) {
+    if (!m_undoStack) {
+        applySourceState(after, selectedAfter);
+        return;
+    }
+    m_undoStack->push(new SourceStateCommand(
+        m_engine.antennas(), m_selectedIndex, std::move(after), selectedAfter,
+        description, mergeId,
+        [this](const std::vector<Antenna>& state, int selected) {
+            applySourceState(state, selected);
+        }));
+}
+
+void MainWindow::syncAntennaGeo(Antenna& antenna) const {
+    const TerrainModel& terrain = m_engine.terrain();
+    if (!terrain.hasGeoReference()) return;
+    const auto coordinate = terrain.worldToLatLon(
+        antenna.position.x, antenna.position.z);
+    antenna.hasGeoPosition = true;
+    antenna.latitudeDeg = coordinate.latDeg;
+    antenna.longitudeDeg = coordinate.lonDeg;
+    antenna.heightAglM = std::max(
+        0.0f, antenna.position.y -
+              terrain.heightAtWorld(antenna.position.x, antenna.position.z));
+}
+
+QString MainWindow::sourcePositionSummary(const Antenna& antenna) const {
+    const TerrainModel& terrain = m_engine.terrain();
+    const float ground = terrain.heightAtWorld(
+        antenna.position.x, antenna.position.z);
+    const float agl = std::max(0.0f, antenna.position.y - ground);
+    QString summary = QString("X %1 m · Z %2 m\nGround %3 m MSL · source %4 m MSL · %5 m AGL")
+        .arg(antenna.position.x, 0, 'f', 1)
+        .arg(antenna.position.z, 0, 'f', 1)
+        .arg(ground, 0, 'f', 1)
+        .arg(antenna.position.y, 0, 'f', 1)
+        .arg(agl, 0, 'f', 1);
+    if (!terrain.hasGeoReference()) return summary;
+
+    const auto coordinate = terrain.worldToLatLon(
+        antenna.position.x, antenna.position.z);
+    std::string mgrs;
+    std::string error;
+    const QString mgrsLine = wgs84ToMgrs(
+        coordinate.latDeg, coordinate.lonDeg, 5, mgrs, error)
+        ? QString("\nMGRS %1").arg(QString::fromStdString(mgrs))
+        : QString{};
+    return QString("%1°, %2°%3\n%4")
+        .arg(coordinate.latDeg, 0, 'f', 6)
+        .arg(coordinate.lonDeg, 0, 'f', 6)
+        .arg(mgrsLine)
+        .arg(summary);
 }
 
 void MainWindow::refreshBottomBar() {
@@ -724,6 +904,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
                                           ts.cellSize, ts.amplitude); break;
     }
     m_engine.setTerrain(std::move(t));
+    if (m_undoStack) m_undoStack->clear();
     m_terrainSource = doc.terrain;
     m_locationName.clear();
     if (m_terrainSource.type == TerrainSource::Type::Global) updateLocationSummary();
@@ -751,13 +932,12 @@ void MainWindow::onTerrainClicked(float worldX, float worldZ) {
     a.powerW = 10.0f;
     a.gainDbi = 3.0f;
     a.isJammer = m_placingJammer;
-    m_engine.addAntenna(a);
-    m_selectedIndex = static_cast<int>(m_engine.antennas().size()) - 1;
-    refreshTree();
-    m_scenarioTree->selectRow(m_selectedIndex);
-    refreshPropsPanel();
-    refreshBottomBar();
-    m_viewport->refreshOverlays();
+    syncAntennaGeo(a);
+    std::vector<Antenna> after = m_engine.antennas();
+    after.push_back(a);
+    const int selectedAfter = static_cast<int>(after.size()) - 1;
+    pushSourceChange(std::move(after), selectedAfter,
+                     a.isJammer ? "Add jammer" : "Add emitter");
     m_placementActive = false;
     m_viewport->setPlacementMode(false);
     const auto ll = t.worldToLatLon(worldX, worldZ);

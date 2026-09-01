@@ -14,3 +14,12 @@ struct MgrsCoordinate {
 bool mgrsToWgs84(const std::string& text,
                  MgrsCoordinate& coordinate,
                  std::string& error);
+
+// Converts WGS84 to a UTM-based MGRS reference at 0-5 digit precision per
+// axis. Polar UPS bands are intentionally rejected because Ridgeline's streamed
+// terrain workflow is limited to the Web Mercator/UTM operating latitudes.
+bool wgs84ToMgrs(double latitudeDeg,
+                 double longitudeDeg,
+                 int precisionDigits,
+                 std::string& mgrs,
+                 std::string& error);

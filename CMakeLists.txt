@@ -156,7 +156,9 @@ add_executable(ridgeline_ui_interaction_tests
     tests/test_ui_interactions.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/LocationDialog.cpp
+    src/ui/SourcePositionDialog.cpp
     src/geo/Mgrs.cpp
+    src/sim/TerrainModel.cpp
     src/data/AntennaLibrary.cpp
     src/data/AntennaPatternIO.cpp)
 target_include_directories(ridgeline_ui_interaction_tests PRIVATE src)

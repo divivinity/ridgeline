@@ -46,6 +46,7 @@ public:
 signals:
     void terrainClicked(float worldX, float worldZ);
     void antennaClicked(int index);
+    void antennaMoveRequested(int index, float worldX, float worldZ);
     void basemapInfoChanged(QString provider, QString attribution, QString error);
     void placementCancelled();
 
@@ -74,6 +75,7 @@ private:
     QPoint m_pressPos;
     bool m_dragging = false;
     bool m_cameraDragging = false;
+    int m_markerPressIndex = -1;
     HeatmapLegend* m_heatmapLegend = nullptr;
     QLabel* m_mapInfoLabel = nullptr;
     QLabel* m_attributionLabel = nullptr;

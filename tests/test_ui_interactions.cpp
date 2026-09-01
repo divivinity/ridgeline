@@ -1,10 +1,13 @@
 #include "data/AntennaLibrary.h"
 #include "ui/LocationDialog.h"
 #include "ui/PropertiesPanel.h"
+#include "ui/SourcePositionDialog.h"
+#include "sim/TerrainModel.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QElapsedTimer>
+#include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QLineEdit>
@@ -57,8 +60,11 @@ void testAdvancedPanelRemainsEditableAndCollapsible() {
     auto* advanced = panel.findChild<QWidget*>("AdvancedSettingsPanel");
     auto* type = panel.findChild<QComboBox*>("AntennaTypeCombo");
     auto* polarization = panel.findChild<QComboBox*>("PolarizationCombo");
-    CHECK(toggle && advanced && type && polarization);
-    if (!toggle || !advanced || !type || !polarization) return;
+    auto* editPosition = panel.findChild<QPushButton*>("EditSourcePositionButton");
+    CHECK(toggle && advanced && type && polarization && editPosition);
+    if (!toggle || !advanced || !type || !polarization || !editPosition) return;
+    panel.setPositionSummary("35.000000°, -80.000000°\nMGRS 17SNA0000000000");
+    CHECK(editPosition->isVisible());
 
     toggle->click();
     QApplication::processEvents();
@@ -78,6 +84,48 @@ void testAdvancedPanelRemainsEditableAndCollapsible() {
     CHECK(!toggle->isChecked());
     CHECK(!advanced->isVisible());
     CHECK(toggle->isVisible());
+}
+
+TerrainModel makeGeoTerrain() {
+    TerrainModel terrain;
+    terrain.width = 101;
+    terrain.height = 101;
+    const double sampleDegrees = 0.0002;
+    const double centerLatitude = 35.01;
+    terrain.setCellSpacing(
+        static_cast<float>(TerrainModel::metersPerDegreeLon(centerLatitude) * sampleDegrees),
+        static_cast<float>(TerrainModel::metersPerDegreeLat(centerLatitude) * sampleDegrees));
+    terrain.setGeoReference(35.0, -80.0, sampleDegrees, sampleDegrees);
+    terrain.heights.assign(terrain.width * terrain.height, 125.0f);
+    return terrain;
+}
+
+void testPreciseSourcePositionDialog() {
+    const TerrainModel terrain = makeGeoTerrain();
+    const glm::vec2 start = terrain.latLonToWorld(35.005, -79.995);
+    Antenna antenna;
+    antenna.position = {start.x, 140.0f, start.y};
+
+    SourcePositionDialog dialog(terrain, antenna);
+    auto* format = dialog.findChild<QComboBox*>("SourcePositionFormatCombo");
+    auto* latitude = dialog.findChild<QDoubleSpinBox*>("SourceLatitudeSpin");
+    auto* longitude = dialog.findChild<QDoubleSpinBox*>("SourceLongitudeSpin");
+    auto* mgrs = dialog.findChild<QLineEdit*>("SourceMgrsEdit");
+    auto* move = dialog.findChild<QPushButton*>("MoveSourceButton");
+    CHECK(format && latitude && longitude && mgrs && move);
+    if (!format || !latitude || !longitude || !mgrs || !move) return;
+    CHECK(format->count() == 3);
+    CHECK(!mgrs->text().isEmpty());
+
+    format->setCurrentIndex(1);
+    latitude->setValue(35.012);
+    longitude->setValue(-79.988);
+    move->click();
+    QApplication::processEvents();
+    CHECK(dialog.result() == QDialog::Accepted);
+    const glm::vec2 expected = terrain.latLonToWorld(35.012, -79.988);
+    CHECK(std::abs(dialog.worldX() - expected.x) < 0.1f);
+    CHECK(std::abs(dialog.worldZ() - expected.y) < 0.1f);
 }
 
 void testMgrsDialogInput() {
@@ -153,6 +201,7 @@ int main(int argc, char** argv) {
     QCoreApplication::setApplicationName("RidgelineUiTests");
 
     testAdvancedPanelRemainsEditableAndCollapsible();
+    testPreciseSourcePositionDialog();
     testMgrsDialogInput();
     testDebouncedCustomGeocoderSuggestions();
 
