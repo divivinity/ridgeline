@@ -42,6 +42,8 @@ private:
     QCheckBox*      m_jammerCheck = nullptr;
     QPushButton*    m_importPatternButton = nullptr;
     QLabel*         m_patternLabel = nullptr;
+    QLabel*         m_eirpLabel = nullptr;
+    QLabel*         m_erpLabel = nullptr;
 
     const AntennaLibrary* m_lib = nullptr;
     bool                  m_loading = false;
@@ -49,4 +51,5 @@ private:
 
     QDoubleSpinBox* makeSpinBox(double min, double max, double step,
                                 const QString& suffix);
+    void updatePowerReadout();
 };
