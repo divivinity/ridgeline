@@ -134,9 +134,18 @@ void testRejectsInvalidDimensionsAndGeometry() {
     candidate.maxXZ.y = std::numeric_limits<float>::infinity();
     checkIncompatible(candidate, valid);
 
-    candidate = valid;
-    candidate.maxXZ.x = -1.0f;
-    checkIncompatible(valid, candidate);
+}
+
+void testAcceptsFiniteNegativeCoordinates() {
+    FieldGrid baseline = grid();
+    FieldGrid current = baseline;
+    baseline.originXZ = current.originXZ = {-60.0f, -40.0f};
+    baseline.maxXZ = current.maxXZ = {-35.0f, -15.0f};
+
+    const ScenarioComparisonResult comparison =
+        ScenarioComparison::compare(baseline, current);
+    CHECK(comparison.compatible);
+    CHECK(comparison.reason.empty());
 }
 
 void testRequiresExactMatchingGeometry() {
@@ -183,6 +192,7 @@ int main() {
     testFinitePairMetricMeans();
     testNoFinitePairsProducesNaN();
     testRejectsInvalidDimensionsAndGeometry();
+    testAcceptsFiniteNegativeCoordinates();
     testRequiresExactMatchingGeometry();
     testRejectsEveryMalformedMetricVector();
     if (failures == 0)

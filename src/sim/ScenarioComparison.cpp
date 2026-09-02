@@ -18,8 +18,7 @@ bool checkedCellCount(const FieldGrid& grid, std::size_t& count) {
 bool hasFiniteGeometry(const FieldGrid& grid) {
     return std::isfinite(grid.cellSize) && grid.cellSize > 0.0f &&
            std::isfinite(grid.originXZ.x) && std::isfinite(grid.originXZ.y) &&
-           std::isfinite(grid.maxXZ.x) && std::isfinite(grid.maxXZ.y) &&
-           grid.maxXZ.x >= 0.0f && grid.maxXZ.y >= 0.0f;
+           std::isfinite(grid.maxXZ.x) && std::isfinite(grid.maxXZ.y);
 }
 
 bool metricSizesMatchCellCount(const FieldGrid& grid, std::size_t count) {
