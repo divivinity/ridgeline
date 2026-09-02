@@ -21,6 +21,7 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
     m_heatmapLegend->show();
+    m_comparisonHeatmap.visible = false;
     m_losRay.visible = false;
     m_antennaLobe.visible = false;
     m_jammerBubble.visible = false;
@@ -46,10 +47,28 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
         " border-radius: 9px; color: white; padding: 8px 16px; font-weight: 650; }"
     );
     m_placementHint->hide();
+
+    m_comparisonLegend = new QLabel(this);
+    m_comparisonLegend->setObjectName("ScenarioComparisonLegend");
+    m_comparisonLegend->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_comparisonLegend->setText(
+        "<b>SCENARIO CHANGES</b><br>"
+        "<span style='color:#22e178'>●</span>&nbsp; Gained service<br>"
+        "<span style='color:#f3292e'>●</span>&nbsp; Lost service");
+    m_comparisonLegend->setStyleSheet(
+        "QLabel { background: rgba(7, 14, 25, 220); border: 1px solid rgba(148,163,184,45);"
+        " border-radius: 9px; color: #dbeafe; padding: 9px 12px; font-size: 10px; }"
+    );
+    m_comparisonLegend->adjustSize();
+    m_comparisonLegend->hide();
 }
 
 void ViewportWidget::initializeGL() {
     initializeOpenGLFunctions();
+
+    // Preserve the user's comparison-overlay choice when Qt recreates the
+    // OpenGL context. The GL texture itself must be uploaded again below.
+    const bool comparisonRequested = m_comparisonHeatmap.visible;
 
     // Destroy GL objects before the context dies, not in the destructor.
     connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this]() {
@@ -57,6 +76,7 @@ void ViewportWidget::initializeGL() {
         m_terrain.destroy();
         m_basemap.destroy();
         m_heatmap.destroy();
+        m_comparisonHeatmap.destroy();
         m_losRay.destroy();
         m_antennaLobe.destroy();
         m_jammerBubble.destroy();
@@ -73,6 +93,21 @@ void ViewportWidget::initializeGL() {
     m_terrain.build(terrain);
     m_basemap.build(terrain);
     m_heatmap.build(terrain);
+    m_comparisonHeatmap.build(terrain);
+
+    const FieldGrid& field = m_engine->fieldGrid();
+    if (field.valid())
+        m_heatmap.update(field, m_heatmap.metric());
+
+    const bool comparisonValid =
+        field.valid() && m_serviceTransition.size() == field.cellCount();
+    if (comparisonValid)
+        m_comparisonHeatmap.updateComparison(field, m_serviceTransition);
+    else
+        m_serviceTransition.clear();
+    m_comparisonHeatmap.visible = comparisonRequested && comparisonValid;
+    if (m_comparisonLegend)
+        m_comparisonLegend->setVisible(m_comparisonHeatmap.visible);
     m_losRay.build();
     m_antennaLobe.build();
     m_jammerBubble.build();
@@ -112,6 +147,8 @@ void ViewportWidget::paintGL() {
     m_terrain.draw(m_lastMVP);
     if (m_basemap.visible)      m_basemap.draw(m_lastMVP);
     if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
+    if (m_comparisonHeatmap.visible)
+        m_comparisonHeatmap.draw(m_lastMVP);
     m_losRay.draw(m_lastMVP);
     if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
     if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
@@ -196,6 +233,7 @@ void ViewportWidget::reloadTerrain() {
     m_terrain.destroy();
     m_basemap.destroy();
     m_heatmap.destroy();
+    m_comparisonHeatmap.destroy();
     m_losRay.destroy();
     m_antennaLobe.destroy();
     m_jammerBubble.destroy();
@@ -204,6 +242,10 @@ void ViewportWidget::reloadTerrain() {
     m_terrain.build(terrain);
     m_basemap.build(terrain);
     m_heatmap.build(terrain);
+    m_comparisonHeatmap.build(terrain);
+    m_serviceTransition.clear();
+    m_comparisonHeatmap.visible = false;
+    if (m_comparisonLegend) m_comparisonLegend->hide();
     m_losRay.build();
     m_antennaLobe.build();
     m_jammerBubble.build();
@@ -371,6 +413,11 @@ void ViewportWidget::repositionHud() {
     if (m_placementHint && m_placementHint->isVisible()) {
         m_placementHint->move(std::max(0, (width() - m_placementHint->width()) / 2), margin);
     }
+    if (m_comparisonLegend && m_comparisonLegend->isVisible()) {
+        const int top = m_mapInfoLabel
+            ? m_mapInfoLabel->geometry().bottom() + 8 : margin;
+        m_comparisonLegend->move(margin, top);
+    }
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
@@ -497,5 +544,42 @@ void ViewportWidget::clearAnalysisPoint() {
     m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(), -1, nullptr);
     buildMarkers();
     doneCurrent();
+    update();
+}
+
+void ViewportWidget::setScenarioComparison(
+    const std::vector<std::int8_t>& serviceTransition,
+    bool visible) {
+    const FieldGrid& grid = m_engine->fieldGrid();
+    const bool valid = grid.valid() &&
+        serviceTransition.size() == grid.cellCount();
+    m_serviceTransition = valid ? serviceTransition
+                                : std::vector<std::int8_t>{};
+    makeCurrent();
+    m_comparisonHeatmap.updateComparison(
+        grid, m_serviceTransition);
+    m_comparisonHeatmap.visible = visible && valid;
+    doneCurrent();
+    if (m_comparisonLegend)
+        m_comparisonLegend->setVisible(m_comparisonHeatmap.visible);
+    repositionHud();
+    update();
+}
+
+void ViewportWidget::setScenarioComparisonVisible(bool visible) {
+    m_comparisonHeatmap.visible = visible && !m_serviceTransition.empty();
+    if (m_comparisonLegend)
+        m_comparisonLegend->setVisible(m_comparisonHeatmap.visible);
+    repositionHud();
+    update();
+}
+
+void ViewportWidget::clearScenarioComparison() {
+    m_serviceTransition.clear();
+    m_comparisonHeatmap.visible = false;
+    makeCurrent();
+    m_comparisonHeatmap.updateComparison({}, m_serviceTransition);
+    doneCurrent();
+    if (m_comparisonLegend) m_comparisonLegend->hide();
     update();
 }

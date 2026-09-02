@@ -90,6 +90,7 @@ set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/sim/TerrainModel.cpp
     src/sim/RFModels.cpp
     src/sim/PointAnalysis.cpp
+    src/sim/ScenarioComparison.cpp
     src/sim/ItmPropagation.cpp
     src/sim/FastSolver.cpp
     src/sim/FullSolver.cpp
@@ -136,6 +137,15 @@ target_link_libraries(ridgeline_rf_model_tests
 add_test(NAME rf_model_tests COMMAND ridgeline_rf_model_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_executable(ridgeline_scenario_comparison_tests
+    tests/test_scenario_comparison.cpp
+    src/sim/ScenarioComparison.cpp)
+target_include_directories(ridgeline_scenario_comparison_tests PRIVATE src)
+target_link_libraries(ridgeline_scenario_comparison_tests glm::glm)
+add_test(NAME scenario_comparison_tests
+    COMMAND ridgeline_scenario_comparison_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_executable(ridgeline_tile_cache_tests
     tests/test_tile_cache.cpp src/data/TileBatchDownloader.cpp)
 target_include_directories(ridgeline_tile_cache_tests PRIVATE src)
@@ -159,6 +169,7 @@ add_executable(ridgeline_ui_interaction_tests
     src/ui/LocationDialog.cpp
     src/ui/SourcePositionDialog.cpp
     src/ui/PointAnalysisPanel.cpp
+    src/ui/ScenarioComparisonPanel.cpp
     src/geo/Mgrs.cpp
     src/sim/TerrainModel.cpp
     src/data/AntennaLibrary.cpp

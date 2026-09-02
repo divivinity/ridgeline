@@ -5,6 +5,9 @@ out vec4  fragColor;
 uniform sampler2D uHeatmap;
 uniform float     uMinDbm;   // e.g. -120.0
 uniform float     uMaxDbm;   // e.g.  -40.0
+uniform int       uComparisonMode;
+uniform vec2      uGridUvScale;
+uniform vec2      uGridUvOffset;
 
 vec3 heatColor(float t) {
     // Dead (red) -> marginal (yellow) -> good (green) -> strong (cyan/blue)
@@ -18,7 +21,23 @@ vec3 heatColor(float t) {
 }
 
 void main() {
-    float dbm = texture(uHeatmap, vTexCoord).r;
+    vec2 gridUv = vTexCoord * uGridUvScale + uGridUvOffset;
+    if (any(lessThan(gridUv, vec2(0.0))) ||
+        any(greaterThan(gridUv, vec2(1.0)))) {
+        fragColor = vec4(0.0);
+        return;
+    }
+    float dbm = texture(uHeatmap, gridUv).r;
+    if (uComparisonMode != 0) {
+        if (dbm < -0.5) {
+            fragColor = vec4(0.95, 0.16, 0.18, 0.82); // lost service
+        } else if (dbm > 0.5) {
+            fragColor = vec4(0.10, 0.88, 0.45, 0.82); // gained service
+        } else {
+            fragColor = vec4(0.0);                    // unchanged
+        }
+        return;
+    }
     if (dbm < uMinDbm + 1.0) {
         fragColor = vec4(0.0); // transparent for dead zones
         return;

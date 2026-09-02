@@ -11,8 +11,11 @@
 #include "OverlayToolbar.h"
 #include "BottomBar.h"
 #include "PointAnalysisPanel.h"
+#include "ScenarioComparisonPanel.h"
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
+#include "sim/ScenarioComparison.h"
+#include <cstdint>
 
 class QUndoStack;
 
@@ -52,6 +55,8 @@ private:
     BottomBar*       m_bottomBar = nullptr;
     PointAnalysisPanel* m_pointPanel = nullptr;
     QDockWidget*     m_pointDock = nullptr;
+    ScenarioComparisonPanel* m_comparisonPanel = nullptr;
+    QDockWidget*     m_comparisonDock = nullptr;
     QLabel*          m_statusLabel = nullptr;
     QLabel*          m_locationLabel = nullptr;
     QPushButton*     m_solveBtn = nullptr;
@@ -62,6 +67,9 @@ private:
     bool             m_placingJammer = false;
     QString          m_locationName;
     QUndoStack*      m_undoStack = nullptr;
+    FieldGrid        m_baselineField;
+    std::uint64_t    m_terrainRevision = 0;
+    std::uint64_t    m_baselineTerrainRevision = 0;
 
     void setupScene();
     void applyTheme();
@@ -79,4 +87,9 @@ private:
                           const QString& description, int mergeId = -1);
     void syncAntennaGeo(Antenna& antenna) const;
     QString sourcePositionSummary(const Antenna& antenna) const;
+    void captureScenarioBaseline();
+    void clearScenarioBaseline();
+    void invalidateScenarioComparisonCurrent();
+    void resetScenarioComparisonForTerrain();
+    void updateScenarioComparisonAfterSolve();
 };
