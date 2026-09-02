@@ -53,7 +53,8 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
     result.valid = true;
     result.receiverPosition = {
         sampledWorldX,
-        terrain.heightAtWorld(sampledWorldX, sampledWorldZ) + 1.5f,
+        terrain.heightAtWorld(sampledWorldX, sampledWorldZ)
+            + receiver.receiverHeightAglM,
         sampledWorldZ};
     result.desiredDbm = valueAt(grid.dbm, index);
     result.strongestSourceDbm = valueAt(grid.strongestDesiredDbm, index);

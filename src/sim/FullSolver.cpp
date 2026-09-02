@@ -64,7 +64,8 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
             const glm::vec2 center = grid.cellCenter(gx, gz);
             const float wx = center.x;
             const float wz = center.y;
-            const float wy = terrain.heightAtWorld(wx, wz) + 1.5f;
+            const float wy = terrain.heightAtWorld(wx, wz)
+                           + receiver.receiverHeightAglM;
             const glm::vec3 rx{wx, wy, wz};
 
             float strongestDesiredDbm = NEG_INF;

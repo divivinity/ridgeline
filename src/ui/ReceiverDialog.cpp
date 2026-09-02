@@ -31,6 +31,8 @@ ReceiverDialog::ReceiverDialog(const ReceiverSettings& settings, QWidget* parent
     outer->addWidget(intro);
 
     auto* form = new QFormLayout();
+    m_heightAgl = spin(0.0, 1000.0, 0.5, " m AGL");
+    m_heightAgl->setObjectName("ReceiverHeightAglSpin");
     m_sensitivity = spin(-170.0, -20.0, 1.0, " dBm");
     m_bandwidthKhz = spin(0.001, 100000.0, 1.0, " kHz");
     m_noiseFigure = spin(0.0, 40.0, 0.5, " dB");
@@ -39,6 +41,7 @@ ReceiverDialog::ReceiverDialog(const ReceiverSettings& settings, QWidget* parent
     m_polarization = new QComboBox();
     m_polarization->addItems({"vertical", "horizontal", "RHCP", "LHCP"});
 
+    m_heightAgl->setValue(settings.receiverHeightAglM);
     m_sensitivity->setValue(settings.sensitivityDbm);
     m_bandwidthKhz->setValue(settings.bandwidthHz / 1000.0f);
     m_noiseFigure->setValue(settings.noiseFigureDb);
@@ -47,6 +50,7 @@ ReceiverDialog::ReceiverDialog(const ReceiverSettings& settings, QWidget* parent
     int pol = m_polarization->findText(QString::fromStdString(settings.polarization), Qt::MatchFixedString);
     m_polarization->setCurrentIndex(pol >= 0 ? pol : 0);
 
+    form->addRow("Receiver height:", m_heightAgl);
     form->addRow("Sensitivity:", m_sensitivity);
     form->addRow("Bandwidth:", m_bandwidthKhz);
     form->addRow("Noise figure:", m_noiseFigure);
@@ -63,6 +67,7 @@ ReceiverDialog::ReceiverDialog(const ReceiverSettings& settings, QWidget* parent
 
 ReceiverSettings ReceiverDialog::settings() const {
     ReceiverSettings result;
+    result.receiverHeightAglM = static_cast<float>(m_heightAgl->value());
     result.sensitivityDbm = static_cast<float>(m_sensitivity->value());
     result.bandwidthHz = static_cast<float>(m_bandwidthKhz->value() * 1000.0);
     result.noiseFigureDb = static_cast<float>(m_noiseFigure->value());

@@ -8,6 +8,11 @@
 #include <functional>
 #include <string>
 
+struct CoverageCalibrationSettings {
+    bool enabled = false;
+    float desiredPowerOffsetDb = 0.0f;
+};
+
 class SimEngine {
 public:
     enum class Mode {
@@ -20,6 +25,7 @@ public:
 
     Mode mode = Mode::Planner;
     ReceiverSettings receiver;
+    CoverageCalibrationSettings calibration;
 
     void setTerrain(TerrainModel terrain);
     void setAntennas(std::vector<Antenna> antennas);

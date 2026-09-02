@@ -146,6 +146,17 @@ add_test(NAME scenario_comparison_tests
     COMMAND ridgeline_scenario_comparison_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_executable(ridgeline_measurement_calibration_tests
+    tests/test_measurement_calibration.cpp
+    src/sim/MeasurementCalibration.cpp
+    src/sim/TerrainModel.cpp
+    src/data/MeasurementIO.cpp)
+target_include_directories(ridgeline_measurement_calibration_tests PRIVATE src)
+target_link_libraries(ridgeline_measurement_calibration_tests glm::glm)
+add_test(NAME measurement_calibration_tests
+    COMMAND ridgeline_measurement_calibration_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_executable(ridgeline_tile_cache_tests
     tests/test_tile_cache.cpp src/data/TileBatchDownloader.cpp)
 target_include_directories(ridgeline_tile_cache_tests PRIVATE src)
@@ -170,6 +181,7 @@ add_executable(ridgeline_ui_interaction_tests
     src/ui/SourcePositionDialog.cpp
     src/ui/PointAnalysisPanel.cpp
     src/ui/ScenarioComparisonPanel.cpp
+    src/ui/CalibrationPanel.cpp
     src/geo/Mgrs.cpp
     src/sim/TerrainModel.cpp
     src/data/AntennaLibrary.cpp

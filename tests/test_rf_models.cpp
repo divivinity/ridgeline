@@ -257,10 +257,12 @@ void testPartialEdgeCellsUseTerrainBoundary() {
     emitter.position = {0.0f, 20.0f, 0.0f};
     emitter.powerW = 1.0f;
     emitter.frequencyMHz = 450.0f;
-    const glm::vec3 boundaryReceiver{80.0f, 1.5f, 80.0f};
+    ReceiverSettings receiver;
+    receiver.receiverHeightAglM = 12.5f;
+    const glm::vec3 boundaryReceiver{
+        80.0f, receiver.receiverHeightAglM, 80.0f};
     const float distanceM = glm::distance(emitter.position, boundaryReceiver);
     const float txPowerDbm = 10.0f * std::log10(emitter.powerW * 1000.0f);
-    const ReceiverSettings receiver;
     const float gainDbi = RFModels::effectiveAntennaGainDbi(
         emitter, boundaryReceiver, receiver);
     const float materialLossDb = MaterialLibrary::defaultMaterial()
@@ -272,10 +274,12 @@ void testPartialEdgeCellsUseTerrainBoundary() {
 
     FastSolver fast;
     fast.gridResolution = 60.0f; // Last nominal center is 90 m, outside the AOI.
+    fast.receiver = receiver;
     const FieldGrid fastGrid = fast.solve(terrain, {emitter}, materials);
 
     FullSolver full;
     full.gridResolution = 60.0f;
+    full.receiver = receiver;
     full.enableItm = false;
     full.enableGroundReflection = false;
     full.enableRain = false;
@@ -288,6 +292,7 @@ void testPartialEdgeCellsUseTerrainBoundary() {
         const PointAnalysisResult analysis = analyzeFieldPoint(
             *grid, terrain, {emitter}, receiver, 80.0f, 80.0f);
         NEAR(analysis.receiverPosition.x, 80.0, 0.001);
+        NEAR(analysis.receiverPosition.y, receiver.receiverHeightAglM, 0.001);
         NEAR(analysis.receiverPosition.z, 80.0, 0.001);
     }
 }
@@ -414,14 +419,21 @@ void testItmAdapter() {
 #endif
 }
 
-void testScenarioV4RoundTrip() {
+void testScenarioV5RoundTrip() {
     ScenarioDoc doc;
+    doc.receiver.receiverHeightAglM = 7.25f;
     doc.receiver.sensitivityDbm = -112.0f;
     doc.receiver.bandwidthHz = 12500.0f;
     doc.receiver.noiseFigureDb = 3.5f;
     doc.receiver.requiredSnrDb = 8.0f;
     doc.receiver.fadeMarginTargetDb = 12.0f;
     doc.receiver.polarization = "horizontal";
+    doc.calibration.enabled = true;
+    doc.calibration.desiredPowerOffsetDb = 4.25f;
+    doc.calibrationSourceName = "drive-test.csv";
+    doc.calibrationPairedSamples = 17;
+    doc.calibrationRmseBeforeDb = 8.5f;
+    doc.calibrationRmseAfterDb = 4.0f;
     Antenna a;
     a.azimuthDeg = 123.0f;
     a.downtiltDeg = 4.5f;
@@ -435,19 +447,48 @@ void testScenarioV4RoundTrip() {
     a.patternSource = "measured.csv";
     doc.antennas.push_back(a);
 
-    const std::string path = "test_scenario_v4.json";
+    const std::string path = "test_scenario_v5.json";
     ScenarioIO::save(doc, path);
     const ScenarioDoc loaded = ScenarioIO::load(path);
     std::remove(path.c_str());
 
+    NEAR(loaded.receiver.receiverHeightAglM, 7.25, 0.001);
     NEAR(loaded.receiver.sensitivityDbm, -112.0, 0.001);
     NEAR(loaded.receiver.bandwidthHz, 12500.0, 0.1);
     CHECK(loaded.receiver.polarization == "horizontal");
+    CHECK(loaded.calibration.enabled);
+    NEAR(loaded.calibration.desiredPowerOffsetDb, 4.25, 0.001);
+    CHECK(loaded.calibrationSourceName == "drive-test.csv");
+    CHECK(loaded.calibrationPairedSamples == 17u);
+    NEAR(loaded.calibrationRmseBeforeDb, 8.5, 0.001);
+    NEAR(loaded.calibrationRmseAfterDb, 4.0, 0.001);
     CHECK(loaded.antennas.size() == 1u);
     NEAR(loaded.antennas[0].azimuthDeg, 123.0, 0.001);
     NEAR(loaded.antennas[0].cableLossDb, 1.7, 0.001);
     CHECK(loaded.antennas[0].azimuthPatternDb.size() == 3u);
     CHECK(loaded.antennas[0].patternSource == "measured.csv");
+}
+
+void testLegacyScenarioDefaultsReceiverHeight() {
+    const std::string path = "test_scenario_v4_receiver_default.json";
+    {
+        std::ofstream file(path);
+        file << R"({
+            "version": 4,
+            "receiver": {
+                "sensitivity_dbm": -105.0,
+                "bandwidth_hz": 25000.0
+            }
+        })";
+    }
+
+    const ScenarioDoc loaded = ScenarioIO::load(path);
+    std::remove(path.c_str());
+
+    NEAR(loaded.receiver.receiverHeightAglM, 1.5, 0.001);
+    NEAR(loaded.receiver.sensitivityDbm, -105.0, 0.001);
+    CHECK(!loaded.calibration.enabled);
+    NEAR(loaded.calibration.desiredPowerOffsetDb, 0.0, 0.001);
 }
 }
 
@@ -464,7 +505,8 @@ int main() {
     testLongProfileIncludesEffectiveEarthCurvature();
     testFullSolverBandwidthFiltering();
     testItmAdapter();
-    testScenarioV4RoundTrip();
+    testScenarioV5RoundTrip();
+    testLegacyScenarioDefaultsReceiverHeight();
     if (failures == 0) std::cout << "RF model tests passed.\n";
     return failures ? 1 : 0;
 }

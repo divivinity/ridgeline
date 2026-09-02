@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <stdexcept>
+#include <cmath>
 
 using json = nlohmann::json;
 
@@ -43,16 +44,29 @@ static SimEngine::Mode strToMode(const std::string& s) {
 
 void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     json j;
-    j["version"] = 4;
+    j["version"] = 5;
     j["mode"] = modeToStr(doc.mode);
 
     auto& jr = j["receiver"];
+    jr["height_agl_m"] = doc.receiver.receiverHeightAglM;
     jr["sensitivity_dbm"] = doc.receiver.sensitivityDbm;
     jr["bandwidth_hz"] = doc.receiver.bandwidthHz;
     jr["noise_figure_db"] = doc.receiver.noiseFigureDb;
     jr["required_snr_db"] = doc.receiver.requiredSnrDb;
     jr["fade_margin_target_db"] = doc.receiver.fadeMarginTargetDb;
     jr["polarization"] = doc.receiver.polarization;
+
+    auto& jc = j["calibration"];
+    jc["enabled"] = doc.calibration.enabled;
+    jc["desired_power_offset_db"] = doc.calibration.desiredPowerOffsetDb;
+    if (!doc.calibrationSourceName.empty())
+        jc["measurement_source"] = doc.calibrationSourceName;
+    if (doc.calibrationPairedSamples > 0)
+        jc["paired_samples"] = doc.calibrationPairedSamples;
+    if (std::isfinite(doc.calibrationRmseBeforeDb))
+        jc["rmse_before_db"] = doc.calibrationRmseBeforeDb;
+    if (std::isfinite(doc.calibrationRmseAfterDb))
+        jc["rmse_after_db"] = doc.calibrationRmseAfterDb;
 
     auto& jt = j["terrain"];
     jt["type"] = typeToStr(doc.terrain.type);
@@ -125,6 +139,8 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
         if (j.contains("receiver")) {
             const auto& jr = j["receiver"];
             ReceiverSettings defaults;
+            doc.receiver.receiverHeightAglM = jr.value(
+                "height_agl_m", defaults.receiverHeightAglM);
             doc.receiver.sensitivityDbm = jr.value("sensitivity_dbm", defaults.sensitivityDbm);
             doc.receiver.bandwidthHz = jr.value("bandwidth_hz", defaults.bandwidthHz);
             doc.receiver.noiseFigureDb = jr.value("noise_figure_db", defaults.noiseFigureDb);
@@ -133,6 +149,24 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                 "fade_margin_target_db", defaults.fadeMarginTargetDb);
             doc.receiver.polarization = jr.value(
                 "polarization", defaults.polarization);
+        }
+
+        if (j.contains("calibration")) {
+            const auto& jc = j["calibration"];
+            const float offset = jc.value("desired_power_offset_db", 0.0f);
+            doc.calibration.desiredPowerOffsetDb =
+                std::isfinite(offset) ? offset : 0.0f;
+            doc.calibration.enabled =
+                jc.value("enabled", false) &&
+                std::isfinite(doc.calibration.desiredPowerOffsetDb);
+            doc.calibrationSourceName = jc.value(
+                "measurement_source", std::string{});
+            doc.calibrationPairedSamples = jc.value(
+                "paired_samples", std::size_t{0});
+            doc.calibrationRmseBeforeDb = jc.value(
+                "rmse_before_db", std::numeric_limits<float>::quiet_NaN());
+            doc.calibrationRmseAfterDb = jc.value(
+                "rmse_after_db", std::numeric_limits<float>::quiet_NaN());
         }
 
         if (j.contains("terrain")) {

@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 
 struct ReceiverSettings {
+    float receiverHeightAglM = 1.5f;
     float sensitivityDbm = -100.0f;
     float bandwidthHz = 25000.0f;
     float noiseFigureDb = 5.0f;

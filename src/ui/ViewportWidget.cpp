@@ -17,6 +17,7 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    m_basemap.setPrepareOpenGLCallback([this]() { makeCurrent(); });
 
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
@@ -392,9 +393,19 @@ void ViewportWidget::updateMapHud() {
     m_mapInfoLabel->setText(mapText);
     m_mapInfoLabel->adjustSize();
 
-    m_attributionLabel->setText(m_basemap.attribution().isEmpty()
-        ? QStringLiteral("Elevation © Mapzen and source contributors")
-        : m_basemap.attribution() + "  ·  Elevation © Mapzen and contributors");
+    QString attribution;
+    if (terrain.hasGeoReference() && !m_basemap.hasTexture()) {
+        attribution = QStringLiteral("Satellite imagery unavailable");
+        if (!m_basemap.lastError().isEmpty())
+            attribution += QStringLiteral(" · ") + m_basemap.lastError();
+        attribution += QStringLiteral("  ·  Elevation © Mapzen and contributors");
+    } else {
+        attribution = m_basemap.attribution().isEmpty()
+            ? QStringLiteral("Elevation © Mapzen and source contributors")
+            : m_basemap.attribution() +
+                QStringLiteral("  ·  Elevation © Mapzen and contributors");
+    }
+    m_attributionLabel->setText(attribution);
     m_attributionLabel->adjustSize();
     emit basemapInfoChanged(m_basemap.providerName(),
                             m_basemap.attribution(),

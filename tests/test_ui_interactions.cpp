@@ -4,16 +4,22 @@
 #include "ui/SourcePositionDialog.h"
 #include "ui/PointAnalysisPanel.h"
 #include "ui/ScenarioComparisonPanel.h"
+#include "ui/CalibrationPanel.h"
 #include "sim/TerrainModel.h"
 #include "sim/ScenarioComparison.h"
+#include "sim/MeasurementCalibration.h"
 #include "data/Exporter.h"
+#include "RuntimePaths.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QElapsedTimer>
 #include <QDoubleSpinBox>
+#include <QDir>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <QHostAddress>
 #include <QLineEdit>
 #include <QLabel>
@@ -22,6 +28,7 @@
 #include <QPushButton>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QToolButton>
 
 #include <cmath>
@@ -263,6 +270,130 @@ void testScenarioComparisonPanelWorkflow() {
     CHECK(!panel.changesVisible());
 }
 
+void testCalibrationPanelStatesAndSignals() {
+    CalibrationPanel panel;
+    panel.resize(360, 680);
+    panel.show();
+    QApplication::processEvents();
+
+    auto* status = panel.findChild<QLabel*>("CalibrationStatus");
+    auto* imported = panel.findChild<QLabel*>("CalibrationImportedCount");
+    auto* usable = panel.findChild<QLabel*>("CalibrationUsableCount");
+    auto* rejected = panel.findChild<QLabel*>("CalibrationRejectedCount");
+    auto* meanResidual = panel.findChild<QLabel*>("CalibrationMeanResidual");
+    auto* rmseBefore = panel.findChild<QLabel*>("CalibrationRmseBefore");
+    auto* rmseAfter = panel.findChild<QLabel*>("CalibrationRmseAfter");
+    auto* recommended = panel.findChild<QLabel*>("CalibrationRecommendedCorrection");
+    auto* applied = panel.findChild<QLabel*>("CalibrationAppliedCorrection");
+    auto* warnings = panel.findChild<QLabel*>("CalibrationWarnings");
+    auto* importButton = panel.findChild<QPushButton*>("CalibrationImportButton");
+    auto* applyButton = panel.findChild<QPushButton*>("CalibrationApplyCorrectionButton");
+    auto* resetButton = panel.findChild<QPushButton*>("CalibrationResetCorrectionButton");
+    auto* clearButton = panel.findChild<QPushButton*>("CalibrationClearButton");
+    CHECK(status && imported && usable && rejected && meanResidual && rmseBefore &&
+          rmseAfter && recommended && applied && warnings && importButton &&
+          applyButton && resetButton && clearButton);
+    if (!status || !imported || !usable || !rejected || !meanResidual ||
+        !rmseBefore || !rmseAfter || !recommended || !applied || !warnings ||
+        !importButton || !applyButton || !resetButton || !clearButton) return;
+
+    int importRequests = 0;
+    int applyRequests = 0;
+    int resetRequests = 0;
+    int clearRequests = 0;
+    QObject::connect(&panel, &CalibrationPanel::importMeasurementsRequested,
+                     [&]() { ++importRequests; });
+    QObject::connect(&panel, &CalibrationPanel::applyRecommendedCorrectionRequested,
+                     [&]() { ++applyRequests; });
+    QObject::connect(&panel, &CalibrationPanel::resetAppliedCorrectionRequested,
+                     [&]() { ++resetRequests; });
+    QObject::connect(&panel, &CalibrationPanel::clearMeasurementsRequested,
+                     [&]() { ++clearRequests; });
+
+    CHECK(panel.state() == CalibrationPanel::State::NoMeasurements);
+    CHECK(status->text() == "NO MEASUREMENTS");
+    CHECK(!applyButton->isEnabled());
+    CHECK(!resetButton->isEnabled());
+    CHECK(!clearButton->isEnabled());
+    importButton->click();
+    CHECK(importRequests == 1);
+
+    CalibrationPanel::Report report;
+    report.importedSamples = 6;
+    report.usableSamples = 0;
+    report.rejectedSamples = 1;
+    report.appliedCorrectionDb = 0.0;
+    report.warnings = {QStringLiteral("Run coverage for this terrain.")};
+    panel.showAwaitingCoverage(report);
+    CHECK(panel.state() == CalibrationPanel::State::AwaitingCoverage);
+    CHECK(status->text() == "COVERAGE REQUIRED");
+    CHECK(imported->text() == "6");
+    CHECK(usable->text() == "0");
+    CHECK(rejected->text() == "1");
+    CHECK(warnings->text().contains("Run coverage"));
+    CHECK(!applyButton->isEnabled());
+    CHECK(clearButton->isEnabled());
+
+    report.usableSamples = 2;
+    report.recommendedCorrectionDb = 3.25;
+    panel.showInsufficientSamples(report);
+    CHECK(panel.state() == CalibrationPanel::State::InsufficientSamples);
+    CHECK(status->text() == "MORE MATCHES NEEDED");
+    CHECK(!applyButton->isEnabled());
+
+    report.usableSamples = 5;
+    report.meanResidualDb = 3.25;
+    report.medianResidualDb = 3.0;
+    report.meanAbsoluteErrorDb = 4.5;
+    report.meanAbsoluteErrorAfterDb = 1.2;
+    report.rmseBeforeDb = 5.1;
+    report.rmseAfterDb = 1.5;
+    panel.setCalibrationReady(report);
+    CHECK(panel.state() == CalibrationPanel::State::Ready);
+    CHECK(status->text() == "CALIBRATION READY");
+    CHECK(applyButton->isEnabled());
+    CHECK(meanResidual->text().contains("3.25"));
+    CHECK(rmseBefore->text().contains("5.10"));
+    CHECK(rmseAfter->text().contains("1.50"));
+    CHECK(recommended->text().contains("3.25"));
+    applyButton->click();
+    CHECK(applyRequests == 1);
+
+    panel.setAppliedCorrection(3.25);
+    CHECK(resetButton->isEnabled());
+    CHECK(applied->text().contains("3.25"));
+    resetButton->click();
+    clearButton->click();
+    CHECK(resetRequests == 1);
+    CHECK(clearRequests == 1);
+
+    CalibrationReport calibration;
+    calibration.imported = 4;
+    calibration.paired = 2;
+    calibration.rejected = 2;
+    calibration.meanBiasDb = 1.75;
+    calibration.warnings = {"Two pairs are not enough."};
+    panel.setCalibrationReport(calibration, -0.5);
+    CHECK(panel.state() == CalibrationPanel::State::InsufficientSamples);
+    CHECK(panel.report().importedSamples == 4);
+    CHECK(panel.report().usableSamples == 2);
+    CHECK(panel.report().rejectedSamples == 2);
+    CHECK(panel.report().warnings.contains("Two pairs are not enough."));
+    CHECK(!applyButton->isEnabled());
+    CHECK(resetButton->isEnabled());
+
+    calibration.paired = 3;
+    panel.setCalibrationReport(calibration, 0.0);
+    CHECK(panel.state() == CalibrationPanel::State::Ready);
+    CHECK(applyButton->isEnabled());
+    CHECK(!resetButton->isEnabled());
+
+    panel.showNoMeasurements();
+    CHECK(panel.state() == CalibrationPanel::State::NoMeasurements);
+    CHECK(panel.report().appliedCorrectionDb == 0.0);
+    CHECK(!clearButton->isEnabled());
+}
+
 void testCsvUsesClampedEdgeCellCenter() {
     FieldGrid grid;
     grid.width = 2;
@@ -346,6 +477,38 @@ void testDebouncedCustomGeocoderSuggestions() {
     qunsetenv("RIDGELINE_GEOCODER_URL");
 }
 
+void testRuntimeAssetsIgnoreLaunchDirectory() {
+    QTemporaryDir temp;
+    CHECK(temp.isValid());
+    if (!temp.isValid()) return;
+
+    const QString applicationDir = QDir(temp.path()).filePath("packaged");
+    const QString workingDir = QDir(temp.path()).filePath("unrelated-launch-dir");
+    const QString relative = "assets/shaders/basemap.vert";
+    const QString packagedFile = QDir(applicationDir).filePath(relative);
+    const QString workingFile = QDir(workingDir).filePath(relative);
+    CHECK(QDir().mkpath(QFileInfo(packagedFile).absolutePath()));
+    CHECK(QDir().mkpath(QFileInfo(workingFile).absolutePath()));
+
+    QFile packaged(packagedFile);
+    CHECK(packaged.open(QIODevice::WriteOnly));
+    packaged.write("packaged shader");
+    packaged.close();
+    QFile working(workingFile);
+    CHECK(working.open(QIODevice::WriteOnly));
+    working.write("wrong launch-directory shader");
+    working.close();
+
+    CHECK(RuntimePaths::resolveFromRoots(
+              relative, applicationDir, workingDir) ==
+          QDir::cleanPath(packagedFile));
+
+    const QString missing = "assets/shaders/missing.vert";
+    CHECK(RuntimePaths::resolveFromRoots(
+              missing, applicationDir, workingDir) ==
+          QDir::cleanPath(QDir(applicationDir).filePath(missing)));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -362,9 +525,11 @@ int main(int argc, char** argv) {
     testPreciseSourcePositionDialog();
     testPointAnalysisPanelShowsExplanation();
     testScenarioComparisonPanelWorkflow();
+    testCalibrationPanelStatesAndSignals();
     testCsvUsesClampedEdgeCellCenter();
     testMgrsDialogInput();
     testDebouncedCustomGeocoderSuggestions();
+    testRuntimeAssetsIgnoreLaunchDirectory();
 
     if (failures == 0)
         std::cout << "UI interaction tests passed.\n";

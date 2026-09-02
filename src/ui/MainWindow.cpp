@@ -1,7 +1,9 @@
 #include "MainWindow.h"
+#include "RuntimePaths.h"
 #include "data/TerrainLoader.h"
 #include "data/GlobalTerrainLoader.h"
 #include "data/ScenarioIO.h"
+#include "data/MeasurementIO.h"
 #include "data/Exporter.h"
 #include "data/AntennaLibrary.h"
 #include "LocationDialog.h"
@@ -98,7 +100,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setupScene();
 
     try {
-        m_antennaLib.load("assets/antennas.json");
+        m_antennaLib.load(
+            RuntimePaths::resolve("assets/antennas.json").toStdString());
     } catch (...) {
         m_antennaLib.loadDefaults();
     }
@@ -124,6 +127,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     saveScenAct->setShortcut(QKeySequence::Save);
     connect(saveScenAct, &QAction::triggered, this, &MainWindow::onSaveScenario);
 
+    fileMenu->addSeparator();
+    QAction* importMeasurementsAct =
+        fileMenu->addAction("Import RF &Measurements…");
+    importMeasurementsAct->setObjectName("ImportMeasurementsAction");
+    connect(importMeasurementsAct, &QAction::triggered,
+            this, &MainWindow::onImportMeasurements);
+
     QMenu* exportMenu = fileMenu->addMenu("&Export");
     QAction* exportPngAct = exportMenu->addAction("Coverage &PNG…");
     connect(exportPngAct, &QAction::triggered, this, &MainWindow::onExportPng);
@@ -145,6 +155,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(receiverAct, &QAction::triggered, this, &MainWindow::onReceiverSettings);
     QAction* comparisonAct = analysisMenu->addAction("Scenario &Comparison…");
     comparisonAct->setObjectName("ScenarioComparisonAction");
+    QAction* calibrationAct = analysisMenu->addAction("Measurement &Calibration…");
+    calibrationAct->setObjectName("MeasurementCalibrationAction");
 
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
@@ -228,6 +240,35 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &ScenarioComparisonPanel::showChangesOnMapChanged,
             m_viewport, &ViewportWidget::setScenarioComparisonVisible);
 
+    m_calibrationPanel = new CalibrationPanel(this);
+    m_calibrationDock = new QDockWidget("Measurement Calibration", this);
+    m_calibrationDock->setObjectName("MeasurementCalibrationDock");
+    m_calibrationDock->setWidget(m_calibrationPanel);
+    m_calibrationDock->setAllowedAreas(
+        Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+    m_calibrationDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    m_calibrationDock->setMinimumWidth(320);
+    m_calibrationDock->setStyleSheet(
+        "QDockWidget { color: #94a3b8; font-size: 10px; }"
+        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
+    addDockWidget(Qt::RightDockWidgetArea, m_calibrationDock);
+    tabifyDockWidget(m_comparisonDock, m_calibrationDock);
+    m_calibrationDock->hide();
+
+    connect(calibrationAct, &QAction::triggered,
+            this, &MainWindow::showCalibrationPanel);
+    connect(m_calibrationPanel, &CalibrationPanel::importMeasurementsRequested,
+            this, &MainWindow::onImportMeasurements);
+    connect(m_calibrationPanel,
+            &CalibrationPanel::applyRecommendedCorrectionRequested,
+            this, &MainWindow::applyCalibrationCorrection);
+    connect(m_calibrationPanel,
+            &CalibrationPanel::resetAppliedCorrectionRequested,
+            this, &MainWindow::resetCalibrationCorrection);
+    connect(m_calibrationPanel, &CalibrationPanel::clearMeasurementsRequested,
+            this, &MainWindow::clearCalibrationMeasurements);
+
     connect(m_scenarioTree, &ScenarioTree::addEmitterRequested,
             this, &MainWindow::onAddAntenna);
     connect(m_scenarioTree, &ScenarioTree::addJammerRequested,
@@ -292,6 +333,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 if (m_engine.fieldGrid().valid()) {
                     m_engine.setFieldGrid({});
                     invalidateScenarioComparisonCurrent();
+                    invalidateCalibrationCurrent();
                     if (m_pointPanel) m_pointPanel->clear();
                     if (m_pointDock) m_pointDock->hide();
                     if (m_viewport) {
@@ -366,6 +408,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     viewMenu->addAction(bottomDock->toggleViewAction());
     viewMenu->addAction(m_pointDock->toggleViewAction());
     viewMenu->addAction(m_comparisonDock->toggleViewAction());
+    viewMenu->addAction(m_calibrationDock->toggleViewAction());
 
     refreshTree();
 
@@ -388,7 +431,8 @@ void MainWindow::setupScene() {
     m_engine.setTerrain(std::move(terrain));
     m_terrainSource = TerrainSource{};
     placeDefaultAntennas();
-    m_engine.loadMaterials("assets/materials.json");
+    m_engine.loadMaterials(
+        RuntimePaths::resolve("assets/materials.json").toStdString());
 }
 
 void MainWindow::captureScenarioBaseline() {
@@ -435,6 +479,7 @@ void MainWindow::resetScenarioComparisonForTerrain() {
     m_baselineTerrainRevision = 0;
     if (m_viewport) m_viewport->clearScenarioComparison();
     if (m_comparisonPanel) m_comparisonPanel->showNoBaseline(false);
+    handleCalibrationTerrainChange();
 }
 
 void MainWindow::updateScenarioComparisonAfterSolve() {
@@ -464,6 +509,194 @@ void MainWindow::updateScenarioComparisonAfterSolve() {
     }
     m_comparisonDock->show();
     m_comparisonDock->raise();
+}
+
+void MainWindow::showCalibrationPanel() {
+    if (!m_calibrationPanel || !m_calibrationDock) return;
+    const double applied = m_engine.calibration.enabled
+        ? static_cast<double>(m_engine.calibration.desiredPowerOffsetDb)
+        : 0.0;
+    m_calibrationPanel->setAppliedCorrection(applied);
+    m_calibrationDock->show();
+    m_calibrationDock->raise();
+}
+
+CalibrationPanel::Report MainWindow::calibrationAwaitingReport() const {
+    CalibrationPanel::Report report;
+    report.importedSamples = m_measurementRowsRead > 0
+        ? m_measurementRowsRead : m_measurements.size();
+    report.rejectedSamples = m_measurementRejectedRows;
+    report.appliedCorrectionDb = m_engine.calibration.enabled
+        ? static_cast<double>(m_engine.calibration.desiredPowerOffsetDb)
+        : 0.0;
+    report.warnings = m_measurementImportWarnings;
+    return report;
+}
+
+void MainWindow::invalidateCalibrationCurrent() {
+    m_calibrationReportCurrent = false;
+    m_calibrationReport = {};
+    if (!m_calibrationPanel) return;
+    if (m_measurements.empty()) {
+        m_calibrationPanel->showNoMeasurements();
+        m_calibrationPanel->setAppliedCorrection(
+            m_engine.calibration.enabled
+                ? m_engine.calibration.desiredPowerOffsetDb : 0.0);
+    } else {
+        m_calibrationPanel->showAwaitingCoverage(calibrationAwaitingReport());
+    }
+}
+
+void MainWindow::updateCalibrationAfterSolve() {
+    if (!m_calibrationPanel) return;
+    if (m_measurements.empty()) {
+        m_calibrationReportCurrent = false;
+        m_calibrationPanel->showNoMeasurements();
+        m_calibrationPanel->setAppliedCorrection(
+            m_engine.calibration.enabled
+                ? m_engine.calibration.desiredPowerOffsetDb : 0.0);
+        return;
+    }
+    if (!m_engine.fieldGrid().valid()) {
+        invalidateCalibrationCurrent();
+        return;
+    }
+
+    MeasurementCalibrationOptions options;
+    options.expectedReceiverHeightAglM =
+        m_engine.receiver.receiverHeightAglM;
+    m_calibrationReport = MeasurementCalibration::evaluate(
+        m_measurements, m_engine.fieldGrid(), m_engine.terrain(),
+        m_engine.antennas(), options);
+    m_calibrationReport.imported = m_measurementRowsRead > 0
+        ? m_measurementRowsRead : m_measurements.size();
+    m_calibrationReport.rejected += m_measurementRejectedRows;
+    for (const QString& warning : m_measurementImportWarnings)
+        m_calibrationReport.warnings.push_back(warning.toStdString());
+    m_calibrationReportCurrent = true;
+    m_calibrationPanel->setCalibrationReport(
+        m_calibrationReport,
+        m_engine.calibration.enabled
+            ? m_engine.calibration.desiredPowerOffsetDb : 0.0);
+}
+
+void MainWindow::applyCalibrationCorrection() {
+    if (!m_calibrationReportCurrent || !m_calibrationReport.canApply() ||
+        !std::isfinite(m_calibrationReport.meanBiasDb)) {
+        QMessageBox::information(
+            this, "Calibration not ready",
+            "Run coverage with at least three usable field measurements before applying a correction.");
+        return;
+    }
+
+    const double current = m_engine.calibration.enabled
+        ? static_cast<double>(m_engine.calibration.desiredPowerOffsetDb)
+        : 0.0;
+    const double corrected = current + m_calibrationReport.meanBiasDb;
+    if (!std::isfinite(corrected) || std::abs(corrected) > 100.0) {
+        QMessageBox::warning(
+            this, "Correction not applied",
+            "The recommended total correction is outside the supported ±100 dB range. Check the measurement units, frequency, receiver height, and analysis area.");
+        return;
+    }
+
+    m_engine.calibration.enabled = std::abs(corrected) >= 0.005;
+    m_engine.calibration.desiredPowerOffsetDb =
+        m_engine.calibration.enabled ? static_cast<float>(corrected) : 0.0f;
+    m_appliedCalibrationSourceName = QFileInfo(m_measurementPath).fileName();
+    m_appliedCalibrationPairedSamples = m_calibrationReport.paired;
+    m_appliedCalibrationRmseBeforeDb =
+        static_cast<float>(m_calibrationReport.rmseBeforeDb);
+    m_appliedCalibrationRmseAfterDb =
+        static_cast<float>(m_calibrationReport.rmseAfterBiasDb);
+
+    m_engine.setFieldGrid({});
+    invalidateScenarioComparisonCurrent();
+    if (m_pointPanel) m_pointPanel->clear();
+    if (m_pointDock) m_pointDock->hide();
+    if (m_viewport) {
+        m_viewport->clearAnalysisPoint();
+        m_viewport->refreshOverlays();
+    }
+    invalidateCalibrationCurrent();
+    showCalibrationPanel();
+    m_statusLabel->setText(QString(
+        "  Calibration correction %1%2 dB applied · Run coverage to refresh results")
+        .arg(corrected > 0.0 ? "+" : "")
+        .arg(corrected, 0, 'f', 2));
+}
+
+void MainWindow::resetCalibrationCorrection() {
+    m_engine.calibration = {};
+    m_appliedCalibrationSourceName.clear();
+    m_appliedCalibrationPairedSamples = 0;
+    m_appliedCalibrationRmseBeforeDb =
+        std::numeric_limits<float>::quiet_NaN();
+    m_appliedCalibrationRmseAfterDb =
+        std::numeric_limits<float>::quiet_NaN();
+
+    m_engine.setFieldGrid({});
+    invalidateScenarioComparisonCurrent();
+    if (m_pointPanel) m_pointPanel->clear();
+    if (m_pointDock) m_pointDock->hide();
+    if (m_viewport) {
+        m_viewport->clearAnalysisPoint();
+        m_viewport->refreshOverlays();
+    }
+    invalidateCalibrationCurrent();
+    showCalibrationPanel();
+    m_statusLabel->setText(
+        "  Calibration correction reset · Run coverage to refresh results");
+}
+
+void MainWindow::clearCalibrationMeasurements() {
+    m_measurements.clear();
+    m_calibrationReport = {};
+    m_measurementPath.clear();
+    m_measurementRowsRead = 0;
+    m_measurementRejectedRows = 0;
+    m_measurementImportWarnings.clear();
+    m_calibrationReportCurrent = false;
+    if (m_calibrationPanel) {
+        m_calibrationPanel->showNoMeasurements();
+        m_calibrationPanel->setAppliedCorrection(
+            m_engine.calibration.enabled
+                ? m_engine.calibration.desiredPowerOffsetDb : 0.0);
+    }
+    if (m_statusLabel) {
+        m_statusLabel->setText(m_engine.calibration.enabled
+            ? "  Field measurements cleared · Applied correction retained"
+            : "  Field measurements cleared");
+    }
+}
+
+void MainWindow::handleCalibrationTerrainChange() {
+    if (m_measurements.empty()) {
+        invalidateCalibrationCurrent();
+        return;
+    }
+
+    const auto firstLocal = std::stable_partition(
+        m_measurements.begin(), m_measurements.end(),
+        [](const RFMeasurement& measurement) {
+            return measurement.coordinateKind == MeasurementCoordinateKind::Wgs84;
+        });
+    const std::size_t removed = static_cast<std::size_t>(
+        std::distance(firstLocal, m_measurements.end()));
+    m_measurements.erase(firstLocal, m_measurements.end());
+    if (removed > 0) {
+        m_measurementRejectedRows += removed;
+        m_measurementImportWarnings.push_back(QString(
+            "%1 local X/Z measurement(s) were removed because the analysis area changed; WGS84 measurements were retained.")
+            .arg(removed));
+    }
+    if (m_measurements.empty()) {
+        m_measurementPath.clear();
+        m_measurementRowsRead = 0;
+        m_measurementRejectedRows = 0;
+        m_measurementImportWarnings.clear();
+    }
+    invalidateCalibrationCurrent();
 }
 
 void MainWindow::placeDefaultAntennas() {
@@ -560,13 +793,25 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
             }));
         if (loadProgress.wasCanceled()) {
             m_statusLabel->setText("  Elevation loaded · Satellite imagery cancelled");
-        } else if (outside > 0) {
-            m_statusLabel->setText(QString(
-                "  Location loaded · %1 source(s) preserved outside this analysis area")
-                .arg(outside));
         } else {
-            m_statusLabel->setText(
-                "  Real elevation and satellite imagery aligned · Sources preserved");
+            const bool imageryReady = m_viewport && m_viewport->basemapReady();
+            const QString imageryError = m_viewport
+                ? m_viewport->basemapError() : QString{};
+            QString status;
+            if (!imageryReady) {
+                status = "  Elevation loaded · Satellite imagery unavailable";
+                if (!imageryError.isEmpty()) status += " — " + imageryError;
+            } else if (!imageryError.isEmpty()) {
+                status = "  Elevation and satellite imagery loaded with a warning — "
+                       + imageryError;
+            } else {
+                status = "  Real elevation and satellite imagery aligned";
+            }
+            status += outside > 0
+                ? QString(" · %1 source(s) remain outside this analysis area")
+                    .arg(outside)
+                : QStringLiteral(" · Sources preserved");
+            m_statusLabel->setText(status);
         }
     } catch (const std::runtime_error& e) {
         if (loadProgress.wasCanceled() || std::string(e.what()) == "Terrain load cancelled")
@@ -608,6 +853,7 @@ void MainWindow::onReceiverSettings() {
     m_engine.receiver = dialog.settings();
     m_engine.setFieldGrid({});
     invalidateScenarioComparisonCurrent();
+    invalidateCalibrationCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
     if (m_viewport) {
@@ -615,7 +861,8 @@ void MainWindow::onReceiverSettings() {
         m_viewport->refreshOverlays();
     }
     m_statusLabel->setText(QString(
-        "  Receiver updated · sensitivity %1 dBm · bandwidth %2 kHz · required SINR %3 dB · Run coverage to refresh")
+        "  Receiver updated · height %1 m AGL · sensitivity %2 dBm · bandwidth %3 kHz · required SINR %4 dB · Run coverage to refresh")
+        .arg(m_engine.receiver.receiverHeightAglM, 0, 'f', 1)
         .arg(m_engine.receiver.sensitivityDbm, 0, 'f', 0)
         .arg(m_engine.receiver.bandwidthHz / 1000.0f, 0, 'f', 1)
         .arg(m_engine.receiver.requiredSnrDb, 0, 'f', 1));
@@ -801,6 +1048,7 @@ void MainWindow::onSolve() {
         if (m_viewport) m_viewport->clearAnalysisPoint();
         m_viewport->refreshOverlays();
         updateScenarioComparisonAfterSolve();
+        updateCalibrationAfterSolve();
         const auto& grid = m_engine.fieldGrid();
         float minDbm = std::numeric_limits<float>::infinity();
         float maxDbm = -std::numeric_limits<float>::infinity();
@@ -936,6 +1184,7 @@ void MainWindow::applySourceState(const std::vector<Antenna>& antennas,
     m_engine.setAntennas(antennas);
     m_engine.setFieldGrid({});
     invalidateScenarioComparisonCurrent();
+    invalidateCalibrationCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
     if (m_viewport) m_viewport->clearAnalysisPoint();
@@ -1013,6 +1262,81 @@ void MainWindow::refreshBottomBar() {
         m_bottomBar->clearAntenna();
 }
 
+void MainWindow::onImportMeasurements() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Import RF Measurements", {},
+        "RF measurement CSV (*.csv);;All files (*)");
+    if (path.isEmpty()) return;
+
+    const MeasurementLoadResult loaded =
+        MeasurementIO::loadCsv(path.toStdString());
+    auto diagnosticText = [](const MeasurementDiagnostic& diagnostic) {
+        return diagnostic.line > 0
+            ? QString("CSV line %1: %2")
+                .arg(diagnostic.line)
+                .arg(QString::fromStdString(diagnostic.message))
+            : QString::fromStdString(diagnostic.message);
+    };
+
+    if (loaded.measurements.empty()) {
+        QStringList details;
+        for (const MeasurementDiagnostic& error : loaded.errors) {
+            details.push_back(diagnosticText(error));
+            if (details.size() == 8) break;
+        }
+        for (const MeasurementDiagnostic& warning : loaded.warnings) {
+            if (details.size() == 8) break;
+            details.push_back(diagnosticText(warning));
+        }
+        if (details.isEmpty()) details.push_back("No measurement rows were found.");
+        QMessageBox::warning(
+            this, "No usable measurements",
+            QString(
+                "%1\n\nExpected columns: measured_dbm plus either latitude/longitude or x_m/z_m. Optional columns are frequency_mhz, height_agl_m, and label.")
+                .arg(details.join('\n')));
+        return;
+    }
+
+    m_measurements = loaded.measurements;
+    m_measurementPath = path;
+    m_measurementRowsRead = loaded.rowsRead;
+    m_measurementRejectedRows = loaded.rejectedRows;
+    m_measurementImportWarnings.clear();
+
+    constexpr int maxDiagnostics = 8;
+    int diagnosticCount = 0;
+    for (const MeasurementDiagnostic& error : loaded.errors) {
+        if (diagnosticCount++ >= maxDiagnostics) break;
+        m_measurementImportWarnings.push_back(diagnosticText(error));
+    }
+    for (const MeasurementDiagnostic& warning : loaded.warnings) {
+        if (diagnosticCount++ >= maxDiagnostics) break;
+        m_measurementImportWarnings.push_back(diagnosticText(warning));
+    }
+    const int totalDiagnostics = static_cast<int>(
+        loaded.errors.size() + loaded.warnings.size());
+    if (totalDiagnostics > maxDiagnostics) {
+        m_measurementImportWarnings.push_back(QString(
+            "%1 additional CSV diagnostic(s) were omitted from this summary.")
+            .arg(totalDiagnostics - maxDiagnostics));
+    }
+
+    m_calibrationReportCurrent = false;
+    m_calibrationReport = {};
+    if (m_engine.fieldGrid().valid())
+        updateCalibrationAfterSolve();
+    else
+        m_calibrationPanel->showAwaitingCoverage(calibrationAwaitingReport());
+    showCalibrationPanel();
+    m_statusLabel->setText(QString(
+        "  %1 usable measurement(s) imported from %2%3")
+        .arg(m_measurements.size())
+        .arg(QFileInfo(path).fileName())
+        .arg(loaded.rejectedRows > 0
+            ? QString(" · %1 row(s) rejected").arg(loaded.rejectedRows)
+            : QString{}));
+}
+
 void MainWindow::onSaveScenario() {
     const QString path = QFileDialog::getSaveFileName(
         this, "Save Scenario", {},
@@ -1023,6 +1347,12 @@ void MainWindow::onSaveScenario() {
     doc.terrain = m_terrainSource;
     doc.mode = m_engine.mode;
     doc.receiver = m_engine.receiver;
+    doc.calibration = m_engine.calibration;
+    doc.calibrationSourceName =
+        m_appliedCalibrationSourceName.toStdString();
+    doc.calibrationPairedSamples = m_appliedCalibrationPairedSamples;
+    doc.calibrationRmseBeforeDb = m_appliedCalibrationRmseBeforeDb;
+    doc.calibrationRmseAfterDb = m_appliedCalibrationRmseAfterDb;
     doc.antennas = m_engine.antennas();
 
     try {
@@ -1076,6 +1406,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     m_engine.setTerrain(std::move(t));
     m_engine.setFieldGrid({});
     resetScenarioComparisonForTerrain();
+    clearCalibrationMeasurements();
     if (m_undoStack) m_undoStack->clear();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
@@ -1085,6 +1416,20 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
 
     m_engine.mode = doc.mode;
     m_engine.receiver = doc.receiver;
+    m_engine.calibration = doc.calibration;
+    if (!std::isfinite(m_engine.calibration.desiredPowerOffsetDb))
+        m_engine.calibration = {};
+    m_appliedCalibrationSourceName =
+        QString::fromStdString(doc.calibrationSourceName);
+    m_appliedCalibrationPairedSamples = doc.calibrationPairedSamples;
+    m_appliedCalibrationRmseBeforeDb = doc.calibrationRmseBeforeDb;
+    m_appliedCalibrationRmseAfterDb = doc.calibrationRmseAfterDb;
+    if (m_calibrationPanel) {
+        m_calibrationPanel->showNoMeasurements();
+        m_calibrationPanel->setAppliedCorrection(
+            m_engine.calibration.enabled
+                ? m_engine.calibration.desiredPowerOffsetDb : 0.0);
+    }
     if (doc.mode == SimEngine::Mode::Preview) m_modeCombo->setCurrentIndex(0);
     else if (doc.mode == SimEngine::Mode::Engineering) m_modeCombo->setCurrentIndex(2);
     else m_modeCombo->setCurrentIndex(1);

@@ -12,10 +12,14 @@
 #include "BottomBar.h"
 #include "PointAnalysisPanel.h"
 #include "ScenarioComparisonPanel.h"
+#include "CalibrationPanel.h"
 #include "data/AntennaLibrary.h"
 #include "data/ScenarioIO.h"
+#include "sim/MeasurementCalibration.h"
 #include "sim/ScenarioComparison.h"
 #include <cstdint>
+#include <cstddef>
+#include <limits>
 
 class QUndoStack;
 
@@ -32,6 +36,7 @@ private slots:
     void onLoadTerrain();
     void onSaveScenario();
     void onOpenScenario();
+    void onImportMeasurements();
     void onExportPng();
     void onExportCsv();
     void onAddAntenna();
@@ -57,6 +62,8 @@ private:
     QDockWidget*     m_pointDock = nullptr;
     ScenarioComparisonPanel* m_comparisonPanel = nullptr;
     QDockWidget*     m_comparisonDock = nullptr;
+    CalibrationPanel* m_calibrationPanel = nullptr;
+    QDockWidget*     m_calibrationDock = nullptr;
     QLabel*          m_statusLabel = nullptr;
     QLabel*          m_locationLabel = nullptr;
     QPushButton*     m_solveBtn = nullptr;
@@ -70,6 +77,19 @@ private:
     FieldGrid        m_baselineField;
     std::uint64_t    m_terrainRevision = 0;
     std::uint64_t    m_baselineTerrainRevision = 0;
+    std::vector<RFMeasurement> m_measurements;
+    CalibrationReport m_calibrationReport;
+    QString          m_measurementPath;
+    std::size_t      m_measurementRowsRead = 0;
+    std::size_t      m_measurementRejectedRows = 0;
+    QStringList      m_measurementImportWarnings;
+    bool             m_calibrationReportCurrent = false;
+    QString          m_appliedCalibrationSourceName;
+    std::size_t      m_appliedCalibrationPairedSamples = 0;
+    float            m_appliedCalibrationRmseBeforeDb =
+        std::numeric_limits<float>::quiet_NaN();
+    float            m_appliedCalibrationRmseAfterDb =
+        std::numeric_limits<float>::quiet_NaN();
 
     void setupScene();
     void applyTheme();
@@ -92,4 +112,12 @@ private:
     void invalidateScenarioComparisonCurrent();
     void resetScenarioComparisonForTerrain();
     void updateScenarioComparisonAfterSolve();
+    void showCalibrationPanel();
+    CalibrationPanel::Report calibrationAwaitingReport() const;
+    void updateCalibrationAfterSolve();
+    void invalidateCalibrationCurrent();
+    void applyCalibrationCorrection();
+    void resetCalibrationCorrection();
+    void clearCalibrationMeasurements();
+    void handleCalibrationTerrainChange();
 };
