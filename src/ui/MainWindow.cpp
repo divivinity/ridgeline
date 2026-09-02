@@ -143,6 +143,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QMenu* analysisMenu = menuBar()->addMenu("&Analysis");
     QAction* receiverAct = analysisMenu->addAction("&Receiver / Service Criteria…");
     connect(receiverAct, &QAction::triggered, this, &MainWindow::onReceiverSettings);
+    QAction* comparisonAct = analysisMenu->addAction("Scenario &Comparison…");
+    comparisonAct->setObjectName("ScenarioComparisonAction");
 
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
@@ -190,6 +192,41 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
     addDockWidget(Qt::RightDockWidgetArea, m_pointDock);
     m_pointDock->hide();
+
+    m_comparisonPanel = new ScenarioComparisonPanel(this);
+    m_comparisonDock = new QDockWidget("Scenario Comparison", this);
+    m_comparisonDock->setObjectName("ScenarioComparisonDock");
+    m_comparisonDock->setWidget(m_comparisonPanel);
+    m_comparisonDock->setAllowedAreas(
+        Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea);
+    m_comparisonDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    m_comparisonDock->setMinimumWidth(310);
+    m_comparisonDock->setStyleSheet(
+        "QDockWidget { color: #94a3b8; font-size: 10px; }"
+        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
+    addDockWidget(Qt::RightDockWidgetArea, m_comparisonDock);
+    tabifyDockWidget(m_pointDock, m_comparisonDock);
+    m_comparisonDock->hide();
+
+    connect(comparisonAct, &QAction::triggered, this, [this]() {
+        m_comparisonPanel->setCurrentResultAvailable(
+            m_engine.fieldGrid().valid());
+        m_comparisonDock->show();
+        m_comparisonDock->raise();
+    });
+    connect(m_comparisonPanel,
+            &ScenarioComparisonPanel::setBaselineRequested,
+            this, &MainWindow::captureScenarioBaseline);
+    connect(m_comparisonPanel,
+            &ScenarioComparisonPanel::replaceBaselineRequested,
+            this, &MainWindow::captureScenarioBaseline);
+    connect(m_comparisonPanel,
+            &ScenarioComparisonPanel::clearComparisonRequested,
+            this, &MainWindow::clearScenarioBaseline);
+    connect(m_comparisonPanel,
+            &ScenarioComparisonPanel::showChangesOnMapChanged,
+            m_viewport, &ViewportWidget::setScenarioComparisonVisible);
 
     connect(m_scenarioTree, &ScenarioTree::addEmitterRequested,
             this, &MainWindow::onAddAntenna);
@@ -254,6 +291,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 }
                 if (m_engine.fieldGrid().valid()) {
                     m_engine.setFieldGrid({});
+                    invalidateScenarioComparisonCurrent();
                     if (m_pointPanel) m_pointPanel->clear();
                     if (m_pointDock) m_pointDock->hide();
                     if (m_viewport) {
@@ -327,6 +365,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     viewMenu->addAction(leftDock->toggleViewAction());
     viewMenu->addAction(bottomDock->toggleViewAction());
     viewMenu->addAction(m_pointDock->toggleViewAction());
+    viewMenu->addAction(m_comparisonDock->toggleViewAction());
 
     refreshTree();
 
@@ -350,6 +389,81 @@ void MainWindow::setupScene() {
     m_terrainSource = TerrainSource{};
     placeDefaultAntennas();
     m_engine.loadMaterials("assets/materials.json");
+}
+
+void MainWindow::captureScenarioBaseline() {
+    const FieldGrid& current = m_engine.fieldGrid();
+    if (!current.valid()) {
+        m_comparisonPanel->setCurrentResultAvailable(false);
+        m_statusLabel->setText(
+            "  Run coverage before saving a scenario baseline");
+        return;
+    }
+
+    m_baselineField = current;
+    m_baselineTerrainRevision = m_terrainRevision;
+    if (m_viewport) m_viewport->clearScenarioComparison();
+    m_comparisonPanel->showBaselineAwaitingCurrent(true);
+    m_comparisonDock->show();
+    m_comparisonDock->raise();
+    m_statusLabel->setText(
+        "  Baseline saved · Change the scenario and run coverage again to compare");
+}
+
+void MainWindow::clearScenarioBaseline() {
+    m_baselineField = {};
+    m_baselineTerrainRevision = 0;
+    if (m_viewport) m_viewport->clearScenarioComparison();
+    if (m_comparisonPanel)
+        m_comparisonPanel->showNoBaseline(m_engine.fieldGrid().valid());
+    if (m_statusLabel)
+        m_statusLabel->setText("  Scenario comparison baseline cleared");
+}
+
+void MainWindow::invalidateScenarioComparisonCurrent() {
+    if (m_viewport) m_viewport->clearScenarioComparison();
+    if (!m_comparisonPanel) return;
+    if (m_baselineField.valid())
+        m_comparisonPanel->showBaselineAwaitingCurrent(false);
+    else
+        m_comparisonPanel->showNoBaseline(false);
+}
+
+void MainWindow::resetScenarioComparisonForTerrain() {
+    ++m_terrainRevision;
+    m_baselineField = {};
+    m_baselineTerrainRevision = 0;
+    if (m_viewport) m_viewport->clearScenarioComparison();
+    if (m_comparisonPanel) m_comparisonPanel->showNoBaseline(false);
+}
+
+void MainWindow::updateScenarioComparisonAfterSolve() {
+    const FieldGrid& current = m_engine.fieldGrid();
+    if (!m_comparisonPanel) return;
+    if (!m_baselineField.valid()) {
+        m_comparisonPanel->showNoBaseline(current.valid());
+        if (m_viewport) m_viewport->clearScenarioComparison();
+        return;
+    }
+
+    ScenarioComparisonResult comparison;
+    if (m_baselineTerrainRevision != m_terrainRevision) {
+        comparison.reason =
+            "The analysis area changed after the baseline was saved. Save a new baseline for this location.";
+    } else {
+        comparison = ScenarioComparison::compare(m_baselineField, current);
+    }
+
+    m_comparisonPanel->setComparison(comparison);
+    if (comparison.compatible) {
+        m_viewport->setScenarioComparison(
+            comparison.serviceTransition, true);
+        m_comparisonPanel->setChangesVisible(true);
+    } else {
+        m_viewport->clearScenarioComparison();
+    }
+    m_comparisonDock->show();
+    m_comparisonDock->raise();
 }
 
 void MainWindow::placeDefaultAntennas() {
@@ -402,6 +516,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
 
         m_engine.setTerrain(std::move(terrain));
         m_engine.setFieldGrid({});
+        resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
         if (m_pointPanel) m_pointPanel->clear();
         if (m_pointDock) m_pointDock->hide();
@@ -492,6 +607,7 @@ void MainWindow::onReceiverSettings() {
     if (dialog.exec() != QDialog::Accepted) return;
     m_engine.receiver = dialog.settings();
     m_engine.setFieldGrid({});
+    invalidateScenarioComparisonCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
     if (m_viewport) {
@@ -540,6 +656,7 @@ void MainWindow::loadTerrain(const QString& path) {
                           : TerrainLoader::fromDTED(path.toStdString()));
         m_engine.setTerrain(std::move(t));
         m_engine.setFieldGrid({});
+        resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
         if (m_pointPanel) m_pointPanel->clear();
         if (m_pointDock) m_pointDock->hide();
@@ -683,6 +800,7 @@ void MainWindow::onSolve() {
         if (m_pointDock) m_pointDock->hide();
         if (m_viewport) m_viewport->clearAnalysisPoint();
         m_viewport->refreshOverlays();
+        updateScenarioComparisonAfterSolve();
         const auto& grid = m_engine.fieldGrid();
         float minDbm = std::numeric_limits<float>::infinity();
         float maxDbm = -std::numeric_limits<float>::infinity();
@@ -817,6 +935,7 @@ void MainWindow::applySourceState(const std::vector<Antenna>& antennas,
                                   int selectedIndex) {
     m_engine.setAntennas(antennas);
     m_engine.setFieldGrid({});
+    invalidateScenarioComparisonCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
     if (m_viewport) m_viewport->clearAnalysisPoint();
@@ -956,6 +1075,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     }
     m_engine.setTerrain(std::move(t));
     m_engine.setFieldGrid({});
+    resetScenarioComparisonForTerrain();
     if (m_undoStack) m_undoStack->clear();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();

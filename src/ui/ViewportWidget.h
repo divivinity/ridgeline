@@ -16,7 +16,9 @@
 #include "HeatmapLegend.h"
 #include <glm/glm.hpp>
 #include <functional>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 class QLabel;
 
@@ -34,6 +36,11 @@ public:
     void setPlacementMode(bool active, bool jammer = false);
     void setAnalysisPoint(int sourceIndex, const glm::vec3& receiverPosition);
     void clearAnalysisPoint();
+    void setScenarioComparison(
+        const std::vector<std::int8_t>& serviceTransition,
+        bool visible = true);
+    void setScenarioComparisonVisible(bool visible);
+    void clearScenarioComparison();
     void setBasemapLoadCallbacks(BasemapOverlay::ProgressCallback progress,
                                  BasemapOverlay::CancelCallback cancel) {
         m_basemap.setLoadCallbacks(std::move(progress), std::move(cancel));
@@ -70,6 +77,7 @@ private:
     TerrainMesh m_terrain;
     BasemapOverlay m_basemap;
     HeatmapOverlay m_heatmap;
+    HeatmapOverlay m_comparisonHeatmap;
     LOSRayOverlay m_losRay;
     AntennaLobeOverlay m_antennaLobe;
     JammerBubbleOverlay m_jammerBubble;
@@ -83,12 +91,14 @@ private:
     QLabel* m_mapInfoLabel = nullptr;
     QLabel* m_attributionLabel = nullptr;
     QLabel* m_placementHint = nullptr;
+    QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;
     bool m_placingJammer = false;
     glm::mat4 m_lastMVP{1.0f};
     bool m_analysisPointActive = false;
     int m_analysisSourceIndex = -1;
     glm::vec3 m_analysisReceiver{0.0f};
+    std::vector<std::int8_t> m_serviceTransition;
 
     static constexpr float kVertScale = 2.5f;
 

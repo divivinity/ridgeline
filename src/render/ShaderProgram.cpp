@@ -26,6 +26,12 @@ bool ShaderProgram::load(const QString& vertPath, const QString& fragPath) {
     return true;
 }
 
+void ShaderProgram::destroy() {
+    if (m_id)
+        glDeleteProgram(m_id);
+    m_id = 0;
+}
+
 void ShaderProgram::bind()    { glUseProgram(m_id); }
 void ShaderProgram::release() { glUseProgram(0); }
 

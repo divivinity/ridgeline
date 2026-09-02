@@ -3,11 +3,14 @@
 #include "ui/PropertiesPanel.h"
 #include "ui/SourcePositionDialog.h"
 #include "ui/PointAnalysisPanel.h"
+#include "ui/ScenarioComparisonPanel.h"
 #include "sim/TerrainModel.h"
+#include "sim/ScenarioComparison.h"
 #include "data/Exporter.h"
 
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QElapsedTimer>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
@@ -183,6 +186,83 @@ void testPointAnalysisPanelShowsExplanation() {
     CHECK(explanation->text().contains("Run coverage"));
 }
 
+void testScenarioComparisonPanelWorkflow() {
+    ScenarioComparisonPanel panel;
+    panel.resize(360, 620);
+    panel.show();
+    QApplication::processEvents();
+
+    auto* status = panel.findChild<QLabel*>("ScenarioComparisonStatus");
+    auto* baseline = panel.findChild<QLabel*>("ScenarioBaselineService");
+    auto* current = panel.findChild<QLabel*>("ScenarioCurrentService");
+    auto* net = panel.findChild<QLabel*>("ScenarioNetChange");
+    auto* gained = panel.findChild<QLabel*>("ScenarioGainedCells");
+    auto* setBaseline = panel.findChild<QPushButton*>("ScenarioSetBaselineButton");
+    auto* replaceBaseline = panel.findChild<QPushButton*>("ScenarioReplaceBaselineButton");
+    auto* clearBaseline = panel.findChild<QPushButton*>("ScenarioClearComparisonButton");
+    auto* showChanges = panel.findChild<QCheckBox*>("ScenarioShowChangesCheck");
+    CHECK(status && baseline && current && net && gained && setBaseline &&
+          replaceBaseline && clearBaseline && showChanges);
+    if (!status || !baseline || !current || !net || !gained || !setBaseline ||
+        !replaceBaseline || !clearBaseline || !showChanges) return;
+
+    CHECK(panel.state() == ScenarioComparisonPanel::State::NoBaseline);
+    CHECK(!setBaseline->isEnabled());
+    panel.showNoBaseline(true);
+    CHECK(setBaseline->isEnabled());
+
+    int baselineRequests = 0;
+    QObject::connect(&panel, &ScenarioComparisonPanel::setBaselineRequested,
+                     [&]() { ++baselineRequests; });
+    setBaseline->click();
+    CHECK(baselineRequests == 1);
+
+    panel.showBaselineAwaitingCurrent(false);
+    CHECK(panel.state() == ScenarioComparisonPanel::State::AwaitingCurrentResult);
+    CHECK(!replaceBaseline->isEnabled());
+    CHECK(clearBaseline->isEnabled());
+    int clearRequests = 0;
+    QObject::connect(&panel, &ScenarioComparisonPanel::clearComparisonRequested,
+                     [&]() { ++clearRequests; });
+    clearBaseline->click();
+    CHECK(clearRequests == 1);
+
+    ScenarioComparisonResult comparison;
+    comparison.compatible = true;
+    comparison.totalCells = 4;
+    comparison.baselineServicePercent = 50.0;
+    comparison.currentServicePercent = 75.0;
+    comparison.gained = 1;
+    comparison.lost = 0;
+    comparison.retained = 2;
+    comparison.unchanged = 1;
+    comparison.meanDesiredDeltaDb = 2.5;
+    comparison.meanSinrDeltaDb = -1.0;
+    comparison.meanFadeMarginDeltaDb = 3.0;
+    comparison.desiredDeltaSamples = 4;
+    comparison.sinrDeltaSamples = 3;
+    comparison.fadeMarginDeltaSamples = 4;
+    comparison.serviceTransition = {0, 0, 1, 0};
+    panel.setComparison(comparison);
+    CHECK(panel.state() == ScenarioComparisonPanel::State::ComparisonReady);
+    CHECK(status->text() == "COMPARISON READY");
+    CHECK(baseline->text() == "50.0%");
+    CHECK(current->text() == "75.0%");
+    CHECK(net->text() == "+25.0 pp");
+    CHECK(gained->text().startsWith("1"));
+    CHECK(showChanges->isEnabled());
+    panel.setChangesVisible(true);
+    CHECK(panel.changesVisible());
+
+    comparison.compatible = false;
+    comparison.reason = "Different analysis quality.";
+    panel.setComparison(comparison);
+    CHECK(panel.state() == ScenarioComparisonPanel::State::Incompatible);
+    CHECK(status->text() == "CANNOT COMPARE");
+    CHECK(!showChanges->isEnabled());
+    CHECK(!panel.changesVisible());
+}
+
 void testCsvUsesClampedEdgeCellCenter() {
     FieldGrid grid;
     grid.width = 2;
@@ -281,6 +361,7 @@ int main(int argc, char** argv) {
     testAdvancedPanelRemainsEditableAndCollapsible();
     testPreciseSourcePositionDialog();
     testPointAnalysisPanelShowsExplanation();
+    testScenarioComparisonPanelWorkflow();
     testCsvUsesClampedEdgeCellCenter();
     testMgrsDialogInput();
     testDebouncedCustomGeocoderSuggestions();

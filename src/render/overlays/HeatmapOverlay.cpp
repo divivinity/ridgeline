@@ -5,9 +5,26 @@
 
 struct HVert { float x, y, z, u, v; };
 
+void HeatmapOverlay::updateGridMapping(const FieldGrid& grid) {
+    const float spanX = static_cast<float>(grid.width) * grid.cellSize;
+    const float spanZ = static_cast<float>(grid.height) * grid.cellSize;
+    if (!(spanX > 0.0f) || !(spanZ > 0.0f)) {
+        m_gridUvScale = {1.0f, 1.0f};
+        m_gridUvOffset = {0.0f, 0.0f};
+        return;
+    }
+    m_gridUvScale = {m_terrainWorldXZ.x / spanX,
+                     m_terrainWorldXZ.y / spanZ};
+    m_gridUvOffset = {
+        -(grid.originXZ.x - grid.cellSize * 0.5f) / spanX,
+        -(grid.originXZ.y - grid.cellSize * 0.5f) / spanZ};
+}
+
 void HeatmapOverlay::build(const TerrainModel& terrain) {
     initializeOpenGLFunctions();
     m_shader.load("assets/shaders/heatmap.vert", "assets/shaders/heatmap.frag");
+    const glm::vec3 worldSize = terrain.worldSize();
+    m_terrainWorldXZ = {worldSize.x, worldSize.z};
 
     std::vector<HVert> verts;
     verts.reserve(terrain.width * terrain.height);
@@ -59,6 +76,7 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
 
 void HeatmapOverlay::update(const FieldGrid& grid, Metric metric) {
     m_metric = metric;
+    m_comparisonMode = false;
     if (!grid.valid()) {
         m_texW = 0;
         m_texH = 0;
@@ -66,6 +84,7 @@ void HeatmapOverlay::update(const FieldGrid& grid, Metric metric) {
     }
     m_texW = grid.width;
     m_texH = grid.height;
+    updateGridMapping(grid);
 
     const std::vector<float>* values = &grid.dbm;
     m_minValue = -120.0f;
@@ -103,6 +122,35 @@ void HeatmapOverlay::update(const FieldGrid& grid, Metric metric) {
     }
 
     glBindTexture(GL_TEXTURE_2D, m_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, grid.width, grid.height,
+                 0, GL_RED, GL_FLOAT, texture.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void HeatmapOverlay::updateComparison(
+    const FieldGrid& grid,
+    const std::vector<std::int8_t>& serviceTransition) {
+    m_comparisonMode = true;
+    if (!grid.valid() || serviceTransition.size() != grid.cellCount()) {
+        m_texW = 0;
+        m_texH = 0;
+        return;
+    }
+
+    m_texW = grid.width;
+    m_texH = grid.height;
+    updateGridMapping(grid);
+    std::vector<float> texture(serviceTransition.size(), 0.0f);
+    for (std::size_t i = 0; i < serviceTransition.size(); ++i)
+        texture[i] = static_cast<float>(serviceTransition[i]);
+
+    glBindTexture(GL_TEXTURE_2D, m_tex);
+    // Service transitions are categorical. Linear filtering blends gained
+    // and lost cells through a false unchanged band at their boundary.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, grid.width, grid.height,
                  0, GL_RED, GL_FLOAT, texture.data());
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -120,6 +168,9 @@ void HeatmapOverlay::draw(const glm::mat4& mvp) {
     m_shader.setFloat("uMinDbm", m_minValue);
     m_shader.setFloat("uMaxDbm", m_maxValue);
     m_shader.setInt("uHeatmap", 0);
+    m_shader.setInt("uComparisonMode", m_comparisonMode ? 1 : 0);
+    m_shader.setVec2("uGridUvScale", m_gridUvScale);
+    m_shader.setVec2("uGridUvOffset", m_gridUvOffset);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glBindVertexArray(m_vao);
@@ -138,4 +189,5 @@ void HeatmapOverlay::destroy() {
     glDeleteTextures(1, &m_tex);
     m_vao = m_vbo = m_ebo = m_tex = 0;
     m_texW = m_texH = 0;
+    m_shader.destroy();
 }

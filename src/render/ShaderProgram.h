@@ -6,6 +6,7 @@
 class ShaderProgram : protected QOpenGLFunctions_3_3_Core {
 public:
     bool   load(const QString& vertPath, const QString& fragPath);
+    void   destroy();
     void   bind();
     void   release();
     GLuint id() const { return m_id; }
