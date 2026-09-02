@@ -9,6 +9,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
+#include <QOpenGLContext>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -161,10 +162,11 @@ int BasemapOverlay::chooseZoom(const TerrainModel& terrain) {
 
 void BasemapOverlay::build(const TerrainModel& terrain) {
     initializeOpenGLFunctions();
-    m_shader.load("assets/shaders/basemap.vert", "assets/shaders/basemap.frag");
     m_attribution.clear();
     m_providerName.clear();
     m_lastError.clear();
+    const bool shaderReady = m_shader.load(
+        "assets/shaders/basemap.vert", "assets/shaders/basemap.frag");
 
     MercatorPixel swPx{}, nePx{};
     if (terrain.hasGeoReference()) {
@@ -231,7 +233,13 @@ void BasemapOverlay::build(const TerrainModel& terrain) {
     glBindVertexArray(0);
 
     glGenTextures(1, &m_tex);
-    m_hasTexture = loadTextureForTerrain(terrain);
+    if (!shaderReady) {
+        m_lastError =
+            "Satellite imagery could not start because its rendering assets are missing";
+        m_hasTexture = false;
+    } else {
+        m_hasTexture = loadTextureForTerrain(terrain);
+    }
 }
 
 bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
@@ -240,6 +248,7 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
         return false;
     }
 
+    QOpenGLContext* const expectedContext = QOpenGLContext::currentContext();
     const double south = terrain.originLatDeg;
     const double north = terrain.originLatDeg
                        + static_cast<double>(terrain.height - 1) * terrain.cellLatDeg;
@@ -351,6 +360,14 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
 
     const auto results = TileBatchDownloader::download(
         network, requests, 8, 12000, m_loadProgress, m_loadCancel);
+    // The nested network loop and a modal QProgressDialog may process paint
+    // events, changing the QOpenGLWidget context. Reassert the owning widget's
+    // context before any texture upload or subsequent overlay construction.
+    if (m_prepareOpenGL) m_prepareOpenGL();
+    if (!expectedContext || QOpenGLContext::currentContext() != expectedContext) {
+        m_lastError = "Could not restore the map's OpenGL context for imagery upload";
+        return false;
+    }
     if (m_loadCancel && m_loadCancel()) {
         m_lastError = "Basemap loading cancelled";
         return false;
@@ -403,6 +420,12 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
     image = image.mirrored(false, true);
     if (image.isNull()) return false;
 
+    if (m_prepareOpenGL) m_prepareOpenGL();
+    if (QOpenGLContext::currentContext() != expectedContext) {
+        m_lastError = "Could not make the map's OpenGL context current for imagery upload";
+        return false;
+    }
+    while (glGetError() != GL_NO_ERROR) {}
     glBindTexture(GL_TEXTURE_2D, m_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -412,6 +435,12 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
                  0, GL_RGBA, GL_UNSIGNED_BYTE, image.constBits());
     glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
+    const GLenum uploadError = glGetError();
+    if (uploadError != GL_NO_ERROR) {
+        m_lastError = QString("Satellite texture upload failed (OpenGL error 0x%1)")
+            .arg(static_cast<unsigned int>(uploadError), 0, 16);
+        return false;
+    }
     m_providerName = provider.name;
     m_attribution = provider.attribution;
     return true;
@@ -446,6 +475,7 @@ void BasemapOverlay::destroy() {
     glDeleteBuffers(1, &m_vbo);
     glDeleteBuffers(1, &m_ebo);
     glDeleteTextures(1, &m_tex);
+    m_shader.destroy();
     m_vao = m_vbo = m_ebo = m_tex = 0;
     m_indexCount = 0;
     m_hasTexture = false;

@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <cstddef>
+#include <limits>
 #include "sim/Types.h"
 #include "sim/SimEngine.h"
 
@@ -27,6 +29,13 @@ struct ScenarioDoc {
     TerrainSource        terrain;
     SimEngine::Mode      mode = SimEngine::Mode::Fast;
     ReceiverSettings     receiver;
+    CoverageCalibrationSettings calibration;
+    std::string          calibrationSourceName;
+    std::size_t          calibrationPairedSamples = 0;
+    float                calibrationRmseBeforeDb =
+        std::numeric_limits<float>::quiet_NaN();
+    float                calibrationRmseAfterDb =
+        std::numeric_limits<float>::quiet_NaN();
     std::vector<Antenna> antennas;
 };
 

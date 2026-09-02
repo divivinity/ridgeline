@@ -14,6 +14,7 @@ public:
     ReceiverSettings settings() const;
 
 private:
+    QDoubleSpinBox* m_heightAgl = nullptr;
     QDoubleSpinBox* m_sensitivity = nullptr;
     QDoubleSpinBox* m_bandwidthKhz = nullptr;
     QDoubleSpinBox* m_noiseFigure = nullptr;

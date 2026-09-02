@@ -10,6 +10,7 @@ class BasemapOverlay : protected QOpenGLFunctions_3_3_Core {
 public:
     using ProgressCallback = std::function<void(int completed, int total)>;
     using CancelCallback = std::function<bool()>;
+    using PrepareOpenGLCallback = std::function<void()>;
 
     bool visible = true;
 
@@ -20,6 +21,9 @@ public:
     void setLoadCallbacks(ProgressCallback progress, CancelCallback cancel) {
         m_loadProgress = std::move(progress);
         m_loadCancel = std::move(cancel);
+    }
+    void setPrepareOpenGLCallback(PrepareOpenGLCallback prepare) {
+        m_prepareOpenGL = std::move(prepare);
     }
 
     bool hasTexture() const { return m_hasTexture; }
@@ -46,4 +50,5 @@ private:
     QString m_lastError;
     ProgressCallback m_loadProgress;
     CancelCallback m_loadCancel;
+    PrepareOpenGLCallback m_prepareOpenGL;
 };

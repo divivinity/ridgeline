@@ -45,6 +45,8 @@ public:
                                  BasemapOverlay::CancelCallback cancel) {
         m_basemap.setLoadCallbacks(std::move(progress), std::move(cancel));
     }
+    bool basemapReady() const { return m_basemap.hasTexture(); }
+    QString basemapError() const { return m_basemap.lastError(); }
     void setHeatmapMetric(HeatmapOverlay::Metric metric) {
         makeCurrent();
         m_heatmap.update(m_engine->fieldGrid(), metric);

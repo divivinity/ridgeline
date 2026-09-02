@@ -1,4 +1,5 @@
 #include "SimEngine.h"
+#include "RFModels.h"
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
@@ -102,6 +103,23 @@ void SimEngine::solve(const std::function<void(int, int)>& progress,
         full.enableItm = true;
         full.requiredFresnelClearance = 0.6f;
         result = full.solve(m_terrain, m_antennas, m_materials, progress, cancelled);
+    }
+
+    if (calibration.enabled &&
+        std::isfinite(calibration.desiredPowerOffsetDb) &&
+        calibration.desiredPowerOffsetDb != 0.0f) {
+        for (float& value : result.dbm) {
+            if (std::isfinite(value))
+                value += calibration.desiredPowerOffsetDb;
+        }
+        for (float& value : result.strongestDesiredDbm) {
+            if (std::isfinite(value))
+                value += calibration.desiredPowerOffsetDb;
+        }
+        // Interference is deliberately left untouched. Recompute every
+        // receiver-derived metric and service decision from the corrected
+        // desired signal field.
+        RFModels::finalizeMetrics(result, receiver);
     }
 
     if (cancelled && cancelled())
