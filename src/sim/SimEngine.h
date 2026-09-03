@@ -8,31 +8,36 @@
 #include <functional>
 #include <string>
 
+struct CoverageCalibrationSettings {
+    bool enabled = false;
+    float desiredPowerOffsetDb = 0.0f;
+};
+
 class SimEngine {
 public:
     enum class Mode {
         Preview,
         Planner,
         Engineering,
-        Fast = Preview,       // backwards-compatible scenario/test alias
-        Full = Engineering    // backwards-compatible scenario/test alias
+        Fast = Preview,
+        Full = Engineering
     };
 
     Mode mode = Mode::Planner;
+    ReceiverSettings receiver;
+    CoverageCalibrationSettings calibration;
 
     void setTerrain(TerrainModel terrain);
     void setAntennas(std::vector<Antenna> antennas);
     void addAntenna(Antenna antenna);
-    void removeAntenna(int index);   // no-op if index out of range
-    void updateAntenna(int index, Antenna antenna);  // no-op if index out of range
+    void removeAntenna(int index);
+    void updateAntenna(int index, Antenna antenna);
+    void setFieldGrid(FieldGrid field);
 
-    // Load EM material properties from JSON.
-    // Silent no-op on failure (default dry-soil always available).
     void loadMaterials(const std::string& path);
 
-    // Progress reports completed and total terrain rows. The callback may run
-    // on a worker thread when the UI launches an asynchronous solve.
-    void solve(const std::function<void(int, int)>& progress = {});
+    void solve(const std::function<void(int, int)>& progress = {},
+               const std::function<bool()>& cancelled = {});
 
     const FieldGrid&            fieldGrid() const { return m_field; }
     const TerrainModel&         terrain()   const { return m_terrain; }

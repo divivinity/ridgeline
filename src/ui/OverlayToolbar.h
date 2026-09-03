@@ -4,8 +4,6 @@
 #include <QBoxLayout>
 #include "ViewportWidget.h"
 
-// A row of five checkboxes that toggle the five render overlays.
-// Connect overlayToggled() to ViewportWidget::setOverlayVisible().
 class OverlayToolbar : public QWidget {
     Q_OBJECT
 public:
@@ -14,6 +12,7 @@ public:
 signals:
     void overlayToggled(ViewportWidget::Overlay overlay, bool visible);
     void basemapOpacityChanged(float opacity);
+    void heatmapMetricChanged(HeatmapOverlay::Metric metric);
 
 private:
     void buildCheckbox(const QString& label, ViewportWidget::Overlay id,

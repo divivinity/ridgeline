@@ -7,12 +7,14 @@
 
 class FastSolver {
 public:
-    float gridResolution = 10.0f;  // metres per grid cell
+    float gridResolution = 10.0f;
+    ReceiverSettings receiver;
 
     FieldGrid solve(const TerrainModel& terrain,
                     const std::vector<Antenna>& antennas,
                     const MaterialLibrary& materials,
-                    const std::function<void(int, int)>& progress = {}) const;
+                    const std::function<void(int, int)>& progress = {},
+                    const std::function<bool()>& cancelled = {}) const;
 
 private:
     static float fsplDb(float distM, float freqMHz);

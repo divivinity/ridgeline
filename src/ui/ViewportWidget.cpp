@@ -1,22 +1,28 @@
 #include "ViewportWidget.h"
+#include "render/TerrainRaycast.h"
+#include <QApplication>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QLabel>
 #include <QCursor>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     : QOpenGLWidget(parent), m_engine(engine)
 {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
+    m_basemap.setPrepareOpenGLCallback([this]() { makeCurrent(); });
+
     m_heatmapLegend = new HeatmapLegend(this);
     // Heatmap starts visible (matches OverlayToolbar default of checked=true)
     m_heatmapLegend->show();
+    m_comparisonHeatmap.visible = false;
     m_losRay.visible = false;
     m_antennaLobe.visible = false;
     m_jammerBubble.visible = false;
@@ -42,10 +48,28 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
         " border-radius: 9px; color: white; padding: 8px 16px; font-weight: 650; }"
     );
     m_placementHint->hide();
+
+    m_comparisonLegend = new QLabel(this);
+    m_comparisonLegend->setObjectName("ScenarioComparisonLegend");
+    m_comparisonLegend->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_comparisonLegend->setText(
+        "<b>SCENARIO CHANGES</b><br>"
+        "<span style='color:#22e178'>●</span>&nbsp; Gained service<br>"
+        "<span style='color:#f3292e'>●</span>&nbsp; Lost service");
+    m_comparisonLegend->setStyleSheet(
+        "QLabel { background: rgba(7, 14, 25, 220); border: 1px solid rgba(148,163,184,45);"
+        " border-radius: 9px; color: #dbeafe; padding: 9px 12px; font-size: 10px; }"
+    );
+    m_comparisonLegend->adjustSize();
+    m_comparisonLegend->hide();
 }
 
 void ViewportWidget::initializeGL() {
     initializeOpenGLFunctions();
+
+    // Preserve the user's comparison-overlay choice when Qt recreates the
+    // OpenGL context. The GL texture itself must be uploaded again below.
+    const bool comparisonRequested = m_comparisonHeatmap.visible;
 
     // Destroy GL objects before the context dies, not in the destructor.
     connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this]() {
@@ -53,6 +77,7 @@ void ViewportWidget::initializeGL() {
         m_terrain.destroy();
         m_basemap.destroy();
         m_heatmap.destroy();
+        m_comparisonHeatmap.destroy();
         m_losRay.destroy();
         m_antennaLobe.destroy();
         m_jammerBubble.destroy();
@@ -69,6 +94,21 @@ void ViewportWidget::initializeGL() {
     m_terrain.build(terrain);
     m_basemap.build(terrain);
     m_heatmap.build(terrain);
+    m_comparisonHeatmap.build(terrain);
+
+    const FieldGrid& field = m_engine->fieldGrid();
+    if (field.valid())
+        m_heatmap.update(field, m_heatmap.metric());
+
+    const bool comparisonValid =
+        field.valid() && m_serviceTransition.size() == field.cellCount();
+    if (comparisonValid)
+        m_comparisonHeatmap.updateComparison(field, m_serviceTransition);
+    else
+        m_serviceTransition.clear();
+    m_comparisonHeatmap.visible = comparisonRequested && comparisonValid;
+    if (m_comparisonLegend)
+        m_comparisonLegend->setVisible(m_comparisonHeatmap.visible);
     m_losRay.build();
     m_antennaLobe.build();
     m_jammerBubble.build();
@@ -108,7 +148,9 @@ void ViewportWidget::paintGL() {
     m_terrain.draw(m_lastMVP);
     if (m_basemap.visible)      m_basemap.draw(m_lastMVP);
     if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
-    if (m_losRay.visible)       m_losRay.draw(m_lastMVP);
+    if (m_comparisonHeatmap.visible)
+        m_comparisonHeatmap.draw(m_lastMVP);
+    m_losRay.draw(m_lastMVP);
     if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
     if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
     if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
@@ -123,12 +165,17 @@ void ViewportWidget::buildMarkers() {
     // Pack: x, y, z, r, g, b  per marker
     struct MarkerVert { float x, y, z, r, g, b; };
     std::vector<MarkerVert> verts;
-    verts.reserve(antennas.size());
+    verts.reserve(antennas.size() + (m_analysisPointActive ? 1 : 0));
     for (const auto& ant : antennas) {
         glm::vec3 col = ant.isJammer ? glm::vec3(1.0f, 0.2f, 0.2f)   // red
                                      : glm::vec3(0.0f, 0.9f, 1.0f);   // cyan
         verts.push_back({ ant.position.x, ant.position.y, ant.position.z,
                           col.r, col.g, col.b });
+    }
+    if (m_analysisPointActive) {
+        verts.push_back({m_analysisReceiver.x, m_analysisReceiver.y,
+                         m_analysisReceiver.z, 1.0f, 0.78f, 0.12f});
+        m_markerCount = static_cast<int>(antennas.size()) + 1;
     }
 
     glBindVertexArray(m_markerVAO);
@@ -167,8 +214,11 @@ void ViewportWidget::drawAntennaMarkers() {
 
 void ViewportWidget::refreshOverlays() {
     makeCurrent();
-    m_heatmap.update(m_engine->fieldGrid());
+    m_heatmap.update(m_engine->fieldGrid(), m_heatmap.metric());
     m_losRay.update(m_engine->antennas(), m_engine->terrain());
+    m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(),
+                         m_analysisSourceIndex,
+                         m_analysisPointActive ? &m_analysisReceiver : nullptr);
     m_antennaLobe.update(m_engine->antennas());
     m_jammerBubble.update(m_engine->antennas());
     m_fresnel.update(m_engine->antennas(), m_engine->terrain());
@@ -178,10 +228,13 @@ void ViewportWidget::refreshOverlays() {
 }
 
 void ViewportWidget::reloadTerrain() {
+    m_analysisPointActive = false;
+    m_analysisSourceIndex = -1;
     makeCurrent();
     m_terrain.destroy();
     m_basemap.destroy();
     m_heatmap.destroy();
+    m_comparisonHeatmap.destroy();
     m_losRay.destroy();
     m_antennaLobe.destroy();
     m_jammerBubble.destroy();
@@ -190,6 +243,10 @@ void ViewportWidget::reloadTerrain() {
     m_terrain.build(terrain);
     m_basemap.build(terrain);
     m_heatmap.build(terrain);
+    m_comparisonHeatmap.build(terrain);
+    m_serviceTransition.clear();
+    m_comparisonHeatmap.visible = false;
+    if (m_comparisonLegend) m_comparisonLegend->hide();
     m_losRay.build();
     m_antennaLobe.build();
     m_jammerBubble.build();
@@ -210,21 +267,92 @@ void ViewportWidget::mousePressEvent(QMouseEvent* e) {
     m_pressPos  = e->pos();
     m_lastMouse = e->pos();
     m_dragging  = true;
+    m_cameraDragging = false;
+    m_markerPressIndex = (e->button() == Qt::LeftButton && !m_placementActive)
+        ? antennaAtScreenPosition(e->pos()) : -1;
+    if (m_markerPressIndex >= 0) setCursor(Qt::ClosedHandCursor);
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton) {
         m_dragging = false;
-        // Short click (not a drag) → place antenna
-        QPoint delta = e->pos() - m_pressPos;
-        if (m_placementActive && delta.manhattanLength() < 6) {
-            float wx = 0.0f, wz = 0.0f;
-            if (raycastTerrain(e->pos(), wx, wz))
-                emit terrainClicked(wx, wz);
+        const QPoint delta = e->pos() - m_pressPos;
+        if (!m_placementActive && m_markerPressIndex >= 0) {
+            const int antennaIndex = m_markerPressIndex;
+            m_markerPressIndex = -1;
+            if (delta.manhattanLength() < QApplication::startDragDistance()) {
+                emit antennaClicked(antennaIndex);
+            } else {
+                float wx = 0.0f, wz = 0.0f;
+                if (raycastTerrain(e->pos(), wx, wz))
+                    emit antennaMoveRequested(antennaIndex, wx, wz);
+            }
+            m_cameraDragging = false;
+            setCursor(antennaAtScreenPosition(e->pos()) >= 0
+                ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            return;
+        }
+        if (!m_cameraDragging &&
+            delta.manhattanLength() < QApplication::startDragDistance()) {
+            if (m_placementActive) {
+                float wx = 0.0f, wz = 0.0f;
+                if (raycastTerrain(e->pos(), wx, wz))
+                    emit terrainClicked(wx, wz);
+            } else {
+                const int antennaIndex = antennaAtScreenPosition(e->pos());
+                if (antennaIndex >= 0) {
+                    emit antennaClicked(antennaIndex);
+                } else {
+                    float wx = 0.0f, wz = 0.0f;
+                    if (raycastTerrain(e->pos(), wx, wz))
+                        emit terrainInspected(wx, wz);
+                }
+            }
         }
     } else {
         m_dragging = false;
     }
+    m_markerPressIndex = -1;
+    m_cameraDragging = false;
+}
+
+int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
+                                             float radiusPx) const {
+    if (!m_engine || width() <= 0 || height() <= 0) return -1;
+    const auto& antennas = m_engine->antennas();
+    if (antennas.empty()) return -1;
+
+    const float aspect = static_cast<float>(width()) / static_cast<float>(height());
+    const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
+                                            glm::vec3(1.0f, kVertScale, 1.0f));
+    const glm::mat4 mvp = m_camera.mvp(aspect) * vertScale;
+
+    const float radiusSq = radiusPx * radiusPx;
+    float bestDistanceSq = radiusSq;
+    int bestIndex = -1;
+
+    for (int i = 0; i < static_cast<int>(antennas.size()); ++i) {
+        const glm::vec4 clip = mvp * glm::vec4(antennas[i].position, 1.0f);
+        if (clip.w <= 0.0f) continue;
+
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        if (ndc.x < -1.05f || ndc.x > 1.05f ||
+            ndc.y < -1.05f || ndc.y > 1.05f ||
+            ndc.z < -1.0f || ndc.z > 1.0f) {
+            continue;
+        }
+
+        const float sx = (ndc.x * 0.5f + 0.5f) * static_cast<float>(width());
+        const float sy = (0.5f - ndc.y * 0.5f) * static_cast<float>(height());
+        const float dx = sx - static_cast<float>(screenPos.x());
+        const float dy = sy - static_cast<float>(screenPos.y());
+        const float distanceSq = dx * dx + dy * dy;
+        if (distanceSq <= bestDistanceSq) {
+            bestDistanceSq = distanceSq;
+            bestIndex = i;
+        }
+    }
+    return bestIndex;
 }
 
 void ViewportWidget::setBasemapOpacity(float opacity) {
@@ -265,9 +393,19 @@ void ViewportWidget::updateMapHud() {
     m_mapInfoLabel->setText(mapText);
     m_mapInfoLabel->adjustSize();
 
-    m_attributionLabel->setText(m_basemap.attribution().isEmpty()
-        ? QStringLiteral("Elevation © Mapzen and source contributors")
-        : m_basemap.attribution() + "  ·  Elevation © Mapzen and contributors");
+    QString attribution;
+    if (terrain.hasGeoReference() && !m_basemap.hasTexture()) {
+        attribution = QStringLiteral("Satellite imagery unavailable");
+        if (!m_basemap.lastError().isEmpty())
+            attribution += QStringLiteral(" · ") + m_basemap.lastError();
+        attribution += QStringLiteral("  ·  Elevation © Mapzen and contributors");
+    } else {
+        attribution = m_basemap.attribution().isEmpty()
+            ? QStringLiteral("Elevation © Mapzen and source contributors")
+            : m_basemap.attribution() +
+                QStringLiteral("  ·  Elevation © Mapzen and contributors");
+    }
+    m_attributionLabel->setText(attribution);
     m_attributionLabel->adjustSize();
     emit basemapInfoChanged(m_basemap.providerName(),
                             m_basemap.attribution(),
@@ -286,12 +424,40 @@ void ViewportWidget::repositionHud() {
     if (m_placementHint && m_placementHint->isVisible()) {
         m_placementHint->move(std::max(0, (width() - m_placementHint->width()) / 2), margin);
     }
+    if (m_comparisonLegend && m_comparisonLegend->isVisible()) {
+        const int top = m_mapInfoLabel
+            ? m_mapInfoLabel->geometry().bottom() + 8 : margin;
+        m_comparisonLegend->move(margin, top);
+    }
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
-    if (!m_dragging) return;
+    if (!m_dragging) {
+        if (!m_placementActive) {
+            setCursor(antennaAtScreenPosition(e->pos()) >= 0
+                ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        }
+        return;
+    }
+
+    if (m_markerPressIndex >= 0 && (e->buttons() & Qt::LeftButton)) {
+        if ((e->pos() - m_pressPos).manhattanLength() >=
+            QApplication::startDragDistance()) {
+            setCursor(Qt::ClosedHandCursor);
+        }
+        return;
+    }
+
     QPoint delta = e->pos() - m_lastMouse;
-    m_lastMouse  = e->pos();
+    if (!m_cameraDragging) {
+        if ((e->pos() - m_pressPos).manhattanLength() <
+            QApplication::startDragDistance()) {
+            return;
+        }
+        m_cameraDragging = true;
+        delta = e->pos() - m_pressPos;
+    }
+    m_lastMouse = e->pos();
     if (e->buttons() & Qt::LeftButton)
         m_camera.orbit(-delta.x() * 0.4f, delta.y() * 0.4f);
     else if (e->buttons() & Qt::MiddleButton)
@@ -353,62 +519,78 @@ void ViewportWidget::keyPressEvent(QKeyEvent* e) {
 
 bool ViewportWidget::raycastTerrain(const QPoint& screenPos,
                                     float& outWorldX, float& outWorldZ) const {
-    const TerrainModel& terrain = m_engine->terrain();
-    if (terrain.width < 2 || terrain.height < 2) return false;
-
+    if (!m_engine || width() <= 0 || height() <= 0) return false;
     const float aspect = static_cast<float>(width()) / static_cast<float>(height());
-    const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
-                                            glm::vec3(1.0f, kVertScale, 1.0f));
-    const glm::mat4 invMVP = glm::inverse(m_camera.mvp(aspect) * vertScale);
-
-    // Convert screen pixel to NDC
-    const float ndcX =  2.0f * screenPos.x() / static_cast<float>(width())  - 1.0f;
-    const float ndcY = -2.0f * screenPos.y() / static_cast<float>(height()) + 1.0f;
-
-    // Unproject near and far points
-    const glm::vec4 nearH = invMVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
-    const glm::vec4 farH  = invMVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
-    const glm::vec3 nearW = glm::vec3(nearH) / nearH.w;
-    const glm::vec3 farW  = glm::vec3(farH)  / farH.w;
-
-    const glm::vec3 rayDir = glm::normalize(farW - nearW);
-    if (std::abs(rayDir.y) < 1e-6f) return false;
-
-    // Ray-march against terrain (200 steps over the terrain diagonal)
-    const float terrainW = terrain.worldSize().x;
-    const float terrainH = terrain.worldSize().z;
-    const float maxDist  = 2.0f * std::sqrt(terrainW * terrainW + terrainH * terrainH
-                                            + 8000.0f * 8000.0f);
-    const int   steps    = 1024;
-    const float stepSize = maxDist / steps;
-
-    float prevAbove = 0.0f;
-    glm::vec3 prevP = nearW;
-    for (int i = 1; i <= steps; ++i) {
-        const float t = i * stepSize;
-        const glm::vec3 p = nearW + rayDir * t;
-
-        // Skip if outside terrain XZ bounds
-        if (p.x < 0.0f || p.x > terrainW || p.z < 0.0f || p.z > terrainH)
-            continue;
-
-        const int gx = std::clamp(static_cast<int>(p.x / terrain.metersPerCellX()),
-                                  0, terrain.width  - 1);
-        const int gz = std::clamp(static_cast<int>(p.z / terrain.metersPerCellZ()),
-                                  0, terrain.height - 1);
-        const float groundY = terrain.heightAt(gx, gz) * kVertScale;
-        const float above   = p.y - groundY;
-
-        if (i > 1 && above < 0.0f) {
-            // Crossed the surface — interpolate for better accuracy
-            const float frac = prevAbove / (prevAbove - above);
-            const glm::vec3 hit = prevP + (p - prevP) * frac;
-            outWorldX = hit.x;
-            outWorldZ = hit.z;
-            return true;
-        }
-        prevAbove = above;
-        prevP     = p;
+    glm::vec3 terrainPoint{0.0f};
+    if (!TerrainRaycast::fromScreen(m_engine->terrain(), m_camera.mvp(aspect),
+                                    width(), height(),
+                                    static_cast<float>(screenPos.x()),
+                                    static_cast<float>(screenPos.y()),
+                                    kVertScale, terrainPoint)) {
+        return false;
     }
-    return false;
+    outWorldX = terrainPoint.x;
+    outWorldZ = terrainPoint.z;
+    return true;
+}
+
+void ViewportWidget::setAnalysisPoint(int sourceIndex,
+                                      const glm::vec3& receiverPosition) {
+    m_analysisPointActive = true;
+    m_analysisSourceIndex = sourceIndex;
+    m_analysisReceiver = receiverPosition;
+    makeCurrent();
+    m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(),
+                         m_analysisSourceIndex, &m_analysisReceiver);
+    buildMarkers();
+    doneCurrent();
+    update();
+}
+
+void ViewportWidget::clearAnalysisPoint() {
+    if (!m_analysisPointActive) return;
+    m_analysisPointActive = false;
+    m_analysisSourceIndex = -1;
+    makeCurrent();
+    m_losRay.updateProbe(m_engine->antennas(), m_engine->terrain(), -1, nullptr);
+    buildMarkers();
+    doneCurrent();
+    update();
+}
+
+void ViewportWidget::setScenarioComparison(
+    const std::vector<std::int8_t>& serviceTransition,
+    bool visible) {
+    const FieldGrid& grid = m_engine->fieldGrid();
+    const bool valid = grid.valid() &&
+        serviceTransition.size() == grid.cellCount();
+    m_serviceTransition = valid ? serviceTransition
+                                : std::vector<std::int8_t>{};
+    makeCurrent();
+    m_comparisonHeatmap.updateComparison(
+        grid, m_serviceTransition);
+    m_comparisonHeatmap.visible = visible && valid;
+    doneCurrent();
+    if (m_comparisonLegend)
+        m_comparisonLegend->setVisible(m_comparisonHeatmap.visible);
+    repositionHud();
+    update();
+}
+
+void ViewportWidget::setScenarioComparisonVisible(bool visible) {
+    m_comparisonHeatmap.visible = visible && !m_serviceTransition.empty();
+    if (m_comparisonLegend)
+        m_comparisonLegend->setVisible(m_comparisonHeatmap.visible);
+    repositionHud();
+    update();
+}
+
+void ViewportWidget::clearScenarioComparison() {
+    m_serviceTransition.clear();
+    m_comparisonHeatmap.visible = false;
+    makeCurrent();
+    m_comparisonHeatmap.updateComparison({}, m_serviceTransition);
+    doneCurrent();
+    if (m_comparisonLegend) m_comparisonLegend->hide();
+    update();
 }
