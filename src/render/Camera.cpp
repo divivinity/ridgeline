@@ -20,7 +20,11 @@ glm::mat4 Camera::view() const {
 }
 
 glm::mat4 Camera::projection(float aspect) const {
-    return glm::perspective(glm::radians(45.0f), aspect, 1.0f, 50000.0f);
+    // Large streamed AOIs can put the far corners beyond the previous fixed
+    // 50 km clip plane. Keep the full terrain visible and pickable as the
+    // orbit radius grows while retaining a conservative near plane.
+    const float farPlane = std::max(50000.0f, radius * 6.0f);
+    return glm::perspective(glm::radians(45.0f), aspect, 1.0f, farPlane);
 }
 
 glm::mat4 Camera::mvp(float aspect) const {

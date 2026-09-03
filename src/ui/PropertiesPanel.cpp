@@ -1,10 +1,18 @@
 #include "PropertiesPanel.h"
 #include "data/AntennaLibrary.h"
+#include "data/AntennaPatternIO.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
-#include <QGroupBox>
-#include <QToolButton>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <QFrame>
+#include <QScrollBar>
+#include <QSizePolicy>
+#include <QTimer>
+#include <algorithm>
+#include <cmath>
 
 PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* outerLayout = new QVBoxLayout(this);
@@ -12,206 +20,324 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     outerLayout->setSpacing(10);
 
     auto* title = new QLabel("EMITTER SETTINGS");
-    title->setStyleSheet("color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+    title->setStyleSheet(
+        "color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
     outerLayout->addWidget(title);
-    auto* help = new QLabel("Tune the selected source. Advanced antenna details are optional.");
+
+    auto* help = new QLabel(
+        "Tune the selected source. Direction, feed loss, polarization and measured patterns are available under Advanced.");
     help->setWordWrap(true);
     help->setStyleSheet("color: #64748b; font-size: 10px;");
     outerLayout->addWidget(help);
 
-    // "Nothing selected" placeholder
-    m_noSelLabel = new QLabel("Select an emitter or jammer from the list.");
+    m_noSelLabel = new QLabel("Select an emitter or jammer from the list, or click one in the map.");
     m_noSelLabel->setWordWrap(true);
     m_noSelLabel->setAlignment(Qt::AlignCenter);
-    m_noSelLabel->setStyleSheet("color: #64748b; font-size: 11px; padding: 24px 8px;");
-    outerLayout->addWidget(m_noSelLabel);
+    m_noSelLabel->setStyleSheet(
+        "color: #64748b; font-size: 11px; padding: 24px 8px;");
+    outerLayout->addWidget(m_noSelLabel, 1);
 
-    // Actual form (hidden when nothing is selected)
+    m_scrollArea = new QScrollArea(this);
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_scrollArea->setStyleSheet(
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollBar:vertical { background: #0b1422; width: 8px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #334155; border-radius: 4px; min-height: 24px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+    );
+
     m_form = new QWidget();
-    auto* form = new QFormLayout(m_form);
-    form->setContentsMargins(0, 6, 0, 0);
-    form->setSpacing(10);
-    form->setLabelAlignment(Qt::AlignRight);
+    auto* formLayout = new QVBoxLayout(m_form);
+    formLayout->setContentsMargins(0, 4, 4, 4);
+    formLayout->setSpacing(8);
 
-    const QString labelStyle = "color: #94a3b8; font-size: 11px;";
-
-    m_freqSpin   = makeSpinBox(1.0,      6000.0,   1.0,  " MHz");
-    m_powerSpin  = makeSpinBox(0.001, 100000.0,    1.0,  " W");
-    m_gainSpin   = makeSpinBox(0.0,      40.0,     0.5,  " dBi");
-    m_heightSpin = makeSpinBox(0.0,    3000.0,     1.0,  " m");
-
-    auto* freqLabel   = new QLabel("Frequency:");  freqLabel->setStyleSheet(labelStyle);
-    auto* powerLabel  = new QLabel("Power:");      powerLabel->setStyleSheet(labelStyle);
-    auto* gainLabel   = new QLabel("Gain:");       gainLabel->setStyleSheet(labelStyle);
-    auto* heightLabel = new QLabel("Height AGL:"); heightLabel->setStyleSheet(labelStyle);
-    auto* jammerLabel = new QLabel("Is Jammer:");  jammerLabel->setStyleSheet(labelStyle);
+    m_freqSpin   = makeSpinBox(1.0, 20000.0, 1.0, " MHz");
+    m_powerSpin  = makeSpinBox(0.001, 100000.0, 1.0, " W");
+    m_gainSpin   = makeSpinBox(-20.0, 60.0, 0.5, " dBi");
+    m_heightSpin = makeSpinBox(0.0, 3000.0, 1.0, " m");
+    m_azimuthSpin = makeSpinBox(0.0, 359.9, 1.0, "°");
+    m_downtiltSpin = makeSpinBox(-90.0, 90.0, 0.5, "°");
+    m_hBeamSpin = makeSpinBox(1.0, 360.0, 1.0, "°");
+    m_vBeamSpin = makeSpinBox(1.0, 180.0, 1.0, "°");
+    m_frontBackSpin = makeSpinBox(0.0, 80.0, 1.0, " dB");
+    m_cableLossSpin = makeSpinBox(0.0, 30.0, 0.1, " dB");
 
     m_typeCombo = new QComboBox();
-    m_typeCombo->setStyleSheet(
-        "QComboBox {"
-        "  background: rgba(255,255,255,0.08);"
-        "  border: 1px solid rgba(255,255,255,0.15);"
-        "  border-radius: 3px;"
-        "  color: rgba(255,255,255,0.85);"
-        "  font-family: monospace; font-size: 12px;"
-        "  padding: 2px 6px;"
-        "}"
-        "QComboBox QAbstractItemView {"
-        "  background: #1a2a3a;"
-        "  color: rgba(255,255,255,0.85);"
-        "  selection-background-color: rgba(79,195,247,0.3);"
-        "}"
-    );
-    connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &PropertiesPanel::onTypeChanged);
-    form->addRow("Type", m_typeCombo);
-
-    form->addRow(freqLabel,   m_freqSpin);
-    form->addRow(powerLabel,  m_powerSpin);
-    form->addRow(gainLabel,   m_gainSpin);
-    form->addRow(heightLabel, m_heightSpin);
-
+    m_typeCombo->setObjectName("AntennaTypeCombo");
+    m_polarizationCombo = new QComboBox();
+    m_polarizationCombo->setObjectName("PolarizationCombo");
+    m_polarizationCombo->addItems({"vertical", "horizontal", "RHCP", "LHCP"});
     m_jammerCheck = new QCheckBox("Jammer");
-    m_jammerCheck->setStyleSheet(
-        "QCheckBox::indicator { width: 14px; height: 14px; }"
-        "QCheckBox::indicator:checked { background: #ef5350; border: 1px solid #ef5350; border-radius: 2px; }"
-        "QCheckBox::indicator:unchecked { background: transparent; border: 1px solid rgba(255,255,255,0.3); border-radius: 2px; }"
-    );
-    jammerLabel->setText("Role:");
-    form->addRow(jammerLabel, m_jammerCheck);
+    m_importPatternButton = new QPushButton("Import CSV pattern…");
+    m_patternLabel = new QLabel("Analytic pattern");
+    m_patternLabel->setWordWrap(true);
+    m_patternLabel->setStyleSheet("color: #64748b; font-size: 9px;");
 
-    auto* advanced = new QToolButton();
-    advanced->setText("Advanced antenna settings");
-    advanced->setCheckable(true);
-    advanced->setArrowType(Qt::RightArrow);
-    advanced->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    form->addRow(advanced);
-    form->setRowVisible(m_typeCombo, false);
-    form->setRowVisible(m_gainSpin, false);
-    connect(advanced, &QToolButton::toggled, this,
-            [form, advanced, this](bool shown) {
-        advanced->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
-        form->setRowVisible(m_typeCombo, shown);
-        form->setRowVisible(m_gainSpin, shown);
+    m_eirpLabel = new QLabel();
+    m_erpLabel = new QLabel();
+    m_positionLabel = new QLabel("—");
+    m_positionLabel->setObjectName("SourcePositionSummary");
+    m_positionLabel->setWordWrap(true);
+    m_positionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_positionLabel->setStyleSheet(
+        "color: #a5b4c8; font-family: monospace; font-size: 9px;");
+    m_editPositionButton = new QPushButton("Edit precise position…");
+    m_editPositionButton->setObjectName("EditSourcePositionButton");
+    m_editPositionButton->setToolTip(
+        "Move this source using map coordinates, latitude/longitude, or MGRS");
+    const QString powerReadoutStyle =
+        "color: #ccfbf1; font-family: monospace; font-size: 10px; font-weight: 600;";
+    m_eirpLabel->setStyleSheet(powerReadoutStyle);
+    m_erpLabel->setStyleSheet(powerReadoutStyle);
+    m_eirpLabel->setWordWrap(true);
+    m_erpLabel->setWordWrap(true);
+    m_eirpLabel->setToolTip(
+        "Boresight effective isotropic radiated power: transmitter power + antenna gain − cable/feed loss.");
+    m_erpLabel->setToolTip(
+        "Boresight effective radiated power referenced to a half-wave dipole (ERP = EIRP − 2.15 dB).");
+
+    auto* basicForm = new QFormLayout();
+    basicForm->setContentsMargins(0, 0, 0, 0);
+    basicForm->setSpacing(10);
+    basicForm->setLabelAlignment(Qt::AlignRight);
+    basicForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    basicForm->addRow("Frequency:", m_freqSpin);
+    basicForm->addRow("Power:", m_powerSpin);
+    basicForm->addRow("EIRP:", m_eirpLabel);
+    basicForm->addRow("ERP:", m_erpLabel);
+    basicForm->addRow("Height AGL:", m_heightSpin);
+    basicForm->addRow("Position:", m_positionLabel);
+    basicForm->addRow("", m_editPositionButton);
+    basicForm->addRow("Role:", m_jammerCheck);
+    formLayout->addLayout(basicForm);
+
+    m_advancedToggle = new QToolButton();
+    m_advancedToggle->setObjectName("AdvancedSettingsToggle");
+    m_advancedToggle->setText("Advanced antenna settings");
+    m_advancedToggle->setCheckable(true);
+    m_advancedToggle->setArrowType(Qt::RightArrow);
+    m_advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_advancedToggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_advancedToggle->setToolTip(
+        "Show or hide direction, pattern, feed-loss, and polarization controls");
+    // Keep the disclosure control outside the scrolling form. It remains
+    // reachable even after the expanded fields have been scrolled, so the
+    // section can always be collapsed without fighting layout movement.
+    outerLayout->addWidget(m_advancedToggle);
+    m_advancedToggle->hide();
+
+    m_advancedPanel = new QWidget(m_form);
+    m_advancedPanel->setObjectName("AdvancedSettingsPanel");
+    auto* advancedForm = new QFormLayout(m_advancedPanel);
+    advancedForm->setContentsMargins(0, 2, 0, 0);
+    advancedForm->setSpacing(10);
+    advancedForm->setLabelAlignment(Qt::AlignRight);
+    advancedForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    advancedForm->addRow("Type:", m_typeCombo);
+    advancedForm->addRow("Gain:", m_gainSpin);
+    advancedForm->addRow("Azimuth:", m_azimuthSpin);
+    advancedForm->addRow("Downtilt:", m_downtiltSpin);
+    advancedForm->addRow("H beamwidth:", m_hBeamSpin);
+    advancedForm->addRow("V beamwidth:", m_vBeamSpin);
+    advancedForm->addRow("Front/back:", m_frontBackSpin);
+    advancedForm->addRow("Cable loss:", m_cableLossSpin);
+    advancedForm->addRow("Polarization:", m_polarizationCombo);
+    advancedForm->addRow("Measured pattern:", m_importPatternButton);
+    advancedForm->addRow("", m_patternLabel);
+    m_advancedPanel->hide();
+    formLayout->addWidget(m_advancedPanel);
+    formLayout->addStretch();
+
+    connect(m_advancedToggle, &QToolButton::toggled, this, [this](bool shown) {
+        m_advancedToggle->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
+        m_advancedPanel->setVisible(shown);
+        m_advancedPanel->updateGeometry();
+        m_form->updateGeometry();
+        QTimer::singleShot(0, this, [this, shown]() {
+            if (!shown && m_scrollArea)
+                m_scrollArea->verticalScrollBar()->setValue(0);
+            if (m_scrollArea && m_scrollArea->widget())
+                m_scrollArea->widget()->updateGeometry();
+        });
     });
 
-    outerLayout->addWidget(m_form);
-    outerLayout->addStretch();
+    m_scrollArea->setWidget(m_form);
+    outerLayout->addWidget(m_scrollArea, 1);
+    m_scrollArea->hide();
 
-    m_form->hide();
-
-    // Wire all controls to onValueChanged
-    connect(m_freqSpin,    QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &PropertiesPanel::onTypeChanged);
+    connect(m_freqSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &PropertiesPanel::onValueChanged);
-    connect(m_powerSpin,   QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(m_powerSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &PropertiesPanel::onValueChanged);
-    connect(m_gainSpin,    QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(m_gainSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &PropertiesPanel::onValueChanged);
-    connect(m_heightSpin,  QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(m_heightSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_azimuthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_downtiltSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_hBeamSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_vBeamSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_frontBackSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_cableLossSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &PropertiesPanel::onValueChanged);
+    connect(m_polarizationCombo, &QComboBox::currentTextChanged,
             this, &PropertiesPanel::onValueChanged);
     connect(m_jammerCheck, &QCheckBox::toggled,
             this, &PropertiesPanel::onValueChanged);
+    connect(m_importPatternButton, &QPushButton::clicked,
+            this, &PropertiesPanel::onImportPattern);
+    connect(m_editPositionButton, &QPushButton::clicked,
+            this, &PropertiesPanel::positionEditRequested);
 
-    setMinimumWidth(230);
-    setMaximumWidth(330);
+    updatePowerReadout();
+    setMinimumWidth(250);
+    setMaximumWidth(380);
     setStyleSheet(
         "QWidget { background: #0b1422; }"
-        "QToolButton { color: #94a3b8; border: none; padding: 6px 2px; }"
+        "QToolButton { color: #94a3b8; border: none; padding: 6px 2px; text-align: left; }"
         "QToolButton:hover { color: #e2e8f0; }"
+        "QPushButton { background: #111c2e; border: 1px solid #2a3b52; border-radius: 6px; padding: 5px; }"
     );
 }
 
 void PropertiesPanel::setAntennaLibrary(const AntennaLibrary* lib) {
     m_lib = lib;
     if (!lib || lib->types().empty()) return;
-
     m_loading = true;
     m_typeCombo->clear();
     for (const auto& t : lib->types())
         m_typeCombo->addItem(QString::fromStdString(t.name));
     m_loading = false;
-
-    // If an antenna is already loaded, re-sync the combo to its type.
-    if (m_form->isVisible()) {
-        const std::string& typeName = m_current.antennaType;
-        bool found = false;
-        for (int i = 0; i < m_typeCombo->count(); ++i) {
-            if (m_typeCombo->itemText(i).toStdString() == typeName) {
-                m_loading = true;
-                m_typeCombo->setCurrentIndex(i);
-                m_loading = false;
-                found = true;
-                break;
-            }
-        }
-        if (!found && m_typeCombo->count() > 0) {
-            m_loading = true;
-            m_typeCombo->setCurrentIndex(0);
-            m_loading = false;
-            m_current.antennaType = m_typeCombo->itemText(0).toStdString();
-        }
-    }
+    if (m_scrollArea && m_scrollArea->isVisible()) load(&m_current);
 }
 
 void PropertiesPanel::onTypeChanged(int index) {
-    if (m_loading || !m_lib || index < 0) return;
-    const auto& types = m_lib->types();
-    if (index >= static_cast<int>(types.size())) return;
+    if (m_loading || !m_lib || index < 0 ||
+        index >= static_cast<int>(m_lib->types().size())) return;
+    const AntennaType& type = m_lib->types()[index];
+    m_current.antennaType = type.name;
+    m_current.gainDbi = type.defaultGainDbi;
+    m_current.horizontalBeamwidthDeg = type.beamwidthDeg;
+    m_current.azimuthPatternDb.clear();
+    m_current.elevationPatternDb.clear();
+    m_current.patternSource.clear();
 
-    const AntennaType& t = types[index];
-    m_current.antennaType = t.name;
-
-    // Apply the type's default gain when the type changes.
     m_loading = true;
-    m_gainSpin->setValue(static_cast<double>(t.defaultGainDbi));
+    m_gainSpin->setValue(type.defaultGainDbi);
+    m_hBeamSpin->setValue(type.beamwidthDeg);
+    m_patternLabel->setText("Analytic pattern");
     m_loading = false;
-    m_current.gainDbi = t.defaultGainDbi;
-
+    updatePowerReadout();
     emit antennaChanged(m_current);
 }
 
 void PropertiesPanel::load(const Antenna* antenna) {
     if (!antenna) {
-        m_form->hide();
+        if (m_scrollArea) m_scrollArea->hide();
+        if (m_advancedToggle) m_advancedToggle->hide();
         m_noSelLabel->show();
         return;
     }
+
     m_current = *antenna;
     m_loading = true;
-    m_freqSpin->setValue(static_cast<double>(antenna->frequencyMHz));
-    m_powerSpin->setValue(static_cast<double>(antenna->powerW));
-    m_gainSpin->setValue(static_cast<double>(antenna->gainDbi));
-    m_heightSpin->setValue(static_cast<double>(antenna->position.y));
+    m_freqSpin->setValue(antenna->frequencyMHz);
+    m_powerSpin->setValue(antenna->powerW);
+    m_gainSpin->setValue(antenna->gainDbi);
+    m_heightSpin->setValue(antenna->position.y);
+    m_azimuthSpin->setValue(antenna->azimuthDeg);
+    m_downtiltSpin->setValue(antenna->downtiltDeg);
+    m_hBeamSpin->setValue(antenna->horizontalBeamwidthDeg);
+    m_vBeamSpin->setValue(antenna->verticalBeamwidthDeg);
+    m_frontBackSpin->setValue(antenna->frontToBackDb);
+    m_cableLossSpin->setValue(antenna->cableLossDb);
     m_jammerCheck->setChecked(antenna->isJammer);
-    // Sync type combo
+
+    int polIndex = m_polarizationCombo->findText(
+        QString::fromStdString(antenna->polarization), Qt::MatchFixedString);
+    if (polIndex < 0) polIndex = 0;
+    m_polarizationCombo->setCurrentIndex(polIndex);
+
     if (m_lib && m_typeCombo->count() > 0) {
-        const std::string& typeName = antenna->antennaType;
-        bool found = false;
+        int found = -1;
         for (int i = 0; i < m_typeCombo->count(); ++i) {
-            if (m_typeCombo->itemText(i).toStdString() == typeName) {
-                m_typeCombo->setCurrentIndex(i);
-                found = true;
+            if (m_typeCombo->itemText(i).toStdString() == antenna->antennaType) {
+                found = i;
                 break;
             }
         }
-        if (!found && m_typeCombo->count() > 0) {
-            m_typeCombo->setCurrentIndex(0);
-            m_current.antennaType = m_typeCombo->itemText(0).toStdString();
-        }
+        m_typeCombo->setCurrentIndex(found >= 0 ? found : 0);
     }
+
+    m_patternLabel->setText(antenna->patternSource.empty()
+        ? QStringLiteral("Analytic pattern")
+        : QFileInfo(QString::fromStdString(antenna->patternSource)).fileName());
     m_loading = false;
+    updatePowerReadout();
     m_noSelLabel->hide();
-    m_form->show();
+    m_advancedToggle->show();
+    m_scrollArea->show();
 }
 
 void PropertiesPanel::onValueChanged() {
     if (m_loading) return;
     m_current.frequencyMHz = static_cast<float>(m_freqSpin->value());
-    m_current.powerW       = static_cast<float>(m_powerSpin->value());
-    m_current.gainDbi      = static_cast<float>(m_gainSpin->value());
-    m_current.position.y   = static_cast<float>(m_heightSpin->value());
-    m_current.isJammer     = m_jammerCheck->isChecked();
+    m_current.powerW = static_cast<float>(m_powerSpin->value());
+    m_current.gainDbi = static_cast<float>(m_gainSpin->value());
+    m_current.position.y = static_cast<float>(m_heightSpin->value());
+    m_current.azimuthDeg = static_cast<float>(m_azimuthSpin->value());
+    m_current.downtiltDeg = static_cast<float>(m_downtiltSpin->value());
+    m_current.horizontalBeamwidthDeg = static_cast<float>(m_hBeamSpin->value());
+    m_current.verticalBeamwidthDeg = static_cast<float>(m_vBeamSpin->value());
+    m_current.frontToBackDb = static_cast<float>(m_frontBackSpin->value());
+    m_current.cableLossDb = static_cast<float>(m_cableLossSpin->value());
+    m_current.polarization = m_polarizationCombo->currentText().toStdString();
+    m_current.isJammer = m_jammerCheck->isChecked();
+    updatePowerReadout();
     emit antennaChanged(m_current);
+}
+
+void PropertiesPanel::onImportPattern() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Import antenna pattern", {}, "CSV pattern (*.csv);;All files (*)");
+    if (path.isEmpty()) return;
+    try {
+        AntennaPatternIO::loadCsv(path.toStdString(), m_current);
+        m_patternLabel->setText(QFileInfo(path).fileName());
+        emit antennaChanged(m_current);
+    } catch (const std::exception& e) {
+        QMessageBox::critical(this, "Pattern import failed", e.what());
+    }
+}
+
+void PropertiesPanel::updatePowerReadout() {
+    if (!m_eirpLabel || !m_erpLabel || !m_powerSpin || !m_gainSpin || !m_cableLossSpin)
+        return;
+
+    const double powerW = std::max(m_powerSpin->value(), 1.0e-12);
+    const double txPowerDbm = 10.0 * std::log10(powerW * 1000.0);
+    const double eirpDbm = txPowerDbm + m_gainSpin->value() - m_cableLossSpin->value();
+    const double erpDbm = eirpDbm - 2.15;
+    const double eirpW = std::pow(10.0, (eirpDbm - 30.0) / 10.0);
+    const double erpW = std::pow(10.0, (erpDbm - 30.0) / 10.0);
+
+    m_eirpLabel->setText(QString("%1 dBm  ·  %2 W")
+        .arg(eirpDbm, 0, 'f', 1)
+        .arg(eirpW, 0, 'f', eirpW < 10.0 ? 2 : 1));
+    m_erpLabel->setText(QString("%1 dBm  ·  %2 W")
+        .arg(erpDbm, 0, 'f', 1)
+        .arg(erpW, 0, 'f', erpW < 10.0 ? 2 : 1));
 }
 
 QDoubleSpinBox* PropertiesPanel::makeSpinBox(double min, double max,
@@ -220,20 +346,16 @@ QDoubleSpinBox* PropertiesPanel::makeSpinBox(double min, double max,
     sb->setRange(min, max);
     sb->setSingleStep(step);
     sb->setSuffix(suffix);
-    sb->setDecimals(suffix == " MHz" || suffix == " m" ? 1 : 3);
+    sb->setDecimals((suffix == " MHz" || suffix == " m" || suffix == "°") ? 1 : 3);
     sb->setStyleSheet(
-        "QDoubleSpinBox {"
-        "  background: #111c2e;"
-        "  border: 1px solid #2a3b52;"
-        "  border-radius: 7px;"
-        "  color: #e2e8f0;"
-        "  font-size: 11px;"
-        "  padding: 5px 7px;"
-        "}"
+        "QDoubleSpinBox { background: #111c2e; border: 1px solid #2a3b52;"
+        " border-radius: 7px; color: #e2e8f0; font-size: 11px; padding: 5px 7px; }"
         "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
-        "  background: #172338;"
-        "  border: none;"
-        "}"
+        " background: #172338; border: none; }"
     );
     return sb;
+}
+
+void PropertiesPanel::setPositionSummary(const QString& summary) {
+    if (m_positionLabel) m_positionLabel->setText(summary);
 }

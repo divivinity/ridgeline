@@ -3,6 +3,7 @@
 #include <QLabel>
 #include <QSlider>
 #include <QToolButton>
+#include <QComboBox>
 
 OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
     auto* layout = new QHBoxLayout(this);
@@ -14,7 +15,27 @@ OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
     layout->addWidget(overlaysLabel);
 
     buildCheckbox("Satellite", ViewportWidget::Basemap, layout);
-    buildCheckbox("Coverage",  ViewportWidget::Heatmap, layout);
+    buildCheckbox("Coverage", ViewportWidget::Heatmap, layout);
+
+    auto* metric = new QComboBox();
+    metric->addItem("Desired dBm", static_cast<int>(HeatmapOverlay::Metric::DesiredPower));
+    metric->addItem("Jammer dBm", static_cast<int>(HeatmapOverlay::Metric::JammerPower));
+    metric->addItem("SNR", static_cast<int>(HeatmapOverlay::Metric::Snr));
+    metric->addItem("SINR", static_cast<int>(HeatmapOverlay::Metric::Sinr));
+    metric->addItem("J/S", static_cast<int>(HeatmapOverlay::Metric::JOverS));
+    metric->addItem("Fade margin", static_cast<int>(HeatmapOverlay::Metric::FadeMargin));
+    metric->addItem("Service contour", static_cast<int>(HeatmapOverlay::Metric::Service));
+    metric->setToolTip("Coverage field displayed on the terrain");
+    metric->setStyleSheet(
+        "QComboBox { background: #111c2e; border: 1px solid #2a3b52; border-radius: 5px;"
+        " color: #cbd5e1; padding: 3px 7px; min-width: 105px; }"
+    );
+    connect(metric, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, metric](int index) {
+        emit heatmapMetricChanged(static_cast<HeatmapOverlay::Metric>(
+            metric->itemData(index).toInt()));
+    });
+    layout->addWidget(metric);
 
     auto* opacityLabel = new QLabel("Map");
     opacityLabel->setStyleSheet("color: #64748b; font-size: 10px;");
@@ -40,10 +61,10 @@ OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
     auto* advancedLayout = new QHBoxLayout(advanced);
     advancedLayout->setContentsMargins(0, 0, 0, 0);
     advancedLayout->setSpacing(9);
-    buildCheckbox("LOS",     ViewportWidget::LOS,     advancedLayout, false);
-    buildCheckbox("Pattern", ViewportWidget::Lobe,    advancedLayout, false);
+    buildCheckbox("LOS", ViewportWidget::LOS, advancedLayout, false);
+    buildCheckbox("Pattern", ViewportWidget::Lobe, advancedLayout, false);
     buildCheckbox("Jamming", ViewportWidget::Jammer, advancedLayout, false);
-    buildCheckbox("Fresnel", ViewportWidget::Fresnel,advancedLayout, false);
+    buildCheckbox("Fresnel", ViewportWidget::Fresnel, advancedLayout, false);
     advanced->hide();
     connect(advancedButton, &QToolButton::toggled, this,
             [advancedButton, advanced](bool shown) {
