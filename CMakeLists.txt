@@ -210,3 +210,38 @@ if(GDAL_FOUND)
     add_test(NAME geotiff_tests COMMAND ridgeline_geotiff_tests
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
+
+# ── MainWindow GUI tests (need a real display) ─────────────────────────────
+# ui_interaction_tests runs on the offscreen platform and links only the panels
+# and dialogs. MainWindow owns a QOpenGLWidget, which offscreen cannot give a
+# context, so covering it needs a display — CI runs these under xvfb-run.
+#
+# Off by default, so an ordinary `cmake && ctest` is completely unaffected.
+# When enabled the app sources are compiled a second time rather than the app
+# target being restructured into a library, which keeps this additive: no
+# existing target changes shape.
+option(RIDGELINE_GUI_TESTS
+    "Build the MainWindow GUI tests (requires a display, e.g. xvfb-run)" OFF)
+
+if(RIDGELINE_GUI_TESTS)
+    set(RIDGELINE_APP_SOURCES ${SOURCES})
+    list(REMOVE_ITEM RIDGELINE_APP_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
+
+    add_executable(ridgeline_main_window_tests
+        tests/test_main_window_guard.cpp ${RIDGELINE_APP_SOURCES})
+    target_include_directories(ridgeline_main_window_tests PRIVATE src)
+    target_compile_definitions(ridgeline_main_window_tests PRIVATE HAVE_NTIA_ITM)
+    target_link_libraries(ridgeline_main_window_tests
+        Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Concurrent
+        OpenGL::GL glm::glm nlohmann_json::nlohmann_json ntia_itm)
+    if(GDAL_FOUND)
+        target_compile_definitions(ridgeline_main_window_tests PRIVATE HAVE_GDAL)
+        target_include_directories(ridgeline_main_window_tests PRIVATE ${GDAL_INCLUDE_DIRS})
+        target_link_libraries(ridgeline_main_window_tests GDAL::GDAL)
+    endif()
+
+    # Runs beside the app's copied assets, which MainWindow loads at startup.
+    add_dependencies(ridgeline_main_window_tests ridgeline)
+    add_test(NAME main_window_tests COMMAND ridgeline_main_window_tests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+endif()
