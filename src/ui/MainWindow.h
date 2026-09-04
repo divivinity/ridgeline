@@ -74,6 +74,7 @@ private:
     int              m_selectedIndex = -1;
     Antenna          m_propsAntennaView;
     bool             m_scenarioDirty = false;  // non-undoable unsaved changes
+    bool             m_solveInProgress = false;  // a coverage run owns the UI
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;

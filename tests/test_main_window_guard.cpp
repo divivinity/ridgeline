@@ -13,6 +13,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
+#include <QProgressDialog>
 #include <QEventLoop>
 #include <QListWidget>
 #include <QMessageBox>
@@ -129,6 +130,68 @@ void testModeChangePromptsViaDirtyFlag() {
     check(sawPrompt, "mode change prompts before closing");
 }
 
+// A coverage run puts up its own modal progress dialog. Closing during one
+// must be refused outright: raising the unsaved-changes prompt on top would
+// stack a second modal while onSolve() is blocked in its nested event loop,
+// which leaves the window looking wedged.
+void testCloseIsRefusedDuringASolve() {
+    MainWindow window;
+    window.show();
+    settle();
+
+    QPushButton* run = findButton(window, "Run coverage");
+    if (!run) { check(false, "found the Run coverage button"); return; }
+
+    // Slowest mode, so the solve lasts long enough to be closed into.
+    if (QComboBox* mode = findModeCombo(window)) {
+        for (int i = 0; i < mode->count(); ++i)
+            if (mode->itemText(i).startsWith("High accuracy")) mode->setCurrentIndex(i);
+    }
+    qApp->processEvents();
+
+    bool sawSolve = false, sawStackedBox = false, closeRefused = false;
+
+    // The close is posted rather than called inline: if the guard regresses,
+    // close() blocks inside the stacked prompt, and a timer that called it
+    // could not fire again to dismiss its own dialog — the run would wedge
+    // until CI's job timeout instead of failing.
+    QTimer probe;
+    QObject::connect(&probe, &QTimer::timeout, [&] {
+        if (sawSolve || window.findChild<QProgressDialog*>() == nullptr) return;
+        sawSolve = true;
+        QMetaObject::invokeMethod(qApp, [&] { closeRefused = !window.close(); },
+                                  Qt::QueuedConnection);
+    });
+    probe.start(50);
+
+    // Independent of the probe, so it still runs while a stacked prompt is up.
+    QTimer watchdog;
+    QObject::connect(&watchdog, &QTimer::timeout, [&] {
+        for (QWidget* top : QApplication::topLevelWidgets()) {
+            auto* box = qobject_cast<QMessageBox*>(top);
+            if (!box || !box->isVisible()) continue;
+            sawStackedBox = true;   // the regression
+            if (QAbstractButton* b = box->button(QMessageBox::Cancel)) b->click();
+            else if (QAbstractButton* d = box->button(QMessageBox::Discard)) d->click();
+            else box->reject();
+        }
+    });
+    watchdog.start(100);
+
+    run->click();   // blocks in the solve's nested event loop
+    probe.stop();
+    watchdog.stop();
+
+    // Guard against the test silently passing without exercising anything.
+    check(sawSolve, "observed a solve in progress to close into");
+    if (!sawSolve) return;
+    check(closeRefused, "close is refused while a solve is running");
+    check(!sawStackedBox, "no prompt is stacked over the progress dialog");
+
+    // With the solve finished the window closes normally again.
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -139,6 +202,7 @@ int main(int argc, char** argv) {
     testCleanScenarioClosesWithoutPrompting();
     testSourceEditPromptsViaUndoStack();
     testModeChangePromptsViaDirtyFlag();
+    testCloseIsRefusedDuringASolve();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";

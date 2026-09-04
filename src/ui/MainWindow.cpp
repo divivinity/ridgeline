@@ -32,6 +32,7 @@
 #include <QUndoCommand>
 #include <QUndoStack>
 #include <QCloseEvent>
+#include <QScopeGuard>
 #include <QDateTime>
 #include <QtConcurrent/QtConcurrentRun>
 #include <stdexcept>
@@ -930,6 +931,17 @@ bool MainWindow::confirmDiscardChanges() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    // A coverage run already owns the interaction through its own modal
+    // progress dialog. Raising the unsaved-changes prompt on top of it stacks
+    // a second modal — and a third if the user picks Save and gets a file
+    // dialog — while onSolve() is still blocked in its nested event loop. To
+    // anyone not looking closely the window just appears wedged. Make them
+    // cancel the run first; the progress dialog has a Cancel button for it.
+    if (m_solveInProgress) {
+        m_statusLabel->setText("  Cancel the coverage run before closing");
+        event->ignore();
+        return;
+    }
     if (confirmDiscardChanges()) event->accept();
     else                         event->ignore();
 }
@@ -1021,6 +1033,8 @@ void MainWindow::onSolve() {
     }
 
     m_statusLabel->setText("  Calculating terrain-aware coverage…");
+    m_solveInProgress = true;
+    const auto solveGuard = qScopeGuard([this] { m_solveInProgress = false; });
     m_solveBtn->setEnabled(false);
     m_solveBtn->setText("Calculating…");
     auto timer = std::make_shared<QElapsedTimer>();
