@@ -29,6 +29,9 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     void loadTerrain(const QString& path);
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private slots:
     void onSolve();
     void onChooseLocation();
@@ -70,6 +73,7 @@ private:
     QComboBox*       m_modeCombo = nullptr;
     int              m_selectedIndex = -1;
     Antenna          m_propsAntennaView;
+    bool             m_scenarioDirty = false;  // non-undoable unsaved changes
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;
@@ -90,6 +94,17 @@ private:
         std::numeric_limits<float>::quiet_NaN();
     float            m_appliedCalibrationRmseAfterDb =
         std::numeric_limits<float>::quiet_NaN();
+
+    // Unsaved-state tracking. Source edits go through the undo stack, so its
+    // clean flag covers them (and goes clean again if the user undoes back to
+    // the last save). Terrain, mode, receiver and calibration changes are not
+    // undoable and loadTerrain() clears the stack, so they are tracked apart.
+    bool isScenarioDirty() const;
+    void markScenarioDirty();
+    void markScenarioClean();
+    // Prompts to save when there are unsaved changes. Returns false if the
+    // caller should abandon what it was about to do.
+    bool confirmDiscardChanges();
 
     void setupScene();
     void applyTheme();
