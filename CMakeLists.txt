@@ -117,6 +117,13 @@ target_link_libraries(ridgeline_hgt_georef_tests glm::glm nlohmann_json::nlohman
 add_test(NAME hgt_georef_tests COMMAND ridgeline_hgt_georef_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_executable(ridgeline_hgt_decoding_tests
+    tests/test_hgt_decoding.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
+target_include_directories(ridgeline_hgt_decoding_tests PRIVATE src)
+target_link_libraries(ridgeline_hgt_decoding_tests glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME hgt_decoding_tests COMMAND ridgeline_hgt_decoding_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_executable(ridgeline_geospatial_antenna_tests
     tests/test_geospatial_antennas.cpp ${RIDGELINE_PHYSICS_TEST_SOURCES})
 target_include_directories(ridgeline_geospatial_antenna_tests PRIVATE src)
