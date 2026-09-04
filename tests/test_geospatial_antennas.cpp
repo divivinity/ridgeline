@@ -37,6 +37,93 @@ static TerrainModel makeGeoTerrain(int samples, float elevationM) {
     return makeCustomGeoTerrain(samples, elevationM, 35.0, -80.0);
 }
 
+// A procedural scene like the default hills: no geo-reference at all, so
+// sources on it hold plain world metres and never gain a geo position.
+static TerrainModel makeProceduralTerrain(int samples, float cellM,
+                                          float elevationM) {
+    TerrainModel t;
+    t.width = samples;
+    t.height = samples;
+    t.setCellSpacing(cellM, cellM);
+    t.heights.assign(samples * samples, elevationM);
+    return t;
+}
+
+static void test_procedural_source_keeps_relative_position() {
+    SimEngine engine;
+    engine.setTerrain(makeProceduralTerrain(201, 10.0f, 40.0f));  // 2 km map
+    const glm::vec3 oldSize = engine.terrain().worldSize();
+
+    Antenna a;
+    a.position = {oldSize.x * 0.1f, 50.0f, oldSize.z * 0.1f};
+    engine.addAntenna(a);
+    CHECK(!engine.antennas().front().hasGeoPosition);
+
+    engine.setTerrain(makeGeoTerrain(101, 100.0f));  // ~11 km real tile
+    const Antenna& moved = engine.antennas().front();
+    const glm::vec3 newSize = engine.terrain().worldSize();
+
+    // Same tenth of the map, not the same metres.
+    CHECK_NEAR(moved.position.x, newSize.x * 0.1f, 1.0);
+    CHECK_NEAR(moved.position.z, newSize.z * 0.1f, 1.0);
+    CHECK(std::abs(moved.position.x - oldSize.x * 0.1f) > 1.0f);
+    CHECK(moved.position.x >= 0.0f && moved.position.x <= newSize.x);
+    CHECK(moved.position.z >= 0.0f && moved.position.z <= newSize.z);
+}
+
+static void test_procedural_source_keeps_height_above_ground() {
+    SimEngine engine;
+    engine.setTerrain(makeProceduralTerrain(201, 10.0f, 40.0f));
+    const glm::vec3 oldSize = engine.terrain().worldSize();
+
+    Antenna a;
+    a.position = {oldSize.x * 0.25f, 50.0f, oldSize.z * 0.75f};  // 10 m AGL
+    engine.addAntenna(a);
+
+    engine.setTerrain(makeGeoTerrain(101, 100.0f));  // ground rises to 100 m
+    const Antenna& moved = engine.antennas().front();
+    CHECK_NEAR(moved.position.y, 110.0, 1e-3);
+    CHECK_NEAR(moved.heightAglM, 10.0, 1e-4);
+}
+
+static void test_procedural_source_gains_geo_position() {
+    SimEngine engine;
+    engine.setTerrain(makeProceduralTerrain(201, 10.0f, 40.0f));
+    Antenna a;
+    a.position = {500.0f, 50.0f, 500.0f};
+    engine.addAntenna(a);
+    CHECK(!engine.antennas().front().hasGeoPosition);
+
+    engine.setTerrain(makeGeoTerrain(101, 100.0f));
+    const Antenna& moved = engine.antennas().front();
+    CHECK(moved.hasGeoPosition);
+
+    // Having gained one, a further switch must follow the exact geographic
+    // path and hold the same real-world spot.
+    const double lat = moved.latitudeDeg;
+    const double lon = moved.longitudeDeg;
+    engine.setTerrain(makeGeoTerrain(201, 200.0f));
+    CHECK_NEAR(engine.antennas().front().latitudeDeg, lat, 1e-7);
+    CHECK_NEAR(engine.antennas().front().longitudeDeg, lon, 1e-7);
+}
+
+static void test_degenerate_previous_terrain_is_safe() {
+    SimEngine engine;
+    engine.setTerrain(makeProceduralTerrain(1, 10.0f, 0.0f));  // zero extent
+    Antenna a;
+    a.position = {123.0f, 10.0f, 456.0f};
+    engine.addAntenna(a);
+
+    engine.setTerrain(makeGeoTerrain(101, 100.0f));
+    const Antenna& moved = engine.antennas().front();
+    const glm::vec3 newSize = engine.terrain().worldSize();
+    CHECK(std::isfinite(moved.position.x));
+    CHECK(std::isfinite(moved.position.z));
+    CHECK(std::isfinite(moved.position.y));
+    CHECK(moved.position.x >= 0.0f && moved.position.x <= newSize.x);
+    CHECK(moved.position.z >= 0.0f && moved.position.z <= newSize.z);
+}
+
 static void test_engine_tracks_geo_metadata() {
     SimEngine engine;
     engine.setTerrain(makeGeoTerrain(101, 100.0f));
@@ -181,6 +268,10 @@ static void test_cancelled_solve_does_not_publish_partial_field() {
 }
 
 int main() {
+    test_procedural_source_keeps_relative_position();
+    test_procedural_source_keeps_height_above_ground();
+    test_procedural_source_gains_geo_position();
+    test_degenerate_previous_terrain_is_safe();
     test_engine_tracks_geo_metadata();
     test_engine_reprojects_across_terrain_resolution();
     test_outside_source_is_preserved_not_clamped();

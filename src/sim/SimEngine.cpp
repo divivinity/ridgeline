@@ -27,6 +27,60 @@ void projectGeoToWorld(Antenna& antenna, const TerrainModel& terrain) {
                        + std::max(0.0f, antenna.heightAglM);
 }
 
+// heightAtWorld() samples a 2x2 neighbourhood, so it needs a populated field.
+bool hasSamples(const TerrainModel& terrain) {
+    return terrain.width > 1 && terrain.height > 1 && !terrain.heights.empty();
+}
+
+float groundAt(const TerrainModel& terrain, float worldX, float worldZ) {
+    return hasSamples(terrain) ? terrain.heightAtWorld(worldX, worldZ) : 0.0f;
+}
+
+// Where a source sat as a fraction of the map, 0..1. A degenerate extent has
+// no meaningful fraction, so treat it as the middle.
+float extentFraction(float position, float extent) {
+    if (!(extent > 0.0f)) return 0.5f;
+    return std::clamp(position / extent, 0.0f, 1.0f);
+}
+
+// A source with no geographic position holds only procedural world metres,
+// which mean nothing on a different map: carried over verbatim they land
+// wherever those metres happen to fall, typically bunched into a corner.
+// Remember where such a source sat proportionally, and how far above ground,
+// so it can be placed equivalently on the new terrain. Sources that do have a
+// geographic position are left entirely alone — their real-world location is
+// authoritative and is preserved exactly, even off the edge of the new map.
+struct ProceduralPlacement {
+    bool  carry = false;
+    float fracX = 0.5f;
+    float fracZ = 0.5f;
+    float aglM  = 0.0f;
+};
+
+ProceduralPlacement captureProcedural(const Antenna& antenna,
+                                      const TerrainModel& terrain) {
+    if (antenna.hasGeoPosition) return {};
+    const glm::vec3 size = terrain.worldSize();
+    ProceduralPlacement placement;
+    placement.carry = true;
+    placement.fracX = extentFraction(antenna.position.x, size.x);
+    placement.fracZ = extentFraction(antenna.position.z, size.z);
+    placement.aglM  = std::max(
+        0.0f,
+        antenna.position.y - groundAt(terrain, antenna.position.x, antenna.position.z));
+    return placement;
+}
+
+void applyProcedural(Antenna& antenna, const ProceduralPlacement& placement,
+                     const TerrainModel& terrain) {
+    if (!placement.carry) return;
+    const glm::vec3 size = terrain.worldSize();
+    antenna.position.x = placement.fracX * size.x;
+    antenna.position.z = placement.fracZ * size.z;
+    antenna.position.y =
+        groundAt(terrain, antenna.position.x, antenna.position.z) + placement.aglM;
+}
+
 } // namespace
 
 void SimEngine::setTerrain(TerrainModel terrain) {
@@ -34,10 +88,28 @@ void SimEngine::setTerrain(TerrainModel terrain) {
         for (auto& antenna : m_antennas)
             syncGeoFromWorld(antenna, m_terrain);
     }
+
+    // Capture relative placement for any source still lacking a geographic
+    // position, while the outgoing terrain's extent is still available.
+    std::vector<ProceduralPlacement> carried;
+    carried.reserve(m_antennas.size());
+    for (const auto& antenna : m_antennas)
+        carried.push_back(captureProcedural(antenna, m_terrain));
+
     m_terrain = std::move(terrain);
+
+    for (std::size_t i = 0; i < m_antennas.size(); ++i)
+        applyProcedural(m_antennas[i], carried[i], m_terrain);
+
     if (m_terrain.hasGeoReference()) {
         for (auto& antenna : m_antennas)
             projectGeoToWorld(antenna, m_terrain);
+        // Sources just placed proportionally now sit on a georeferenced map;
+        // give them a real position so every later switch takes the exact
+        // geographic path above. Sources that already had one are untouched.
+        for (std::size_t i = 0; i < m_antennas.size(); ++i)
+            if (carried[i].carry)
+                syncGeoFromWorld(m_antennas[i], m_terrain);
     }
 }
 
