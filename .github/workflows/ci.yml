@@ -56,18 +56,10 @@ jobs:
         if: runner.os == 'Windows'
         run: ctest --test-dir build -C Release --output-on-failure
 
-      # A build check, not a distributable. CMakeLists copies all of assets/
-      # into build/Release/assets, which sweeps in the 36 committed .hgt tiles
-      # (891 MB on disk, ~221 MB zipped) on every single run. They are already
-      # in the repository and release.yml ships them, so they are excluded here
-      # and the artifact stays around 31 MB.
-      - name: Publish Windows application
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ridgeline-windows
-          path: |
-            build/Release/**
-            !build/Release/assets/terrain/**
-          if-no-files-found: error
-          retention-days: 14
+      # No artifact by design. This workflow answers "did this commit build and
+      # pass?", and nothing here needs to be downloaded to know that. Packaging
+      # lives in release.yml, which builds the full Windows bundle — terrain
+      # included — and attaches it to a GitHub Release on a v* tag. Release
+      # assets are permanent and do not count against the Actions storage quota,
+      # which per-run artifacts do; uploading a distributable on every commit is
+      # what exhausted it before.
