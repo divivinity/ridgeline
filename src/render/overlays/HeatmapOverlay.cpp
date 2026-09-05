@@ -121,9 +121,17 @@ void HeatmapOverlay::update(const FieldGrid& grid, Metric metric) {
             texture[i] = std::isfinite((*values)[i]) ? (*values)[i] : sentinel;
     }
 
+    // Service holds two categorical values and the shader keeps only samples
+    // at or above min+1, i.e. 0.99. Interpolating from an in-service texel
+    // (1.0) toward an out-of-service one (-1.01) gives 1.0 - 2.01x, which
+    // drops under 0.99 at x = 0.005 — half a percent of the way across. A
+    // linear filter therefore collapses the service contour onto the texel
+    // centres and renders isolated cells as specks, understating coverage.
+    // Continuous metrics are genuinely interpolable and still use LINEAR.
+    const GLint filter = metric == Metric::Service ? GL_NEAREST : GL_LINEAR;
     glBindTexture(GL_TEXTURE_2D, m_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, grid.width, grid.height,
                  0, GL_RED, GL_FLOAT, texture.data());
     glBindTexture(GL_TEXTURE_2D, 0);

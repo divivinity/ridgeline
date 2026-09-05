@@ -796,6 +796,12 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                 return a.position.x < 0.0f || a.position.z < 0.0f ||
                        a.position.x > world.x || a.position.z > world.z;
             }));
+        // Every path reaching here has already installed the elevation and
+        // cleared the undo stack — a cancel during the terrain load returned
+        // above — so the scenario is dirty whether or not the imagery
+        // finished. Marking it only in the success branch let a cancelled
+        // load close without a prompt and be discarded silently.
+        markScenarioDirty();
         if (loadProgress.wasCanceled()) {
             m_statusLabel->setText("  Elevation loaded · Satellite imagery cancelled");
         } else {
@@ -816,7 +822,6 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                 ? QString(" · %1 source(s) remain outside this analysis area")
                     .arg(outside)
                 : QStringLiteral(" · Sources preserved");
-            markScenarioDirty();
             m_statusLabel->setText(status);
         }
     } catch (const std::runtime_error& e) {
