@@ -31,6 +31,8 @@
 #include <QSplitter>
 #include <QUndoCommand>
 #include <QUndoStack>
+#include <QCloseEvent>
+#include <QScopeGuard>
 #include <QDateTime>
 #include <QtConcurrent/QtConcurrentRun>
 #include <stdexcept>
@@ -330,6 +332,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     m_engine.mode = SimEngine::Mode::Engineering;
                     m_statusLabel->setText("  Engineering RF Mode · NTIA ITM");
                 }
+                markScenarioDirty();
                 if (m_engine.fieldGrid().valid()) {
                     m_engine.setFieldGrid({});
                     invalidateScenarioComparisonCurrent();
@@ -619,6 +622,7 @@ void MainWindow::applyCalibrationCorrection() {
         m_viewport->refreshOverlays();
     }
     invalidateCalibrationCurrent();
+    markScenarioDirty();
     showCalibrationPanel();
     m_statusLabel->setText(QString(
         "  Calibration correction %1%2 dB applied · Run coverage to refresh results")
@@ -644,6 +648,7 @@ void MainWindow::resetCalibrationCorrection() {
         m_viewport->refreshOverlays();
     }
     invalidateCalibrationCurrent();
+    markScenarioDirty();
     showCalibrationPanel();
     m_statusLabel->setText(
         "  Calibration correction reset · Run coverage to refresh results");
@@ -811,6 +816,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                 ? QString(" · %1 source(s) remain outside this analysis area")
                     .arg(outside)
                 : QStringLiteral(" · Sources preserved");
+            markScenarioDirty();
             m_statusLabel->setText(status);
         }
     } catch (const std::runtime_error& e) {
@@ -830,6 +836,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
 }
 
 void MainWindow::onChooseLocation() {
+    if (!confirmDiscardChanges()) return;
     double latitude = m_terrainSource.centerLat;
     double longitude = m_terrainSource.centerLon;
     double extentKm = m_terrainSource.extentKm;
@@ -851,6 +858,7 @@ void MainWindow::onReceiverSettings() {
     ReceiverDialog dialog(m_engine.receiver, this);
     if (dialog.exec() != QDialog::Accepted) return;
     m_engine.receiver = dialog.settings();
+    markScenarioDirty();
     m_engine.setFieldGrid({});
     invalidateScenarioComparisonCurrent();
     invalidateCalibrationCurrent();
@@ -889,6 +897,53 @@ void MainWindow::startPlacement(bool jammer) {
     m_statusLabel->setText(jammer
         ? "  Click the terrain to place a jammer · Esc cancels"
         : "  Click the terrain to place an emitter · Esc cancels");
+}
+
+bool MainWindow::isScenarioDirty() const {
+    return m_scenarioDirty || (m_undoStack && !m_undoStack->isClean());
+}
+
+void MainWindow::markScenarioDirty() {
+    m_scenarioDirty = true;
+}
+
+void MainWindow::markScenarioClean() {
+    m_scenarioDirty = false;
+    if (m_undoStack) m_undoStack->setClean();
+}
+
+bool MainWindow::confirmDiscardChanges() {
+    if (!isScenarioDirty()) return true;
+
+    const auto answer = QMessageBox::warning(
+        this, "Unsaved changes",
+        "This scenario has unsaved changes.\n\nSave them before continuing?",
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+        QMessageBox::Save);
+
+    if (answer == QMessageBox::Cancel) return false;
+    if (answer == QMessageBox::Save) {
+        onSaveScenario();
+        // A cancelled or failed save leaves the scenario dirty; don't discard.
+        return !isScenarioDirty();
+    }
+    return true;  // Discard
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    // A coverage run already owns the interaction through its own modal
+    // progress dialog. Raising the unsaved-changes prompt on top of it stacks
+    // a second modal — and a third if the user picks Save and gets a file
+    // dialog — while onSolve() is still blocked in its nested event loop. To
+    // anyone not looking closely the window just appears wedged. Make them
+    // cancel the run first; the progress dialog has a Cancel button for it.
+    if (m_solveInProgress) {
+        m_statusLabel->setText("  Cancel the coverage run before closing");
+        event->ignore();
+        return;
+    }
+    if (confirmDiscardChanges()) event->accept();
+    else                         event->ignore();
 }
 
 void MainWindow::loadTerrain(const QString& path) {
@@ -936,6 +991,7 @@ void MainWindow::loadTerrain(const QString& path) {
         if (m_selectedIndex >= 0) m_scenarioTree->selectRow(m_selectedIndex);
         refreshPropsPanel();
         refreshBottomBar();
+        markScenarioDirty();
         setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
         m_statusLabel->setText("  Terrain loaded · Existing georeferenced sources preserved");
     } catch (const std::exception& e) {
@@ -977,6 +1033,8 @@ void MainWindow::onSolve() {
     }
 
     m_statusLabel->setText("  Calculating terrain-aware coverage…");
+    m_solveInProgress = true;
+    const auto solveGuard = qScopeGuard([this] { m_solveInProgress = false; });
     m_solveBtn->setEnabled(false);
     m_solveBtn->setText("Calculating…");
     auto timer = std::make_shared<QElapsedTimer>();
@@ -1088,6 +1146,7 @@ void MainWindow::onSolve() {
 }
 
 void MainWindow::onLoadTerrain() {
+    if (!confirmDiscardChanges()) return;
     const QString path = QFileDialog::getOpenFileName(
         this, "Load Terrain", {},
         "Terrain files (*.dt0 *.dt1 *.dt2 *.hgt *.tif *.tiff);;"
@@ -1357,6 +1416,7 @@ void MainWindow::onSaveScenario() {
 
     try {
         ScenarioIO::save(doc, path.toStdString());
+        markScenarioClean();
         m_statusLabel->setText("  Scenario saved");
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Save failed", e.what());
@@ -1364,6 +1424,7 @@ void MainWindow::onSaveScenario() {
 }
 
 void MainWindow::onOpenScenario() {
+    if (!confirmDiscardChanges()) return;
     const QString path = QFileDialog::getOpenFileName(
         this, "Open Scenario", {},
         "Ridgeline scenario (*.json);;All files (*)");
@@ -1373,6 +1434,7 @@ void MainWindow::onOpenScenario() {
         QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
         ScenarioDoc doc = ScenarioIO::load(path.toStdString());
         applyScenarioDoc(doc);
+        markScenarioClean();
         setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
         m_statusLabel->setText("  Scenario loaded");
     } catch (const std::exception& e) {
