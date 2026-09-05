@@ -1,0 +1,73 @@
+# Produces the distributable Windows package — the counterpart to ci.yml, which
+# only answers "did this commit build?". The difference that matters is the
+# terrain: the 36 committed .hgt tiles are excluded from the CI artifact and
+# included here, so the download is self-contained, with the North Carolina
+# dataset already in place.
+#
+# Release assets are permanent and do not count against the Actions storage
+# quota, unlike workflow artifacts. That is what keeps a ~250 MB package from
+# becoming a recurring storage problem.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Dry run: builds and packages without publishing, to check this workflow
+  # still works without having to cut a version to find out.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          cache: true
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRIDGELINE_GUI_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # A tagged build that cannot pass its own tests should not be published.
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # The POST_BUILD rules in CMakeLists.txt have already copied assets/ next
+      # to the executable and run windeployqt, so build/Release is standalone.
+      # 7-Zip (preinstalled on the runner) rather than Compress-Archive, which
+      # is very slow at this size. Test binaries and debug symbols are not part
+      # of the product.
+      - name: Package
+        shell: pwsh
+        run: |
+          # On a tag this is the version; on a manual run it is the branch,
+          # which can contain slashes that are not legal in a filename.
+          $version = "${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-'
+          $zip = "ridgeline-windows-$version.zip"
+          7z a -tzip $zip .\build\Release\* -xr!ridgeline_*_tests.exe -xr!*.pdb
+          if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          echo "PACKAGE=$zip" >> $env:GITHUB_ENV
+          echo "### Package: ``$zip`` ($mb MB)" >> $env:GITHUB_STEP_SUMMARY
+
+      # Only a tag publishes. A manual run stops at the line above, having
+      # proved the package builds.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PACKAGE }}
+          generate_release_notes: true

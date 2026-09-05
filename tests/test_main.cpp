@@ -1,5 +1,4 @@
 #include <iostream>
-#include <cassert>
 #include <cmath>
 #include <string>
 #include "sim/MaterialLibrary.h"
@@ -136,10 +135,21 @@ static void test_fullsolver_produces_finite_grid() {
     MaterialLibrary lib;
     FullSolver solver;
     solver.rainRateMmH = 0.0f;
-    FieldGrid grid = solver.solve(terrain, {tx}, lib);
+    int progressCalls = 0;
+    int completedRows = -1;
+    int totalRows = -1;
+    FieldGrid grid = solver.solve(terrain, {tx}, lib,
+        [&](int completed, int total) {
+            ++progressCalls;
+            completedRows = completed;
+            totalRows = total;
+        });
 
     CHECK(grid.valid());
     CHECK(grid.width > 0 && grid.height > 0);
+    CHECK(progressCalls > 1);
+    CHECK(completedRows == grid.height);
+    CHECK(totalRows == grid.height);
 
     bool anyFinite = false;
     for (float v : grid.dbm)
@@ -396,72 +406,83 @@ static void test_scenario_io_planner_round_trip() {
     std::remove(path.c_str());
 }
 
+static void test_scenario_io_global_round_trip() {
+    ScenarioDoc doc;
+    doc.terrain.type = TerrainSource::Type::Global;
+    doc.terrain.centerLat = -33.8688;
+    doc.terrain.centerLon = 151.2093;
+    doc.terrain.extentKm = 25.0;
+
+    const std::string path = "test_scenario_global_tmp.json";
+    ScenarioIO::save(doc, path);
+    ScenarioDoc loaded = ScenarioIO::load(path);
+
+    CHECK(loaded.terrain.type == TerrainSource::Type::Global);
+    CHECK_NEAR(loaded.terrain.centerLat, -33.8688, 0.000001);
+    CHECK_NEAR(loaded.terrain.centerLon, 151.2093, 0.000001);
+    CHECK_NEAR(loaded.terrain.extentKm, 25.0, 0.001);
+    std::remove(path.c_str());
+}
+
 // ── SpectrumCalc ──────────────────────────────────────────────────────────────
 
 static void test_spectrum_length() {
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60);
-    assert(pts.size() == 60);
-    std::cout << "[PASS] test_spectrum_length\n";
+    CHECK(pts.size() == 60);
 }
 
 static void test_spectrum_freq_range() {
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60);
     // The endpoints 30.0f and 3000.0f are exactly representable in float32,
     // and t=0.0/t=1.0 when i=0/i=steps-1 respectively, so == is safe here.
-    assert(pts.front().freqMHz == 30.0f);
-    assert(pts.back().freqMHz == 3000.0f);
-    std::cout << "[PASS] test_spectrum_freq_range\n";
+    CHECK(pts.front().freqMHz == 30.0f);
+    CHECK(pts.back().freqMHz == 3000.0f);
 }
 
 static void test_spectrum_higher_freq_lower_power() {
     // Higher frequency → more free-space path loss → lower received power.
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 2);
-    assert(pts[0].powerDbm > pts[1].powerDbm);
-    std::cout << "[PASS] test_spectrum_higher_freq_lower_power\n";
+    CHECK(pts[0].powerDbm > pts[1].powerDbm);
 }
 
 static void test_spectrum_power_reasonable() {
     // 50 W + 3 dBi at 150 MHz / 1 km should land in a plausible range.
     // Friis: FSPL(150 MHz, 1 km) ≈ 76.0 dB; P_tx = 47 dBm; P_rx ≈ -26 dBm.
     auto pts = sweepSpectrum(50.0f, 3.0f, 1000.0f, 150.0f, 150.0f, 1);
-    assert(pts[0].powerDbm > -80.0f && pts[0].powerDbm < -20.0f);
-    std::cout << "[PASS] test_spectrum_power_reasonable\n";
+    CHECK(pts[0].powerDbm > -80.0f && pts[0].powerDbm < -20.0f);
 }
 
 static void test_spectrum_single_step() {
     // steps=1 must not divide by zero and must return exactly one point.
     auto pts = sweepSpectrum(10.0f, 0.0f, 500.0f, 100.0f, 100.0f, 1);
-    assert(pts.size() == 1);
-    assert(pts[0].freqMHz == 100.0f);
-    std::cout << "[PASS] test_spectrum_single_step\n";
+    CHECK(pts.size() == 1);
+    CHECK(pts[0].freqMHz == 100.0f);
 }
 
 static void test_spectrum_throws_on_invalid_steps() {
     bool threw = false;
     try { sweepSpectrum(50.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 0); }
     catch (const std::invalid_argument&) { threw = true; }
-    assert(threw);
-    std::cout << "[PASS] test_spectrum_throws_on_invalid_steps\n";
+    CHECK(threw);
 }
 
 static void test_spectrum_throws_on_zero_dist() {
     bool threw = false;
     try { sweepSpectrum(50.0f, 3.0f, 0.0f, 30.0f, 3000.0f, 60); }
     catch (const std::invalid_argument&) { threw = true; }
-    assert(threw);
-    std::cout << "[PASS] test_spectrum_throws_on_zero_dist\n";
+    CHECK(threw);
 }
 
 static void test_spectrum_throws_on_zero_power() {
     bool threw = false;
     try { sweepSpectrum(0.0f, 3.0f, 1000.0f, 30.0f, 3000.0f, 60); }
     catch (const std::invalid_argument&) { threw = true; }
-    assert(threw);
-    std::cout << "[PASS] test_spectrum_throws_on_zero_power\n";
+    CHECK(threw);
 }
 
 int main(int argc, char** argv) {
     std::string materialsPath = (argc > 1) ? argv[1] : "assets/materials.json";
+    std::string antennasPath = (argc > 2) ? argv[2] : "assets/antennas.json";
 
     test_default_material();
     test_loss_interpolation();
@@ -473,7 +494,7 @@ int main(int argc, char** argv) {
     test_rain_reduces_power();
     test_ridge_reduces_power_vs_flat();
     test_antenna_library_defaults();
-    test_antenna_library_load_json("assets/antennas.json");
+    test_antenna_library_load_json(antennasPath);
     test_antenna_library_load_defaults();
     test_add_antenna();
     test_remove_antenna();
@@ -481,6 +502,7 @@ int main(int argc, char** argv) {
     test_scenario_io_hills_round_trip();
     test_scenario_io_hgt_round_trip();
     test_scenario_io_planner_round_trip();
+    test_scenario_io_global_round_trip();
     test_spectrum_length();
     test_spectrum_freq_range();
     test_spectrum_higher_freq_lower_power();

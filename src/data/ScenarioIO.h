@@ -1,38 +1,46 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <cstddef>
+#include <limits>
 #include "sim/Types.h"
 #include "sim/SimEngine.h"
 
 struct TerrainSource {
-    enum class Type { Hills, Flat, Hgt, Dted, GeoTiff };
+    enum class Type { Hills, Flat, Hgt, Dted, GeoTiff, Global };
 
     Type        type         = Type::Hills;
-    std::string hgtPath;            // for Hgt and Dted terrain types
+    std::string hgtPath;
     double      hgtLat       = 35.05;
     double      hgtLon       = -78.88;
     int         hgtSize      = 512;
 
-    // Procedural terrain dimensions (Hills + Flat).
+    double      centerLat    = 35.5951;
+    double      centerLon    = -82.5515;
+    double      extentKm     = 15.0;
+
     int   widthCells  = 200;
     int   heightCells = 200;
     float cellSize    = 10.0f;
-    float amplitude   = 40.0f;  // Hills only; ignored for Flat
+    float amplitude   = 40.0f;
 };
 
 struct ScenarioDoc {
     TerrainSource        terrain;
     SimEngine::Mode      mode = SimEngine::Mode::Fast;
+    ReceiverSettings     receiver;
+    CoverageCalibrationSettings calibration;
+    std::string          calibrationSourceName;
+    std::size_t          calibrationPairedSamples = 0;
+    float                calibrationRmseBeforeDb =
+        std::numeric_limits<float>::quiet_NaN();
+    float                calibrationRmseAfterDb =
+        std::numeric_limits<float>::quiet_NaN();
     std::vector<Antenna> antennas;
 };
 
 class ScenarioIO {
 public:
-    // Serialize doc to a JSON file at path.
-    // Throws std::runtime_error on failure.
     static void save(const ScenarioDoc& doc, const std::string& path);
-
-    // Deserialize from a JSON file at path.
-    // Throws std::runtime_error on failure.
     static ScenarioDoc load(const std::string& path);
 };

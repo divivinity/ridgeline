@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include "sim/Types.h"
+#include "sim/TerrainModel.h"
 
 // Static helpers to export a FieldGrid to file.
 // Both methods return true on success, false on write failure.
@@ -15,4 +16,6 @@ public:
     // Write a CSV file with header "x_m,z_m,dbm" and one row per cell.
     // NaN cells are written as the literal string "nan".
     static bool exportCsv(const FieldGrid& grid, const std::string& path);
+    static bool exportCsv(const FieldGrid& grid, const TerrainModel& terrain,
+                          const std::string& path);
 };
