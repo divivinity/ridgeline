@@ -6,6 +6,16 @@
 static constexpr float kEffectiveEarthRadiusM = 6371000.0f * 4.0f / 3.0f;
 static constexpr double kPi = 3.14159265358979323846;
 
+static double normalizeLongitude(double lonDeg) {
+    double wrapped = std::fmod(lonDeg + 180.0, 360.0);
+    if (wrapped < 0.0) wrapped += 360.0;
+    return wrapped - 180.0;
+}
+
+static double longitudeDelta(double lonDeg, double originLonDeg) {
+    return normalizeLongitude(lonDeg - originLonDeg);
+}
+
 static float earthBulgeM(const glm::vec3& from, const glm::vec3& to, float t) {
     const float totalM = glm::distance(glm::vec2(from.x, from.z),
                                        glm::vec2(to.x,   to.z));
@@ -31,7 +41,7 @@ void TerrainModel::setCellSpacing(float eastWestM, float southNorthM) {
 void TerrainModel::setGeoReference(double swLatDeg, double swLonDeg,
                                    double sampleLatDeg, double sampleLonDeg) {
     originLatDeg = swLatDeg;
-    originLonDeg = swLonDeg;
+    originLonDeg = normalizeLongitude(swLonDeg);
     cellLatDeg = sampleLatDeg;
     cellLonDeg = sampleLonDeg;
     georeferenced = sampleLatDeg != 0.0 && sampleLonDeg != 0.0;
@@ -43,13 +53,13 @@ TerrainModel::GeoPoint TerrainModel::worldToLatLon(float wx, float wz) const {
     const double zSamples = wz / static_cast<double>(metersPerCellZ());
     return {
         originLatDeg + zSamples * cellLatDeg,
-        originLonDeg + xSamples * cellLonDeg
+        normalizeLongitude(originLonDeg + xSamples * cellLonDeg)
     };
 }
 
 glm::vec2 TerrainModel::latLonToWorld(double latDeg, double lonDeg) const {
     if (!georeferenced) return {0.0f, 0.0f};
-    const double xSamples = (lonDeg - originLonDeg) / cellLonDeg;
+    const double xSamples = longitudeDelta(lonDeg, originLonDeg) / cellLonDeg;
     const double zSamples = (latDeg - originLatDeg) / cellLatDeg;
     return {
         static_cast<float>(xSamples * metersPerCellX()),
@@ -73,12 +83,14 @@ double TerrainModel::metersPerDegreeLon(double latDeg) {
 }
 
 float TerrainModel::heightAt(int x, int z) const {
+    if (width <= 0 || height <= 0 || heights.empty()) return 0.0f;
     x = std::clamp(x, 0, width - 1);
     z = std::clamp(z, 0, height - 1);
-    return heights[z * width + x];
+    return heights[static_cast<std::size_t>(z) * width + x];
 }
 
 float TerrainModel::heightAtWorld(float wx, float wz) const {
+    if (width < 2 || height < 2 || heights.empty()) return 0.0f;
     float gx = wx / metersPerCellX();
     float gz = wz / metersPerCellZ();
     int   x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, width  - 2);
@@ -92,10 +104,26 @@ float TerrainModel::heightAtWorld(float wx, float wz) const {
     return h00*(1-tx)*(1-tz) + h10*tx*(1-tz) + h01*(1-tx)*tz + h11*tx*tz;
 }
 
+int TerrainModel::adaptivePathSteps(glm::vec3 from, glm::vec3 to,
+                                    int minimum, int maximum) const {
+    minimum = std::max(minimum, 4);
+    maximum = std::max(maximum, minimum);
+    const float pathM = glm::distance(glm::vec2(from.x, from.z),
+                                      glm::vec2(to.x, to.z));
+    const float terrainSampleM = std::max(
+        1.0f, std::min(metersPerCellX(), metersPerCellZ()));
+    // Sample at least twice per terrain cell along the path so narrow ridges are
+    // not skipped, while bounding work for long engineering paths.
+    const float targetSpacingM = std::max(2.0f, terrainSampleM * 0.5f);
+    const int requested = static_cast<int>(std::ceil(pathM / targetSpacingM)) + 1;
+    return std::clamp(requested, minimum, maximum);
+}
+
 bool TerrainModel::lineOfSight(glm::vec3 from, glm::vec3 to, int steps) const {
+    if (steps <= 0) steps = adaptivePathSteps(from, to);
     glm::vec3 dir = to - from;
     for (int i = 1; i < steps; ++i) {
-        float t = static_cast<float>(i) / steps;
+        float t = static_cast<float>(i) / static_cast<float>(steps);
         glm::vec3 p = from + dir * t;
         if (p.y < heightAtWorld(p.x, p.z) + earthBulgeM(from, to, t))
             return false;
@@ -105,21 +133,26 @@ bool TerrainModel::lineOfSight(glm::vec3 from, glm::vec3 to, int steps) const {
 
 TerrainModel::LOSStatus TerrainModel::lineOfSightStatus(
         glm::vec3 from, glm::vec3 to, int steps) const {
+    if (steps <= 0) steps = adaptivePathSteps(from, to);
     glm::vec3 dir = to - from;
     int blocked = 0;
     for (int i = 1; i < steps; ++i) {
-        float t = static_cast<float>(i) / steps;
+        float t = static_cast<float>(i) / static_cast<float>(steps);
         glm::vec3 p = from + dir * t;
         if (p.y < heightAtWorld(p.x, p.z) + earthBulgeM(from, to, t))
             ++blocked;
     }
-    if (blocked == 0)  return LOSStatus::Clear;
-    if (blocked <= 3)  return LOSStatus::Diffracted;  // single knife-edge
+    if (blocked == 0) return LOSStatus::Clear;
+    // A very narrow obstruction is treated as one dominant knife edge; longer
+    // obstructed intervals are handed to multiple-edge diffraction/ITM.
+    const int singleEdgeSamples = std::max(2, steps / 64);
+    if (blocked <= singleEdgeSamples) return LOSStatus::Diffracted;
     return LOSStatus::Blocked;
 }
 
 TerrainModel::PeakObstacle
 TerrainModel::peakObstacle(glm::vec3 from, glm::vec3 to, int steps) const {
+    if (steps <= 0) steps = adaptivePathSteps(from, to);
     glm::vec3 dir = to - from;
     float maxExcess = -std::numeric_limits<float>::infinity();
     float maxT      = 0.5f;
@@ -139,6 +172,7 @@ float TerrainModel::fresnelClearanceRatio(glm::vec3 from, glm::vec3 to,
                                            float frequencyMHz, int steps) const {
     const float pathM = glm::distance(from, to);
     if (pathM <= 1.0f || frequencyMHz <= 0.0f) return 1.0f;
+    if (steps <= 0) steps = adaptivePathSteps(from, to);
 
     const float lambda = 3.0e8f / (frequencyMHz * 1.0e6f);
     glm::vec3 dir = to - from;

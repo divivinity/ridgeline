@@ -13,14 +13,19 @@ void LOSRayOverlay::build() {
     initializeOpenGLFunctions();
     m_shader.load("assets/shaders/overlay.vert", "assets/shaders/overlay.frag");
 
-    glGenVertexArrays(1, &m_vao);
-    glGenBuffers(1, &m_vbo);
-    glBindVertexArray(m_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LOSVert), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(LOSVert), (void*)(3*sizeof(float)));
-    glEnableVertexAttribArray(1);
+    auto buildBuffer = [this](GLuint& vao, GLuint& vbo) {
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LOSVert), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(LOSVert),
+                              (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    };
+    buildBuffer(m_vao, m_vbo);
+    buildBuffer(m_probeVao, m_probeVbo);
     glBindVertexArray(0);
 }
 
@@ -45,18 +50,47 @@ void LOSRayOverlay::update(const std::vector<Antenna>& antennas,
 
     m_vertexCount = static_cast<int>(verts.size());
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    if (m_vertexCount > 0)
-        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(LOSVert),
-                     verts.data(), GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(LOSVert),
+                 verts.empty() ? nullptr : verts.data(), GL_DYNAMIC_DRAW);
+}
+
+void LOSRayOverlay::updateProbe(const std::vector<Antenna>& antennas,
+                                const TerrainModel& terrain,
+                                int probeSourceIndex,
+                                const glm::vec3* probeReceiver) {
+    m_hasProbe = probeReceiver && probeSourceIndex >= 0 &&
+                 probeSourceIndex < static_cast<int>(antennas.size());
+    glBindBuffer(GL_ARRAY_BUFFER, m_probeVbo);
+    if (!m_hasProbe) {
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        return;
+    }
+    const glm::vec3& source = antennas[probeSourceIndex].position;
+    const auto status = terrain.lineOfSightStatus(source, *probeReceiver);
+    const glm::vec3 color =
+        status == TerrainModel::LOSStatus::Clear ? kClear :
+        status == TerrainModel::LOSStatus::Diffracted ? kDiffracted : kBlocked;
+    const LOSVert vertices[2]{
+        {source.x, source.y, source.z, color.r, color.g, color.b},
+        {probeReceiver->x, probeReceiver->y, probeReceiver->z,
+         color.r, color.g, color.b}
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
 }
 
 void LOSRayOverlay::draw(const glm::mat4& mvp) {
-    if (!visible || m_vertexCount == 0) return;
+    if ((!visible || m_vertexCount == 0) && !m_hasProbe) return;
     glLineWidth(2.0f);
     m_shader.bind();
     m_shader.setMat4("uMVP", mvp);
-    glBindVertexArray(m_vao);
-    glDrawArrays(GL_LINES, 0, m_vertexCount);
+    if (visible && m_vertexCount > 0) {
+        glBindVertexArray(m_vao);
+        glDrawArrays(GL_LINES, 0, m_vertexCount);
+    }
+    if (m_hasProbe) {
+        glBindVertexArray(m_probeVao);
+        glDrawArrays(GL_LINES, 0, 2);
+    }
     glBindVertexArray(0);
     m_shader.release();
     glLineWidth(1.0f);
@@ -65,4 +99,9 @@ void LOSRayOverlay::draw(const glm::mat4& mvp) {
 void LOSRayOverlay::destroy() {
     glDeleteVertexArrays(1, &m_vao);
     glDeleteBuffers(1, &m_vbo);
+    glDeleteVertexArrays(1, &m_probeVao);
+    glDeleteBuffers(1, &m_probeVbo);
+    m_vao = m_vbo = m_probeVao = m_probeVbo = 0;
+    m_vertexCount = 0;
+    m_hasProbe = false;
 }

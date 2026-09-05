@@ -5,29 +5,33 @@
 
 ScenarioTree::ScenarioTree(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(4);
+    layout->setContentsMargins(14, 14, 14, 14);
+    layout->setSpacing(10);
 
-    auto* title = new QLabel("Scenario");
-    title->setStyleSheet("color: rgba(255,255,255,0.5); font-family: monospace; font-size: 11px; padding: 2px 4px;");
+    auto* title = new QLabel("EMITTERS & JAMMERS");
+    title->setStyleSheet("color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
     layout->addWidget(title);
+    auto* help = new QLabel("Choose a placement tool, then click the terrain.");
+    help->setWordWrap(true);
+    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    layout->addWidget(help);
 
     m_list = new QListWidget();
     m_list->setStyleSheet(
         "QListWidget {"
-        "  background: rgba(0,0,0,0.25);"
-        "  border: 1px solid rgba(255,255,255,0.08);"
-        "  border-radius: 4px;"
-        "  color: rgba(255,255,255,0.85);"
-        "  font-family: monospace;"
-        "  font-size: 12px;"
+        "  background: #0c1625;"
+        "  border: 1px solid #223148;"
+        "  border-radius: 9px;"
+        "  color: #dbe7f5;"
+        "  font-size: 11px;"
+        "  padding: 5px;"
         "}"
         "QListWidget::item:selected {"
-        "  background: rgba(79,195,247,0.25);"
-        "  color: #4fc3f7;"
+        "  background: #123c43;"
+        "  color: #ecfeff;"
         "}"
         "QListWidget::item:hover {"
-        "  background: rgba(255,255,255,0.05);"
+        "  background: #15243a;"
         "}"
     );
     connect(m_list, &QListWidget::itemSelectionChanged,
@@ -39,20 +43,25 @@ ScenarioTree::ScenarioTree(QWidget* parent) : QWidget(parent) {
 
     const QString btnStyle =
         "QPushButton {"
-        "  background: rgba(255,255,255,0.08);"
-        "  border: 1px solid rgba(255,255,255,0.15);"
-        "  border-radius: 4px;"
-        "  color: rgba(255,255,255,0.75);"
-        "  font-family: monospace;"
-        "  font-size: 12px;"
-        "  padding: 3px 10px;"
+        "  background: #152238;"
+        "  border: 1px solid #2a3b52;"
+        "  border-radius: 7px;"
+        "  color: #dbe7f5;"
+        "  font-size: 11px;"
+        "  padding: 7px 9px;"
         "}"
-        "QPushButton:hover { background: rgba(255,255,255,0.15); }";
+        "QPushButton:hover { background: #1c304b; border-color: #3b526e; }"
+        "QPushButton:disabled { color: #475569; background: #101827; }";
 
-    m_addBtn = new QPushButton("+ Add");
+    m_addBtn = new QPushButton("+ Emitter");
     m_addBtn->setStyleSheet(btnStyle);
-    connect(m_addBtn, &QPushButton::clicked, this, &ScenarioTree::addRequested);
+    connect(m_addBtn, &QPushButton::clicked, this, &ScenarioTree::addEmitterRequested);
     btnRow->addWidget(m_addBtn);
+
+    m_addJammerBtn = new QPushButton("+ Jammer");
+    m_addJammerBtn->setStyleSheet(btnStyle);
+    connect(m_addJammerBtn, &QPushButton::clicked, this, &ScenarioTree::addJammerRequested);
+    btnRow->addWidget(m_addJammerBtn);
 
     m_removeBtn = new QPushButton("− Remove");
     m_removeBtn->setStyleSheet(btnStyle);
@@ -62,9 +71,9 @@ ScenarioTree::ScenarioTree(QWidget* parent) : QWidget(parent) {
 
     layout->addLayout(btnRow);
 
-    setMinimumWidth(160);
-    setMaximumWidth(260);
-    setStyleSheet("background: rgba(15,25,35,0.85);");
+    setMinimumWidth(230);
+    setMaximumWidth(330);
+    setStyleSheet("background: #0b1422;");
 }
 
 void ScenarioTree::refresh(const std::vector<Antenna>& antennas) {
@@ -75,8 +84,10 @@ void ScenarioTree::refresh(const std::vector<Antenna>& antennas) {
     int antennaIdx = 1, jammerIdx = 1;
     for (const auto& a : antennas) {
         const QString label = a.isJammer
-            ? QString("\U0001F534 Jammer %1").arg(jammerIdx++)
-            : QString("\U0001F4E1 Antenna %1").arg(antennaIdx++);
+            ? QString("●  Jammer %1     %2 MHz · %3 W")
+                .arg(jammerIdx++).arg(a.frequencyMHz, 0, 'f', 0).arg(a.powerW, 0, 'f', 0)
+            : QString("◆  Emitter %1    %2 MHz · %3 W")
+                .arg(antennaIdx++).arg(a.frequencyMHz, 0, 'f', 0).arg(a.powerW, 0, 'f', 0);
         m_list->addItem(label);
     }
 

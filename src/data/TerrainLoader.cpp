@@ -4,6 +4,10 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+#include <iomanip>
+#include <map>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 #include <memory>
@@ -179,43 +183,53 @@ static bool parseHGTOrigin(const std::string& path, int& swLat, int& swLon) {
     return true;
 }
 
-TerrainModel TerrainLoader::fromHGT(const std::string& path,
-                                    float cropCenterLat,
-                                    float cropCenterLon,
-                                    int   cropSize) {
+struct HgtData {
+    int samples = 0;
+    std::vector<int16_t> values;
+};
+
+static HgtData readHGTData(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open HGT file: " + path);
 
-    // Detect resolution from file size.
     f.seekg(0, std::ios::end);
     const auto fileSize = static_cast<long long>(f.tellg());
     f.seekg(0, std::ios::beg);
 
-    int samples;
+    HgtData result;
     if (fileSize == 25934402LL) {
-        samples = 3601;
+        result.samples = 3601;
     } else if (fileSize == 2884802LL) {
-        samples = 1201;
+        result.samples = 1201;
     } else {
         throw std::runtime_error(
             "HGT file has unexpected size (expected SRTM1 or SRTM3): " + path);
     }
-    cropSize = std::clamp(cropSize, 2, samples);
 
-    // Read raw big-endian int16 data.
-    const int total = samples * samples;
-    std::vector<int16_t> raw(total);
-    f.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(total) * 2);
+    const int total = result.samples * result.samples;
+    result.values.resize(total);
+    f.read(reinterpret_cast<char*>(result.values.data()),
+           static_cast<std::streamsize>(total) * 2);
     if (!f)
         throw std::runtime_error("Failed to read HGT data from: " + path);
 
-    // Swap bytes: big-endian → native (little-endian on x86).
-    for (auto& v : raw) {
+    for (auto& v : result.values) {
         const auto u = static_cast<uint16_t>(v);
         v = static_cast<int16_t>(((u & 0xFF00u) >> 8) | ((u & 0x00FFu) << 8));
     }
+    return result;
+}
 
-    // Derive tile SW corner from filename, or fall back to centre of file.
+TerrainModel TerrainLoader::fromHGT(const std::string& path,
+                                    float cropCenterLat,
+                                    float cropCenterLon,
+                                    int   cropSize) {
+    HgtData source = readHGTData(path);
+    const int samples = source.samples;
+    cropSize = std::clamp(cropSize, 2, samples);
+
+    // SRTM HGT stores no coordinate metadata internally. Only a standard
+    // [NS]dd[EW]ddd filename can establish an authoritative WGS84 origin.
     int swLat = 0, swLon = 0;
     const bool haveOrigin = parseHGTOrigin(path, swLat, swLon);
 
@@ -247,34 +261,180 @@ TerrainModel TerrainLoader::fromHGT(const std::string& path,
     r0 = std::max(0, std::min(r0, samples - cropSize));
     c0 = std::max(0, std::min(c0, samples - cropSize));
 
-    // Build TerrainModel.  HGT rows go N→S; TerrainModel rows go S→N (row 0 = south).
+    // Build TerrainModel. HGT rows go N→S; TerrainModel rows go S→N (row 0 = south).
     TerrainModel t;
     t.width    = cropSize;
     t.height   = cropSize;
     const double sampleDeg = 1.0 / static_cast<double>(samples - 1);
-    const double cropSouthLat =
-        static_cast<double>(swLat + 1) -
-        static_cast<double>(r0 + cropSize - 1) * sampleDeg;
-    const double cropWestLon =
-        static_cast<double>(swLon) + static_cast<double>(c0) * sampleDeg;
-    const double cropCenterLatDeg =
-        cropSouthLat + static_cast<double>(cropSize - 1) * sampleDeg * 0.5;
-    t.setCellSpacing(
-        static_cast<float>(TerrainModel::metersPerDegreeLon(cropCenterLatDeg) * sampleDeg),
-        static_cast<float>(TerrainModel::metersPerDegreeLat(cropCenterLatDeg) * sampleDeg));
-    t.setGeoReference(cropSouthLat, cropWestLon, sampleDeg, sampleDeg);
+
+    // Without a standard SRTM filename, the file has no authoritative WGS84
+    // origin. Keep useful physical cell spacing, but do not fabricate a map
+    // location that would misalign imagery or exported coordinates.
+    if (haveOrigin) {
+        const double cropSouthLat =
+            static_cast<double>(swLat + 1) -
+            static_cast<double>(r0 + cropSize - 1) * sampleDeg;
+        const double cropWestLon =
+            static_cast<double>(swLon) + static_cast<double>(c0) * sampleDeg;
+        const double cropCenterLatDeg =
+            cropSouthLat + static_cast<double>(cropSize - 1) * sampleDeg * 0.5;
+        t.setCellSpacing(
+            static_cast<float>(TerrainModel::metersPerDegreeLon(cropCenterLatDeg) * sampleDeg),
+            static_cast<float>(TerrainModel::metersPerDegreeLat(cropCenterLatDeg) * sampleDeg));
+        t.setGeoReference(cropSouthLat, cropWestLon, sampleDeg, sampleDeg);
+    } else {
+        const double spacingLat = std::clamp(
+            std::isfinite(static_cast<double>(cropCenterLat))
+                ? static_cast<double>(cropCenterLat) : 0.0,
+            -89.0, 89.0);
+        t.setCellSpacing(
+            static_cast<float>(TerrainModel::metersPerDegreeLon(spacingLat) * sampleDeg),
+            static_cast<float>(TerrainModel::metersPerDegreeLat(spacingLat) * sampleDeg));
+    }
     t.heights.resize(cropSize * cropSize);
 
     for (int hgtRow = 0; hgtRow < cropSize; ++hgtRow) {
         const int terrainRow = cropSize - 1 - hgtRow;   // flip N↔S
         for (int col = 0; col < cropSize; ++col) {
-            const int16_t v = raw[(r0 + hgtRow) * samples + (c0 + col)];
+            const int16_t v = source.values[(r0 + hgtRow) * samples + (c0 + col)];
             t.heights[terrainRow * cropSize + col] = (v == -32768) ? 0.0f
                                                                    : static_cast<float>(v);
         }
     }
 
     return t;
+}
+
+std::string TerrainLoader::hgtTileName(int swLat, int swLon) {
+    std::ostringstream out;
+    out << (swLat >= 0 ? 'N' : 'S')
+        << std::setw(2) << std::setfill('0') << std::abs(swLat)
+        << (swLon >= 0 ? 'E' : 'W')
+        << std::setw(3) << std::setfill('0') << std::abs(swLon)
+        << ".hgt";
+    return out.str();
+}
+
+std::vector<std::string> TerrainLoader::requiredHGTTiles(
+        double centerLat, double centerLon, double extentKm) {
+    if (!std::isfinite(centerLat) || !std::isfinite(centerLon) ||
+        centerLat <= -90.0 || centerLat >= 90.0 ||
+        centerLon < -180.0 || centerLon > 180.0 ||
+        !std::isfinite(extentKm) || extentKm <= 0.0) {
+        throw std::invalid_argument("Invalid location or terrain extent");
+    }
+
+    const double halfM = extentKm * 500.0;
+    const double halfLatDeg = halfM / TerrainModel::metersPerDegreeLat(centerLat);
+    const double halfLonDeg = halfM / TerrainModel::metersPerDegreeLon(centerLat);
+    const double south = centerLat - halfLatDeg;
+    const double north = centerLat + halfLatDeg;
+    const double west  = centerLon - halfLonDeg;
+    const double east  = centerLon + halfLonDeg;
+
+    const int minLat = static_cast<int>(std::floor(south));
+    const int maxLat = static_cast<int>(std::floor(std::nextafter(north, south)));
+    const int minLon = static_cast<int>(std::floor(west));
+    const int maxLon = static_cast<int>(std::floor(std::nextafter(east, west)));
+
+    std::vector<std::string> names;
+    for (int lat = minLat; lat <= maxLat; ++lat)
+        for (int lon = minLon; lon <= maxLon; ++lon)
+            names.push_back(hgtTileName(lat, lon));
+    return names;
+}
+
+TerrainModel TerrainLoader::fromHGTDirectory(const std::string& directory,
+                                              double centerLat,
+                                              double centerLon,
+                                              double extentKm,
+                                              int maxSamplesPerAxis) {
+    namespace fs = std::filesystem;
+    if (!fs::is_directory(fs::path(directory)))
+        throw std::runtime_error("HGT terrain directory does not exist: " + directory);
+    maxSamplesPerAxis = std::clamp(maxSamplesPerAxis, 64, 4096);
+
+    const auto required = requiredHGTTiles(centerLat, centerLon, extentKm);
+    std::vector<std::string> missing;
+    for (const auto& name : required) {
+        if (!fs::is_regular_file(fs::path(directory) / name)) missing.push_back(name);
+    }
+    if (!missing.empty()) {
+        std::ostringstream msg;
+        msg << "Terrain data is missing for the selected location. Required HGT tile";
+        msg << (missing.size() == 1 ? ": " : "s: ");
+        for (size_t i = 0; i < missing.size(); ++i) {
+            if (i) msg << ", ";
+            msg << missing[i];
+        }
+        throw std::runtime_error(msg.str());
+    }
+
+    std::map<std::string, HgtData> tiles;
+    auto loadTile = [&](int swLat, int swLon) -> const HgtData& {
+        const std::string name = hgtTileName(swLat, swLon);
+        auto it = tiles.find(name);
+        if (it == tiles.end()) {
+            HgtData data = readHGTData((fs::path(directory) / name).string());
+            if (!tiles.empty() && data.samples != tiles.begin()->second.samples)
+                throw std::runtime_error("HGT mosaic contains mixed tile resolutions");
+            it = tiles.emplace(name, std::move(data)).first;
+        }
+        return it->second;
+    };
+
+    const int centerTileLat = static_cast<int>(std::floor(centerLat));
+    const int centerTileLon = static_cast<int>(std::floor(centerLon));
+    const int sourceSamples = loadTile(centerTileLat, centerTileLon).samples;
+    const int intervals = sourceSamples - 1;
+    const double sourceSampleDeg = 1.0 / static_cast<double>(intervals);
+    const double extentM = extentKm * 1000.0;
+
+    const int naturalW = std::max(2, static_cast<int>(std::round(
+        extentM / (TerrainModel::metersPerDegreeLon(centerLat) * sourceSampleDeg))) + 1);
+    const int naturalH = std::max(2, static_cast<int>(std::round(
+        extentM / (TerrainModel::metersPerDegreeLat(centerLat) * sourceSampleDeg))) + 1);
+    const int stride = std::max(1, static_cast<int>(std::ceil(
+        static_cast<double>(std::max(naturalW, naturalH)) / maxSamplesPerAxis)));
+    const int outW = std::max(2, (naturalW - 1) / stride + 1);
+    const int outH = std::max(2, (naturalH - 1) / stride + 1);
+    const double outSampleDeg = sourceSampleDeg * stride;
+    const double southLat = centerLat - (outH - 1) * outSampleDeg * 0.5;
+    const double westLon  = centerLon - (outW - 1) * outSampleDeg * 0.5;
+
+    TerrainModel terrain;
+    terrain.width = outW;
+    terrain.height = outH;
+    terrain.setCellSpacing(
+        static_cast<float>(TerrainModel::metersPerDegreeLon(centerLat) * outSampleDeg),
+        static_cast<float>(TerrainModel::metersPerDegreeLat(centerLat) * outSampleDeg));
+    terrain.setGeoReference(southLat, westLon, outSampleDeg, outSampleDeg);
+    terrain.heights.resize(outW * outH);
+
+    for (int z = 0; z < outH; ++z) {
+        const double lat = southLat + z * outSampleDeg;
+        int swLat = static_cast<int>(std::floor(lat));
+        if (std::abs(lat - std::round(lat)) < 1e-10)
+            swLat = static_cast<int>(std::round(lat)) - 1;
+        for (int x = 0; x < outW; ++x) {
+            const double lon = westLon + x * outSampleDeg;
+            int swLon = static_cast<int>(std::floor(lon));
+            if (std::abs(lon - std::round(lon)) < 1e-10)
+                swLon = static_cast<int>(std::round(lon)) - 1;
+
+            const HgtData& tile = loadTile(swLat, swLon);
+            const int row = std::clamp(static_cast<int>(std::llround(
+                (static_cast<double>(swLat + 1) - lat) * intervals)),
+                0, intervals);
+            const int col = std::clamp(static_cast<int>(std::llround(
+                (lon - static_cast<double>(swLon)) * intervals)),
+                0, intervals);
+            const int16_t raw = tile.values[row * tile.samples + col];
+            terrain.heights[z * outW + x] = raw == -32768
+                ? 0.0f : static_cast<float>(raw);
+        }
+    }
+    return terrain;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +512,18 @@ TerrainModel TerrainLoader::fromGeoTIFF(const std::string& path,
     if (ds->GetGeoTransform(gt) != CE_None)
         throw std::runtime_error("DEM is missing a geotransform: " + path);
 
+    // Ridgeline's terrain grid assumes X is east-west and Z is south-north.
+    // A rotated/sheared affine transform cannot be represented faithfully by
+    // the current TerrainModel, so reject it rather than silently misplacing RF
+    // results and imagery. Such DEMs should be warped to a north-up raster first.
+    constexpr double kAffineTolerance = 1e-12;
+    if (std::abs(gt[2]) > kAffineTolerance || std::abs(gt[4]) > kAffineTolerance)
+        throw std::runtime_error(
+            "Rotated/sheared GeoTIFFs are not supported; warp the DEM to a north-up raster first: "
+            + path);
+    if (std::abs(gt[1]) <= kAffineTolerance || std::abs(gt[5]) <= kAffineTolerance)
+        throw std::runtime_error("DEM geotransform has invalid pixel spacing: " + path);
+
     const double scaleX = static_cast<double>(srcW - 1) / static_cast<double>(outW - 1);
     const double scaleY = static_cast<double>(srcH - 1) / static_cast<double>(outH - 1);
     const double projectedCellX =
@@ -370,6 +542,10 @@ TerrainModel TerrainLoader::fromGeoTIFF(const std::string& path,
     t.height = outH;
 
     if (haveWgs84) {
+        if (!(eastLon > westLon) || !(northLat > southLat))
+            throw std::runtime_error(
+                "GeoTIFF orientation cannot be represented by Ridgeline's north-up WGS84 grid: "
+                + path);
         const double cellLon = (eastLon - westLon) / static_cast<double>(outW - 1);
         const double cellLat = (northLat - southLat) / static_cast<double>(outH - 1);
         const double centerLat = (northLat + southLat) * 0.5;

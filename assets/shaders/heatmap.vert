@@ -8,7 +8,7 @@ out vec2 vTexCoord;
 
 void main() {
     // Offset slightly above terrain to avoid z-fighting
-    vec3 pos = aPos + vec3(0.0, 0.3, 0.0);
+    vec3 pos = aPos + vec3(0.0, 1.0, 0.0);
     vTexCoord   = aTexCoord;
     gl_Position = uMVP * vec4(pos, 1.0);
 }

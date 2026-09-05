@@ -10,11 +10,17 @@ int main(int argc, char* argv[]) {
     QSurfaceFormat::setDefaultFormat(fmt);
 
     QApplication app(argc, argv);
+    // QSettings requires a stable organization/application namespace. Without
+    // it, geocoder responses appear to be written but are not available to a
+    // subsequent lookup in the running desktop app.
+    app.setOrganizationName("Ridgeline");
+    app.setOrganizationDomain("divivinity.github.io");
     app.setApplicationName("Ridgeline");
 
     MainWindow w;
+    w.setMinimumSize(1050, 700);
     w.resize(1400, 900);
-    w.show();
+    w.showMaximized();
 
     // Optional: pass a DTED file as the first argument.
     if (argc > 1) w.loadTerrain(QString::fromLocal8Bit(argv[1]));

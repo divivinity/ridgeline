@@ -1,4 +1,5 @@
 #include "ShaderProgram.h"
+#include "RuntimePaths.h"
 #include <QFile>
 #include <QDebug>
 #include <glm/gtc/type_ptr.hpp>
@@ -7,7 +8,11 @@ bool ShaderProgram::load(const QString& vertPath, const QString& fragPath) {
     initializeOpenGLFunctions();
     GLuint vert = compileShader(GL_VERTEX_SHADER,   vertPath);
     GLuint frag = compileShader(GL_FRAGMENT_SHADER, fragPath);
-    if (!vert || !frag) return false;
+    if (!vert || !frag) {
+        if (vert) glDeleteShader(vert);
+        if (frag) glDeleteShader(frag);
+        return false;
+    }
 
     m_id = glCreateProgram();
     glAttachShader(m_id, vert);
@@ -19,11 +24,20 @@ bool ShaderProgram::load(const QString& vertPath, const QString& fragPath) {
     if (!ok) {
         char log[512]; glGetProgramInfoLog(m_id, 512, nullptr, log);
         qWarning() << "Shader link error:" << log;
+        glDeleteShader(vert);
+        glDeleteShader(frag);
+        destroy();
         return false;
     }
     glDeleteShader(vert);
     glDeleteShader(frag);
     return true;
+}
+
+void ShaderProgram::destroy() {
+    if (m_id)
+        glDeleteProgram(m_id);
+    m_id = 0;
 }
 
 void ShaderProgram::bind()    { glUseProgram(m_id); }
@@ -49,9 +63,10 @@ void ShaderProgram::setInt(const char* n, int v) {
 }
 
 GLuint ShaderProgram::compileShader(GLenum type, const QString& path) {
-    QFile f(path);
+    const QString resolvedPath = RuntimePaths::resolve(path);
+    QFile f(resolvedPath);
     if (!f.open(QIODevice::ReadOnly)) {
-        qWarning() << "Cannot open shader:" << path;
+        qWarning() << "Cannot open shader:" << resolvedPath;
         return 0;
     }
     QByteArray src = f.readAll();
@@ -63,7 +78,7 @@ GLuint ShaderProgram::compileShader(GLenum type, const QString& path) {
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
         char log[512]; glGetShaderInfoLog(s, 512, nullptr, log);
-        qWarning() << "Shader compile error" << path << ":" << log;
+        qWarning() << "Shader compile error" << resolvedPath << ":" << log;
         return 0;
     }
     return s;
