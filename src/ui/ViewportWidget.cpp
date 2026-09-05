@@ -483,6 +483,18 @@ void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
     update();
 }
 
+bool ViewportWidget::isOverlayVisible(Overlay overlay) const {
+    switch (overlay) {
+        case Basemap: return m_basemap.visible;
+        case Heatmap: return m_heatmap.visible;
+        case LOS:     return m_losRay.visible;
+        case Lobe:    return m_antennaLobe.visible;
+        case Jammer:  return m_jammerBubble.visible;
+        case Fresnel: return m_fresnel.visible;
+    }
+    return false;
+}
+
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {
     switch (e->key()) {
         case Qt::Key_Escape:

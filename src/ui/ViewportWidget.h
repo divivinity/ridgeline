@@ -32,6 +32,7 @@ public:
     void refreshOverlays();
     void reloadTerrain();
     void setOverlayVisible(Overlay overlay, bool visible);
+    bool isOverlayVisible(Overlay overlay) const;
     void setBasemapOpacity(float opacity);
     void setPlacementMode(bool active, bool jammer = false);
     void setAnalysisPoint(int sourceIndex, const glm::vec3& receiverPosition);

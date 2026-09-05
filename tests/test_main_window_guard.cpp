@@ -12,6 +12,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QProgressDialog>
 #include <QEventLoop>
@@ -21,6 +22,7 @@
 #include <QTimer>
 
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -192,6 +194,57 @@ void testCloseIsRefusedDuringASolve() {
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
 
+// Two independent places decide which overlays start visible: the checkbox
+// arguments in OverlayToolbar, and ViewportWidget's constructor, which turns the
+// analysis layers off over their headers' `visible = true` defaults. Nothing
+// links them, so they can drift into a state where a layer draws while its box
+// reads unchecked — the user would then have to check and uncheck it to hide it.
+// They agree today; this pins that, since only a test can keep them in step.
+void testOverlayCheckboxesMatchWhatTheViewportDraws() {
+    MainWindow window;
+    window.show();
+    settle();
+
+    auto* viewport = window.findChild<ViewportWidget*>();
+    if (!viewport) { check(false, "found the viewport"); return; }
+
+    const struct { const char* label; ViewportWidget::Overlay overlay; } layers[] = {
+        {"Satellite", ViewportWidget::Basemap},
+        {"Coverage",  ViewportWidget::Heatmap},
+        {"LOS",       ViewportWidget::LOS},
+        {"Pattern",   ViewportWidget::Lobe},
+        {"Jamming",   ViewportWidget::Jammer},
+        {"Fresnel",   ViewportWidget::Fresnel},
+    };
+
+    int matched = 0;
+    for (const auto& layer : layers) {
+        QCheckBox* box = nullptr;
+        for (QCheckBox* candidate : window.findChildren<QCheckBox*>())
+            if (candidate->text() == QLatin1String(layer.label)) box = candidate;
+        if (!box) {
+            check(false, (std::string("found the ") + layer.label + " checkbox").c_str());
+            continue;
+        }
+        ++matched;
+        const bool agrees = box->isChecked() == viewport->isOverlayVisible(layer.overlay);
+        check(agrees, (std::string(layer.label) +
+                       " overlay matches its checkbox at startup").c_str());
+    }
+    check(matched == 6, "found all six overlay checkboxes");
+
+    // And the agreement must survive a toggle, not just hold at construction.
+    for (QCheckBox* candidate : window.findChildren<QCheckBox*>()) {
+        if (candidate->text() != QLatin1String("LOS")) continue;
+        candidate->setChecked(!candidate->isChecked());
+        qApp->processEvents();
+        check(candidate->isChecked() == viewport->isOverlayVisible(ViewportWidget::LOS),
+              "LOS overlay follows its checkbox when toggled");
+    }
+
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -203,6 +256,7 @@ int main(int argc, char** argv) {
     testSourceEditPromptsViaUndoStack();
     testModeChangePromptsViaDirtyFlag();
     testCloseIsRefusedDuringASolve();
+    testOverlayCheckboxesMatchWhatTheViewportDraws();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";
