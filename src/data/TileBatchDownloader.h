@@ -11,7 +11,7 @@ class QNetworkAccessManager;
 struct TileDownloadRequest {
     QUrl url;
     // Relative path inside Ridgeline's portable raw-tile cache, for example
-    // terrain/12/1234/1532.png or imagery/esri/12/1234/1532.jpg.
+    // terrain/12/1234/1532.png or imagery/esri/12/1234/1532.tile.
     QString cacheRelativePath;
 };
 
@@ -41,4 +41,9 @@ public:
     // between machines as an offline terrain/imagery package.
     static QString cacheRoot();
     static bool offlineMode();
+
+    // Stable, filesystem-safe identity for the complete custom URL template.
+    // Include query parameters (styles, versions, credentials); never put the
+    // raw URL in cache paths. Use beneath separate terrain/imagery folders.
+    static QString customProviderCacheKey(const QString& urlTemplate);
 };

@@ -84,6 +84,7 @@ void applyProcedural(Antenna& antenna, const ProceduralPlacement& placement,
 } // namespace
 
 void SimEngine::setTerrain(TerrainModel terrain) {
+    terrain.validate();
     if (m_terrain.hasGeoReference()) {
         for (auto& antenna : m_antennas)
             syncGeoFromWorld(antenna, m_terrain);

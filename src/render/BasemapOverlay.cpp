@@ -277,7 +277,7 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
         provider.name = "Custom imagery";
         provider.attribution = qEnvironmentVariable("RIDGELINE_TILE_ATTRIBUTION",
                                                      "Custom imagery");
-        provider.cacheKey = "custom";
+        provider.cacheKey = TileBatchDownloader::customProviderCacheKey(customTemplate);
     } else {
         const QString apiKey = qEnvironmentVariable("RIDGELINE_GOOGLE_MAPS_API_KEY");
         const QString requested = qEnvironmentVariable("RIDGELINE_BASEMAP_PROVIDER").toLower();

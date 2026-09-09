@@ -4,6 +4,11 @@
 
 class TerrainModel {
 public:
+    // Configured provider for this loaded grid, not proof of data accuracy or
+    // vertical datum. Keep it with the grid when runtime settings change.
+    enum class ElevationProvider { Unspecified, Mapzen, Custom };
+    ElevationProvider elevationProvider = ElevationProvider::Unspecified;
+
     struct GeoPoint {
         double latDeg = 0.0;
         double lonDeg = 0.0;
@@ -22,6 +27,9 @@ public:
     double cellLonDeg    = 0.0;
 
     std::vector<float> heights;
+
+    // Throws before malformed or incomplete terrain can replace a live model.
+    void validate() const;
 
     enum class LOSStatus { Clear, Diffracted, Blocked };
 

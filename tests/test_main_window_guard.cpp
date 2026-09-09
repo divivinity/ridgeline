@@ -9,8 +9,13 @@
 // Private widgets are reached through Qt's object tree, so nothing here
 // requires MainWindow to expose test hooks.
 #include "ui/MainWindow.h"
+#include "ui/WorkspaceTheme.h"
+#include "ui/LocationDialog.h"
 
 #include <QAbstractButton>
+#include <QAction>
+#include <QToolButton>
+#include <QSurfaceFormat>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -19,7 +24,23 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTimer>
+#include <QTemporaryDir>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QScopeGuard>
+#include <QFileDialog>
+#include <QFile>
+#include <QLineEdit>
+#include <QDir>
+#include <QImage>
+#include <QPixmap>
+#include <QUndoStack>
+#include <QBuffer>
+#include <QElapsedTimer>
+#include "data/TileBatchDownloader.h"
 
 #include <iostream>
 #include <string>
@@ -87,6 +108,8 @@ void testCleanScenarioClosesWithoutPrompting() {
     withModalAnswer(QMessageBox::Discard, [&] { closed = window.close(); });
     check(closed, "freshly started app closes");
     check(!sawPrompt, "no prompt on a clean scenario");
+    check(!window.isWindowModified() && window.windowTitle().contains("[*]"),
+          "clean scenario has a supported but inactive title indicator");
 }
 
 // Source edits funnel through pushSourceChange(), so the undo stack's clean
@@ -105,6 +128,15 @@ void testSourceEditPromptsViaUndoStack() {
     if (!remove) { check(false, "found the Remove button"); return; }
     remove->click();
     qApp->processEvents();
+    check(window.isWindowModified(), "source edit activates the unsaved title indicator");
+    auto* undo = window.findChild<QUndoStack*>();
+    check(undo != nullptr, "source edit exposes undo history");
+    if (undo) {
+        undo->undo();
+        check(!window.isWindowModified(), "undo to saved state clears the title indicator");
+        undo->redo();
+        check(window.isWindowModified(), "redo reactivates the title indicator");
+    }
 
     bool closedOnCancel = true;
     withModalAnswer(QMessageBox::Cancel, [&] { closedOnCancel = window.close(); });
@@ -114,6 +146,77 @@ void testSourceEditPromptsViaUndoStack() {
     bool closedOnDiscard = false;
     withModalAnswer(QMessageBox::Discard, [&] { closedOnDiscard = window.close(); });
     check(closedOnDiscard, "Discard closes the window");
+}
+
+void testSavingUpdatesModifiedIndicator() {
+    QTemporaryDir folder;
+    check(folder.isValid(), "save-indicator fixture directory exists");
+    if (!folder.isValid()) return;
+    const QString path = folder.filePath("saved.json");
+    MainWindow window;
+    window.show();
+    settle(150);
+    auto* list = window.findChild<QListWidget*>("SourceList");
+    auto* remove = findButton(window, "Remove");
+    auto* mode = findModeCombo(window);
+    if (!list || !remove || !mode || list->count() == 0) {
+        check(false, "save-indicator fixture controls exist"); return;
+    }
+    list->setCurrentRow(0);
+    remove->click();
+    mode->setCurrentIndex(mode->currentIndex() == 0 ? 1 : 0);
+    check(window.isWindowModified(), "mixed edits mark scenario unsaved before save");
+    auto save = [&](bool cancel, bool failWrite = false) {
+        bool sawPicker = false, error = false, timedOut = false;
+        QString errorText;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            if (auto* dialog = window.findChild<QFileDialog*>(); dialog && dialog->isVisible()) {
+                sawPicker = true;
+                if (cancel || elapsed.elapsed() > 10000) {
+                    timedOut = !cancel; dialog->reject();
+                } else if (auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit")) {
+                    edit->setText(path);
+                    QMetaObject::invokeMethod(dialog, "accept");
+                    // After picker validation, reserve its fresh target as a
+                    // directory before the caller writes. This deterministically
+                    // exercises save failure without changing system permissions.
+                    if (failWrite && dialog->result() == QDialog::Accepted)
+                        check(QDir().mkdir(path), "save failure fixture reserves the target");
+                }
+            } else if (auto* box = window.findChild<QMessageBox*>(); box && box->isVisible()) {
+                error = true; errorText = box->text(); box->reject();
+            }
+        });
+        driver.start(25);
+        check(QMetaObject::invokeMethod(&window, "onSaveScenario"), "save action is reachable");
+        driver.stop();
+        check(sawPicker && error == failWrite && !timedOut,
+              "save picker completes with the expected failure state");
+        if (failWrite)
+            check(errorText.contains("Cannot write scenario file"), "save failure explains the write error");
+    };
+    save(true);
+    check(window.isWindowModified() && !QFile::exists(path),
+          "cancelled save keeps the indicator active and writes no file");
+    save(false, true);
+    check(window.isWindowModified() && list->count() == 0,
+          "failed save retains unsaved indicator and edited sources");
+    withModalAnswer(QMessageBox::Cancel, [&] { window.close(); });
+    check(sawPrompt && window.isVisible(), "failed save retains the close guard");
+    check(QDir().rmdir(path), "remove empty test-only destination blocker for retry");
+    save(false);
+    check(!window.isWindowModified() && QFile::exists(path), "successful save clears the title indicator");
+    try {
+        const auto saved = ScenarioIO::load(path.toStdString());
+        check(saved.antennas.empty(), "saved scenario parses and preserves the source removal");
+    } catch (const std::exception& e) {
+        check(false, (std::string("saved scenario round trip: ") + e.what()).c_str());
+    }
+    withModalAnswer(QMessageBox::Cancel, [&] { window.close(); });
+    check(!sawPrompt && !window.isVisible(), "saved scenario closes without an unsaved prompt");
 }
 
 // The RF mode is persisted by ScenarioDoc but is not undoable, so it is
@@ -127,6 +230,18 @@ void testModeChangePromptsViaDirtyFlag() {
     if (!mode) { check(false, "found the RF mode combo"); return; }
     mode->setCurrentIndex(mode->currentIndex() == 0 ? 1 : 0);
     qApp->processEvents();
+    check(window.isWindowModified(), "non-undoable setting edit activates the title indicator");
+    auto* sourceList = window.findChild<QListWidget*>("SourceList");
+    auto* removeSource = findButton(window, "Remove");
+    auto* history = window.findChild<QUndoStack*>();
+    check(sourceList && removeSource && history, "mixed dirty-state fixture is ready");
+    if (sourceList && removeSource && history && sourceList->count() > 0) {
+        sourceList->setCurrentRow(0);
+        removeSource->click();
+        history->undo();
+        check(history->isClean() && window.isWindowModified(),
+              "clean undo history does not hide unsaved non-undoable settings");
+    }
 
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
     check(sawPrompt, "mode change prompts before closing");
@@ -190,6 +305,33 @@ void testCloseIsRefusedDuringASolve() {
     check(closeRefused, "close is refused while a solve is running");
     check(!sawStackedBox, "no prompt is stacked over the progress dialog");
 
+    // Reuse the completed solve to exercise the full analysis workspace.
+    check(QMetaObject::invokeMethod(&window, "onTerrainInspected",
+                                    Q_ARG(float, 500.0f), Q_ARG(float, 500.0f)),
+          "result inspection slot is reachable");
+    window.resize(1050, 700);
+    settle(100);
+    auto* inspector = window.findChild<QDockWidget*>("ResultInspectorDock");
+    auto* sourcesDock = window.findChild<QDockWidget*>("SourcesDock");
+    check(inspector && inspector->isVisible() && sourcesDock && sourcesDock->isVisible(),
+          "both planning and result panels are open");
+    check(window.width() <= 1050 && window.height() <= 700,
+          "both docks fit a laptop-size window");
+    auto* position = window.findChild<QLabel*>("PointPosition");
+    check(position && position->text().contains("Synthetic heights") &&
+              !position->text().contains("MSL"),
+          "inspected demo receiver does not claim a sea-level datum");
+    auto* scroll = window.findChild<QScrollArea*>("ResultInspectorScrollArea");
+    auto* explanation = window.findChild<QLabel*>("PointExplanation");
+    check(scroll && explanation, "result inspector provides scrollable explanations");
+    if (scroll && explanation) {
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        settle(100);
+        const QRect bounds(explanation->mapTo(scroll->viewport(), QPoint{}), explanation->size());
+        check(scroll->viewport()->rect().contains(bounds),
+              "full result explanation remains reachable in a compact window");
+    }
+
     // With the solve finished the window closes normally again.
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
@@ -202,61 +344,528 @@ void testCloseIsRefusedDuringASolve() {
 // They agree today; this pins that, since only a test can keep them in step.
 void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     MainWindow window;
+    window.resize(1050, 700);
     window.show();
     settle();
-
+    std::cerr << "Laptop layout: " << window.width() << " x " << window.height()
+              << "; minimum hint " << window.minimumSizeHint().width() << " x "
+              << window.minimumSizeHint().height() << "\n";
+    check(window.width() <= 1050 && window.height() <= 700,
+          "workspace fits the requested laptop-size window");
     auto* viewport = window.findChild<ViewportWidget*>();
     if (!viewport) { check(false, "found the viewport"); return; }
+    auto* legend = window.findChild<HeatmapLegend*>();
+    check(legend && legend->isHidden(), "unsolved scene has no result legend");
 
-    const struct { const char* label; ViewportWidget::Overlay overlay; } layers[] = {
-        {"Satellite", ViewportWidget::Basemap},
-        {"Coverage",  ViewportWidget::Heatmap},
-        {"LOS",       ViewportWidget::LOS},
-        {"Pattern",   ViewportWidget::Lobe},
-        {"Jamming",   ViewportWidget::Jammer},
-        {"Fresnel",   ViewportWidget::Fresnel},
-    };
-
-    int matched = 0;
-    for (const auto& layer : layers) {
-        QCheckBox* box = nullptr;
-        for (QCheckBox* candidate : window.findChildren<QCheckBox*>())
-            if (candidate->text() == QLatin1String(layer.label)) box = candidate;
-        if (!box) {
-            check(false, (std::string("found the ") + layer.label + " checkbox").c_str());
-            continue;
+    for (int id = 0; id < 6; ++id) {
+        const auto overlay = static_cast<ViewportWidget::Overlay>(id);
+        if (id <= 1) {
+            auto* box = window.findChild<QCheckBox*>(QString("OverlayToggle%1").arg(id));
+            check(box != nullptr, "found primary overlay toggle");
+            if (!box) continue;
+            check(box->isChecked() == viewport->isOverlayVisible(overlay),
+                  "primary overlay matches startup state");
+            box->setChecked(!box->isChecked());
+            check(box->isChecked() == viewport->isOverlayVisible(overlay),
+                  "primary overlay responds to toggle");
+        } else {
+            auto* action = window.findChild<QAction*>(QString("AnalysisLayer%1").arg(id));
+            check(action != nullptr, "found analysis layer action");
+            if (!action) continue;
+            check(action->isChecked() == viewport->isOverlayVisible(overlay),
+                  "analysis layer matches startup state");
+            action->trigger();
+            check(action->isChecked() == viewport->isOverlayVisible(overlay),
+                  "analysis layer responds to menu action");
         }
-        ++matched;
-        const bool agrees = box->isChecked() == viewport->isOverlayVisible(layer.overlay);
-        check(agrees, (std::string(layer.label) +
-                       " overlay matches its checkbox at startup").c_str());
-    }
-    check(matched == 6, "found all six overlay checkboxes");
-
-    // And the agreement must survive a toggle, not just hold at construction.
-    for (QCheckBox* candidate : window.findChildren<QCheckBox*>()) {
-        if (candidate->text() != QLatin1String("LOS")) continue;
-        candidate->setChecked(!candidate->isChecked());
-        qApp->processEvents();
-        check(candidate->isChecked() == viewport->isOverlayVisible(ViewportWidget::LOS),
-              "LOS overlay follows its checkbox when toggled");
     }
 
+    auto* dock = window.findChild<QDockWidget*>("SourcesDock");
+    auto* toggle = window.findChild<QToolButton*>("SourcesPanelButton");
+    check(dock && toggle, "source dock and toolbar toggle exist");
+    if (dock && toggle) {
+        toggle->click();
+        check(dock->isHidden() && !toggle->isChecked(), "source panel can be hidden");
+        toggle->click();
+        check(!dock->isHidden() && toggle->isChecked(), "source panel can be restored");
+    }
+    for (const char* name : {"RunButton", "CoverageQualityCombo", "CoverageMetricCombo",
+                             "AnalysisLayersButton", "TopMapViewButton", "ResetMapViewButton"}) {
+        auto* control = window.findChild<QWidget*>(name);
+        check(control && control->isVisible(), (std::string(name) + " visible at laptop size").c_str());
+        if (control) {
+            const QRect bounds(control->mapTo(&window, QPoint{}), control->size());
+            check(window.rect().contains(bounds), (std::string(name) + " not clipped").c_str());
+        }
+    }
+    auto* summary = window.findChild<QLabel*>("LocationSummary");
+    check(summary && summary->width() >= 140, "location summary remains readable");
+    check(summary && summary->textFormat() == Qt::PlainText,
+          "location names are displayed literally, never interpreted as markup");
+    check(summary && summary->toolTip().contains("200 × 200 samples") &&
+              summary->toolTip().contains("not a claim of source resolution"),
+          "terrain quality tooltip distinguishes sampling from source accuracy");
+    auto* credit = window.findChild<QLabel*>("ElevationAttribution");
+    check(credit && credit->text().contains("Synthetic"), "demo elevation has correct credit");
+    auto* sources = window.findChild<QListWidget*>("SourceList");
+    if (sources) sources->setCurrentRow(0);
+    settle(100);
+    auto* position = window.findChild<QLabel*>("SourcePositionSummary");
+    check(position && position->text().contains("Synthetic heights") &&
+              !position->text().contains("MSL"),
+          "demo source heights do not claim a sea-level datum");
+    check(window.width() <= 1050 && window.height() <= 700,
+          "selected source still fits laptop window");
+    auto* advanced = window.findChild<QToolButton*>("AdvancedSettingsToggle");
+    if (advanced) advanced->click();
+    settle(100);
+    check(advanced && advanced->isVisible(), "advanced settings remain reachable");
+    check(window.width() <= 1050 && window.height() <= 700,
+          "expanded source settings scroll instead of enlarging the window");
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
+void testTerrainFailureAndCancellationPreserveWorkspace() {
+    QTemporaryDir cache;
+    QTcpServer server;
+    check(cache.isValid() && server.listen(QHostAddress::LocalHost, 0),
+          "isolated terrain-load fixture is available");
+    if (!cache.isValid() || !server.isListening()) return;
+    const QByteArray oldCache = qgetenv("RIDGELINE_CACHE_DIR");
+    const QByteArray oldOffline = qgetenv("RIDGELINE_OFFLINE");
+    const QByteArray oldUrl = qgetenv("RIDGELINE_TERRAIN_URL");
+    const auto envGuard = qScopeGuard([&] {
+        qputenv("RIDGELINE_CACHE_DIR", oldCache);
+        qputenv("RIDGELINE_OFFLINE", oldOffline);
+        qputenv("RIDGELINE_TERRAIN_URL", oldUrl);
+    });
+    qputenv("RIDGELINE_CACHE_DIR", cache.path().toUtf8());
+    qputenv("RIDGELINE_OFFLINE", "0");
+    qputenv("RIDGELINE_TERRAIN_URL", QString("http://127.0.0.1:%1/{z}/{x}/{y}.png")
+        .arg(server.serverPort()).toUtf8());
+    int connections = 0;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+        while (server.hasPendingConnections()) {
+            QTcpSocket* socket = server.nextPendingConnection();
+            ++connections; // Deliberately do not respond: cancellation must abort.
+            QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+        }
+    });
+    MainWindow window;
+    window.show();
+    settle(200);
+    auto* run = findButton(window, "Run coverage");
+    auto* sources = window.findChild<QListWidget*>("SourceList");
+    auto* summary = window.findChild<QLabel*>("LocationSummary");
+    auto* status = window.findChild<QLabel*>("WorkspaceStatus");
+    auto* legend = window.findChild<HeatmapLegend*>();
+    check(run && sources && summary && status && legend, "terrain fixture workspace is ready");
+    if (!run || !sources || !summary || !status || !legend) return;
+    run->click();
+    const QString initialSummary = summary->text();
+    const QString initialSource = sources->item(0)->text();
+    check(legend->isVisible(), "fixture has computed coverage before loading");
+
+    withModalAnswer(QMessageBox::Ok, [&] { window.loadTerrain(cache.filePath("missing.hgt")); });
+    check(sawPrompt && status->text().contains("Previous terrain preserved"),
+          "invalid terrain file reports failure and preservation");
+    check(legend->isVisible() && summary->text() == initialSummary &&
+              sources->item(0)->text() == initialSource,
+          "invalid file leaves coverage and sources intact");
+
+    // Real DTED records exercise decoding failures after opening the file.
+    // Both profiles are complete; one case has a checksummed void and another
+    // has a damaged checksum. Neither may replace the computed workspace.
+    QByteArray dted(3428 + 2 * 16, ' ');
+    auto field = [&](int at, const QByteArray& value) {
+        dted.replace(at, value.size(), value);
+    };
+    field(0, "UHL1"); field(4, "0100000E"); field(12, "0450000N");
+    field(20, "0010"); field(24, "0010");
+    field(47, "0002"); field(51, "0002");
+    field(80, "DSI"); field(224, "WGS84"); field(728, "ACC");
+    for (int col = 0; col < 2; ++col) {
+        const int at = 3428 + col * 16;
+        field(at, QByteArray(16, '\0'));
+        dted[at] = char(0xaa); dted[at + 3] = char(col); dted[at + 5] = char(col);
+        dted[at + 9] = 10; dted[at + 11] = 20;
+        if (col == 1) { dted[at + 10] = char(0xff); dted[at + 11] = char(0xff); }
+        quint32 sum = 0;
+        for (int i = 0; i < 12; ++i) sum += static_cast<unsigned char>(dted[at + i]);
+        for (int i = 0; i < 4; ++i) dted[at + 12 + i] = char((sum >> (24 - i * 8)) & 255);
+    }
+    const QString initialTitle = window.windowTitle();
+    for (bool damageChecksum : {false, true}) {
+        QByteArray bytes = dted;
+        if (damageChecksum) bytes[3428 + 15] = char(bytes[3428 + 15] ^ 1);
+        const QString path = cache.filePath(damageChecksum ? "checksum.dt1" : "void.dt1");
+        QFile file(path);
+        check(file.open(QIODevice::WriteOnly), "DTED recovery fixture opens for writing");
+        check(file.write(bytes) == bytes.size(), "DTED recovery fixture is complete");
+        file.close();
+        QString diagnostic;
+        QTimer observer;
+        QObject::connect(&observer, &QTimer::timeout, [&] {
+            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                diagnostic = box->text();
+        });
+        observer.start(10);
+        withModalAnswer(QMessageBox::Ok, [&] { window.loadTerrain(path); });
+        observer.stop();
+        check(sawPrompt && diagnostic.contains(damageChecksum ? "checksum mismatch" : "missing elevation"),
+              "DTED load exposes the specific decoder diagnostic");
+        check(status->text().contains("Previous terrain preserved") && legend->isVisible() &&
+                  summary->text() == initialSummary && sources->item(0)->text() == initialSource &&
+                  window.windowTitle() == initialTitle && run->isEnabled(),
+              "DTED decoding failure preserves coverage, source, title and usable controls");
+    }
+
+    auto chooseLocation = [&](bool cancelLoad) {
+        bool chose = false, sawLoad = false, closeRefused = false;
+        bool errorShown = false, stackedProgress = false;
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            if (auto* dialog = qobject_cast<LocationDialog*>(QApplication::activeModalWidget())) {
+                if (!chose) { chose = true; dialog->accept(); }
+                return;
+            }
+            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                errorShown = true;
+                for (auto* progress : window.findChildren<QProgressDialog*>())
+                    stackedProgress |= progress->isVisible();
+                box->accept();
+                return;
+            }
+            auto* progress = window.findChild<QProgressDialog*>();
+            if (cancelLoad && progress && progress->isVisible() && connections > 0 && !sawLoad) {
+                sawLoad = true;
+                closeRefused = !window.close();
+                progress->cancel();
+            }
+        });
+        driver.start(30);
+        QMetaObject::invokeMethod(&window, "onChooseLocation");
+        driver.stop();
+        check(chose, "location dialog was accepted");
+        if (cancelLoad) {
+            check(sawLoad && closeRefused && window.isVisible(),
+                  "close is refused during active terrain downloads");
+            check(!errorShown && status->text().contains("cancelled"),
+                  "terrain cancellation exits without an error prompt");
+        } else {
+            check(errorShown && !stackedProgress && status->text().contains("Previous terrain preserved"),
+                  "offline load failure dismisses progress before showing an error");
+        }
+        check(legend->isVisible() && summary->text() == initialSummary &&
+                  sources->item(0)->text() == initialSource,
+              "unsuccessful location load preserves the computed scenario");
+    };
+    chooseLocation(true);
+    qputenv("RIDGELINE_OFFLINE", "1");
+    chooseLocation(false);
+    run->click();
+    check(run->isEnabled() && status->text().contains("Coverage ready"),
+          "coverage can run again after load cancellation and failure");
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+    check(!sawPrompt, "failed or cancelled loads do not dirty the original scenario");
+
+    // Repair the void and checksum, then retry in the same window. A successful
+    // import must replace stale results and become an unsaved scenario.
+    const int finalProfile = 3428 + 16;
+    dted[finalProfile + 10] = 0;
+    dted[finalProfile + 11] = 30;
+    quint32 repairedSum = 0;
+    for (int i = 0; i < 12; ++i)
+        repairedSum += static_cast<unsigned char>(dted[finalProfile + i]);
+    for (int i = 0; i < 4; ++i)
+        dted[finalProfile + 12 + i] = char((repairedSum >> (24 - i * 8)) & 255);
+    const QString repairedName = "repaired-long-location-name-for-compact-toolbar-layout-verification.dt1";
+    const QString repairedPath = cache.filePath(repairedName);
+    QFile repairedFile(repairedPath);
+    check(repairedFile.open(QIODevice::WriteOnly), "repaired DTED fixture opens");
+    check(repairedFile.write(dted) == dted.size(), "repaired DTED fixture is complete");
+    repairedFile.close();
+    window.show();
+    auto pickTerrain = [&](bool cancel) {
+        bool sawPicker = false, timedOut = false, error = false;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            if (auto* dialog = window.findChild<QFileDialog*>(); dialog && dialog->isVisible()) {
+                sawPicker = true;
+                if (cancel || elapsed.elapsed() > 10000) {
+                    timedOut = !cancel;
+                    dialog->reject();
+                } else if (auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit")) {
+                    edit->setText(repairedPath);
+                    QMetaObject::invokeMethod(dialog, "accept");
+                }
+            } else if (auto* box = window.findChild<QMessageBox*>(); box && box->isVisible()) {
+                error = true;
+                box->reject();
+            }
+        });
+        driver.start(25);
+        check(QMetaObject::invokeMethod(&window, "onLoadTerrain"), "Load Terrain action is reachable");
+        driver.stop();
+        check(sawPicker && !timedOut && !error, "terrain file picker completes without errors or timeout");
+        sawPrompt = error;
+    };
+    auto* terrainViewport = window.findChild<ViewportWidget*>();
+    check(terrainViewport != nullptr, "terrain picker fixture exposes its viewport");
+    if (terrainViewport) {
+        // Exercise both settings for each layer, so a reset to defaults cannot
+        // pass merely because the test started with those same defaults.
+        for (bool visible : {false, true}) {
+            for (int i = ViewportWidget::Basemap; i <= ViewportWidget::Fresnel; ++i)
+                terrainViewport->setOverlayVisible(static_cast<ViewportWidget::Overlay>(i), visible);
+            pickTerrain(true);
+            for (int i = ViewportWidget::Basemap; i <= ViewportWidget::Fresnel; ++i)
+                check(terrainViewport->isOverlayVisible(static_cast<ViewportWidget::Overlay>(i)) == visible,
+                      "terrain picker cancellation preserves every overlay visibility setting");
+        }
+    } else {
+        pickTerrain(true);
+    }
+    check(legend->isVisible() && summary->text() == initialSummary && window.windowTitle() == initialTitle,
+          "cancelling the terrain file picker preserves the solved workspace");
+    pickTerrain(false);
+    window.resize(1050, 700);
+    settle(150);
+    check(window.width() <= 1050 && window.height() <= 700,
+          "long imported terrain name does not enlarge the laptop window");
+    check(summary->height() >= summary->heightForWidth(summary->width()),
+          "long imported terrain summary has enough height for wrapped text");
+    for (const char* controlName : {"LocationButton", "CoverageQualityCombo", "RunButton"}) {
+        auto* control = window.findChild<QWidget*>(controlName);
+        check(control && control->isVisible() && window.rect().contains(
+                  QRect(control->mapTo(&window, QPoint{}), control->size())),
+              "toolbar controls remain visible beside a long location name");
+    }
+    const QString captureDir = qEnvironmentVariable("RIDGELINE_QA_CAPTURE_DIR");
+    auto* mapSummary = window.findChild<QLabel*>("MapTerrainSummary");
+    check(mapSummary && mapSummary->isVisible() &&
+              mapSummary->text().contains(summary->text().section('\n', 1)) &&
+              !mapSummary->text().contains("0.0 × 0.0 km"),
+          "on-map and toolbar summaries agree on small-area dimensions");
+    if (mapSummary) {
+        check(mapSummary->parentWidget()->rect().contains(mapSummary->geometry()),
+              "on-map terrain summary fits the compact viewport");
+    }
+    if (!captureDir.isEmpty()) {
+        const QString capturePath = QDir(captureDir).filePath("long-location-toolbar.png");
+        check(QDir().mkpath(captureDir) && !QFile::exists(capturePath),
+              "long location capture uses a new output path");
+        if (!QFile::exists(capturePath))
+            check(summary->parentWidget()->grab().save(capturePath), "long location toolbar captured");
+        const QString mapCapture = QDir(captureDir).filePath("small-area-map-summary.png");
+        check(!QFile::exists(mapCapture), "map summary capture uses a new output path");
+        if (mapSummary && !QFile::exists(mapCapture))
+            check(mapSummary->grab().save(mapCapture), "on-map small area summary captured");
+        const QString workspaceCapture = QDir(captureDir).filePath("compact-workspace.png");
+        check(!QFile::exists(workspaceCapture), "workspace capture uses a new output path");
+        if (!QFile::exists(workspaceCapture))
+            check(window.grab().save(workspaceCapture), "compact workspace captured");
+    }
+    check(!sawPrompt && status->text().contains("Terrain loaded"),
+          "valid DTED retry succeeds after prior failures");
+    check(window.isWindowModified(), "imported terrain activates the unsaved title indicator");
+    check(summary->text().count('\n') == 1 && summary->text().section('\n', 1).contains(QChar(0x00a0)),
+          "geographic summary separates the name and keeps area units together");
+    check(summary->fontMetrics().horizontalAdvance(summary->text().section('\n', 1)) <=
+              summary->contentsRect().width(), "area line fits the available summary width");
+    check(!legend->isVisible() && summary->text().contains("repaired") &&
+                  window.windowTitle().contains(repairedName) && run->isEnabled(),
+          "successful DTED import clears stale coverage and refreshes workspace identity");
+    withModalAnswer(QMessageBox::Cancel, [&] { window.close(); });
+    check(sawPrompt && window.isVisible(), "successful DTED import is protected by the dirty-close guard");
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
+void testScenarioOpeningProgressAndRecovery() {
+    QTemporaryDir cache;
+    QTcpServer server;
+    if (!cache.isValid() || !server.listen(QHostAddress::LocalHost, 0)) {
+        check(false, "scenario load fixtures available"); return;
+    }
+    const QByteArray oldCache = qgetenv("RIDGELINE_CACHE_DIR");
+    const QByteArray oldOffline = qgetenv("RIDGELINE_OFFLINE");
+    const QByteArray oldTerrain = qgetenv("RIDGELINE_TERRAIN_URL");
+    const QByteArray oldImagery = qgetenv("RIDGELINE_TILE_URL");
+    const auto envGuard = qScopeGuard([&] {
+        qputenv("RIDGELINE_CACHE_DIR", oldCache);
+        qputenv("RIDGELINE_OFFLINE", oldOffline);
+        qputenv("RIDGELINE_TERRAIN_URL", oldTerrain);
+        qputenv("RIDGELINE_TILE_URL", oldImagery);
+    });
+    const QString terrainUrl = QString("http://127.0.0.1:%1/terrain/{z}/{x}/{y}.png")
+        .arg(server.serverPort());
+    qputenv("RIDGELINE_CACHE_DIR", cache.path().toUtf8());
+    qputenv("RIDGELINE_OFFLINE", "0");
+    qputenv("RIDGELINE_TERRAIN_URL", terrainUrl.toUtf8());
+    qputenv("RIDGELINE_TILE_URL", QString("http://127.0.0.1:%1/imagery/{z}/{x}/{y}.png")
+        .arg(server.serverPort()).toUtf8());
+    int connections = 0;
+    bool respond = false;
+    QImage imagery(256, 256, QImage::Format_RGB32);
+    imagery.fill(Qt::darkGreen);
+    QByteArray imageBytes;
+    QBuffer imageBuffer(&imageBytes);
+    imageBuffer.open(QIODevice::WriteOnly);
+    check(imagery.save(&imageBuffer, "PNG"), "encode local imagery fixture");
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+        while (server.hasPendingConnections()) {
+            QTcpSocket* socket = server.nextPendingConnection();
+            ++connections;
+            QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [&, socket] {
+                socket->readAll();
+                if (!respond || socket->property("replied").toBool()) return;
+                socket->setProperty("replied", true);
+                socket->write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: "
+                    + QByteArray::number(imageBytes.size()) + "\r\nConnection: close\r\n\r\n" + imageBytes);
+                socket->disconnectFromHost();
+            });
+        }
+    });
+    ScenarioDoc doc;
+    doc.terrain.type = TerrainSource::Type::Global;
+    doc.terrain.centerLat = 0;
+    doc.terrain.centerLon = 0;
+    doc.terrain.extentKm = 1;
+    Antenna source;
+    source.frequencyMHz = 440;
+    source.powerW = 12;
+    source.position = {500, 110, 500};
+    doc.antennas = {source};
+    const QString path = cache.filePath("scenario.json");
+    ScenarioIO::save(doc, path.toStdString());
+
+    MainWindow window;
+    window.show();
+    settle(200);
+    auto* summary = window.findChild<QLabel*>("LocationSummary");
+    auto* status = window.findChild<QLabel*>("WorkspaceStatus");
+    auto* sources = window.findChild<QListWidget*>("SourceList");
+    auto* legend = window.findChild<HeatmapLegend*>();
+    auto* viewport = window.findChild<ViewportWidget*>();
+    auto* run = findButton(window, "Run coverage");
+    if (!summary || !status || !sources || !legend || !viewport || !run) {
+        check(false, "scenario fixture workspace ready"); return;
+    }
+    run->click();
+    const QString oldSummary = summary->text();
+    const QString oldSource = sources->item(0)->text();
+    const QString oldTitle = window.windowTitle();
+    auto openScenario = [&](bool cancel, const QString& phase, bool expectError) {
+        bool chose = false, cancelled = false, errorShown = false, stacked = false;
+        bool closeRefused = false, timedOut = false;
+        const int initialConnections = connections;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            // The user may be working in another app: target our owned dialog,
+            // not whichever modal currently has desktop focus. Set the file
+            // edit directly so asynchronous directory loading cannot clear it.
+            if (auto* dialog = window.findChild<QFileDialog*>(); dialog && dialog->isVisible()) {
+                if (elapsed.elapsed() > 10000) { timedOut = true; dialog->reject(); }
+                else if (auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit")) {
+                    chose = true;
+                    edit->setText(path);
+                    QMetaObject::invokeMethod(dialog, "accept");
+                }
+                return;
+            }
+            if (auto* box = window.findChild<QMessageBox*>(); box && box->isVisible()) {
+                errorShown = true;
+                for (auto* progress : window.findChildren<QProgressDialog*>())
+                    stacked |= progress->isVisible();
+                box->accept();
+                return;
+            }
+            auto* progress = window.findChild<QProgressDialog*>();
+            if (!progress || !progress->isVisible()) return;
+            if (cancel && !cancelled && connections > initialConnections &&
+                progress->labelText().contains(phase, Qt::CaseInsensitive)) {
+                closeRefused = !window.close();
+                progress->cancel();
+                cancelled = true;
+            } else if (elapsed.elapsed() > 10000) { timedOut = true; progress->cancel(); }
+        });
+        driver.start(25);
+        QMetaObject::invokeMethod(&window, "onOpenScenario");
+        driver.stop();
+        check(chose && !timedOut, "scenario opening completes without timeout");
+        check(errorShown == expectError && !stacked, "scenario errors do not stack with loading progress");
+        if (cancel) check(cancelled && closeRefused && window.isVisible(),
+                          "scenario phase cancellation works and blocks closing");
+        check(window.findChildren<QProgressDialog*>().isEmpty(), "scenario progress is cleaned up");
+    };
+    openScenario(true, "elevation", false);
+    check(status->text().contains("Previous scenario preserved") && legend->isVisible() &&
+          summary->text() == oldSummary && sources->item(0)->text() == oldSource &&
+          window.windowTitle() == oldTitle, "cancelled scenario elevation preserves sources, coverage and title");
+    qputenv("RIDGELINE_OFFLINE", "1");
+    openScenario(false, {}, true);
+    check(status->text().contains("Previous scenario preserved") && legend->isVisible() &&
+          summary->text() == oldSummary && sources->item(0)->text() == oldSource,
+          "failed scenario elevation preserves the workspace");
+
+    // Preload only elevation; imagery remains a stalled network request.
+    const QString prefix = "terrain/" + TileBatchDownloader::customProviderCacheKey(terrainUrl);
+    for (int x : {8191, 8192}) {
+        const QString folder = cache.filePath(QString("%1/14/%2").arg(prefix).arg(x));
+        check(QDir().mkpath(folder), "create scenario elevation fixture directory");
+        for (int y : {8191, 8192}) {
+            QImage tile(256, 256, QImage::Format_ARGB32);
+            tile.fill(qRgba(128, 100, 0, 255));
+            check(tile.save(folder + QString("/%1.png").arg(y), "PNG"), "save scenario elevation fixture");
+        }
+    }
+    qputenv("RIDGELINE_OFFLINE", "0");
+    openScenario(true, "imagery", false);
+    check(status->text().contains("Scenario loaded · Satellite imagery cancelled") &&
+          sources->count() == 1 && sources->item(0)->text().contains("440 MHz") &&
+          !legend->isVisible() && summary->text() != oldSummary && !viewport->basemapReady(),
+          "imagery cancellation retains loaded scenario and clears old results");
+    qputenv("RIDGELINE_OFFLINE", "1");
+    openScenario(false, {}, false);
+    check(status->text().contains("Satellite imagery unavailable") && !viewport->basemapReady(),
+          "offline imagery miss is reported without rejecting the scenario");
+    qputenv("RIDGELINE_OFFLINE", "0");
+    respond = true;
+    openScenario(false, {}, false);
+    check(status->text().trimmed() == "Scenario loaded" && viewport->basemapReady(),
+          "retry after imagery cancellation installs imagery successfully");
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+    check(!sawPrompt, "loaded scenario remains clean after imagery recovery");
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+    QSurfaceFormat format;
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setDepthBufferSize(24);
+    QSurfaceFormat::setDefaultFormat(format);
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication application(argc, argv);
+    application.setStyle("Fusion");
+    application.setPalette(WorkspaceTheme::palette());
     QCoreApplication::setOrganizationName("RidgelineTests");
     QCoreApplication::setApplicationName("RidgelineMainWindowTests");
 
     testCleanScenarioClosesWithoutPrompting();
     testSourceEditPromptsViaUndoStack();
+    testSavingUpdatesModifiedIndicator();
     testModeChangePromptsViaDirtyFlag();
     testCloseIsRefusedDuringASolve();
     testOverlayCheckboxesMatchWhatTheViewportDraws();
+    testTerrainFailureAndCancellationPreserveWorkspace();
+    testScenarioOpeningProgressAndRecovery();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";

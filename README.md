@@ -96,6 +96,12 @@ original CSV is later moved.
   500 ms debounced live typeahead without freezing the search field.
 - Local DTED, SRTM HGT, and (when built with GDAL) GeoTIFF DEMs are supported
   from **File → Load Terrain**.
+
+  - DTED import requires an explicit WGS84 horizontal datum, standard UHL-first headers and complete sequential
+    profiles with valid checksums. Signed-magnitude negative elevations are
+    preserved; void samples reject the import rather than becoming sea level.
+    Legacy header variants, sparse profiles and incorrectly two's-complement
+    encoded files are not repaired automatically. Local decoding is synchronous.
 - Analysis areas can cross the ±180° antimeridian; longitude conversion and tile
   X requests wrap continuously.
 
@@ -125,6 +131,21 @@ In offline mode Ridgeline never attempts missing bulk terrain/imagery tile
 requests. A missing tile is reported as an offline cache miss. The package
 contains provider-separated imagery and terrain tile trees, making its contents
 inspectable and reproducible rather than relying on an opaque HTTP cache.
+
+Built-in elevation retains `terrain/{z}/{x}/{y}.png`; built-in imagery retains
+`imagery/esri/{z}/{x}/{y}.tile` (or `imagery/google/...`). Custom URL templates
+use separate `terrain/custom-<sha256>/...` and `imagery/custom-<sha256>/...`
+folders. The hash covers the exact full template, including query parameters.
+Changing a dataset, style, version or credential therefore selects a new cache;
+copying a custom offline package requires the same template on the destination.
+URLs and credentials are not written into these folder names. A cache hit does
+not establish that upstream content is still current.
+
+Older builds shared custom imagery under `imagery/custom` and wrote custom
+elevation into the default `terrain` tree. Those files have no reliable source
+identity, so they are not automatically migrated into custom namespaces. If
+you used custom elevation with an older build, select a fresh cache directory
+and reload before trusting default terrain. Existing files are left untouched.
 
 ## Optional Google Maps imagery
 

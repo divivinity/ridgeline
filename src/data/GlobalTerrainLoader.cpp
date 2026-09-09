@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -52,14 +53,18 @@ double bilinearHeight(const QImage& mosaic, double x, double y) {
     const int y1 = std::min(y0 + 1, mosaic.height() - 1);
     const double tx = x - x0;
     const double ty = y - y0;
-    const double h00 = decodeTerrarium(mosaic.pixel(x0, y0));
-    const double h10 = decodeTerrarium(mosaic.pixel(x1, y0));
-    const double h01 = decodeTerrarium(mosaic.pixel(x0, y1));
-    const double h11 = decodeTerrarium(mosaic.pixel(x1, y1));
-    return h00 * (1.0 - tx) * (1.0 - ty)
-         + h10 * tx * (1.0 - ty)
-         + h01 * (1.0 - tx) * ty
-         + h11 * tx * ty;
+    const QRgb pixels[] = {mosaic.pixel(x0, y0), mosaic.pixel(x1, y0),
+                           mosaic.pixel(x0, y1), mosaic.pixel(x1, y1)};
+    const double weights[] = {(1 - tx) * (1 - ty), tx * (1 - ty),
+                               (1 - tx) * ty, tx * ty};
+    double height = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        if (weights[i] <= 0.0) continue;
+        if (qAlpha(pixels[i]) != 255)
+            return std::numeric_limits<double>::quiet_NaN();
+        height += decodeTerrarium(pixels[i]) * weights[i];
+    }
+    return height;
 }
 } // namespace
 
@@ -121,9 +126,15 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     mosaic.fill(Qt::transparent);
 
     QString urlTemplate = qEnvironmentVariable("RIDGELINE_TERRAIN_URL");
+    const bool customProvider = !urlTemplate.isEmpty();
+    QString cachePrefix = QStringLiteral("terrain");
     if (urlTemplate.isEmpty()) {
         urlTemplate = QStringLiteral(
             "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png");
+    } else {
+        // Preserve built-in offline packages, but never reuse their tiles for
+        // an override or mix two custom elevation datasets at the same XYZ.
+        cachePrefix += "/" + TileBatchDownloader::customProviderCacheKey(urlTemplate);
     }
 
     std::vector<TileDownloadRequest> requests;
@@ -141,8 +152,8 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
             url.replace("{y}", QString::number(ty));
             requests.push_back({
                 QUrl(url),
-                QStringLiteral("terrain/%1/%2/%3.png")
-                    .arg(zoom).arg(requestX).arg(ty)
+                QStringLiteral("%1/%2/%3/%4.png")
+                    .arg(cachePrefix).arg(zoom).arg(requestX).arg(ty)
             });
             tileCoords.emplace_back(tx, ty);
         }
@@ -157,11 +168,18 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     int loadedTiles = 0;
     QString lastError;
     for (size_t i = 0; i < results.size(); ++i) {
+        if (cancel && cancel())
+            throw std::runtime_error("Terrain load cancelled");
         QImage tile;
         tile.loadFromData(results[i].bytes);
         if (tile.isNull()) {
             lastError = results[i].error.isEmpty()
                 ? QStringLiteral("invalid terrain tile") : results[i].error;
+            continue;
+        }
+        if (tile.width() != kTileSize || tile.height() != kTileSize) {
+            lastError = QStringLiteral("terrain tile must be 256 x 256 pixels; received %1 x %2")
+                .arg(tile.width()).arg(tile.height());
             continue;
         }
         tile = tile.convertToFormat(QImage::Format_ARGB32);
@@ -188,6 +206,8 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     }
 
     TerrainModel terrain;
+    terrain.elevationProvider = customProvider
+        ? TerrainModel::ElevationProvider::Custom : TerrainModel::ElevationProvider::Mapzen;
     terrain.width = samplesPerAxis;
     terrain.height = samplesPerAxis;
     const double cellLatDeg = (north - south) / (samplesPerAxis - 1);
@@ -201,6 +221,8 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     const double mosaicOriginX = tileMinX * kTileSize;
     const double mosaicOriginY = tileMinY * kTileSize;
     for (int z = 0; z < samplesPerAxis; ++z) {
+        if (cancel && cancel())
+            throw std::runtime_error("Terrain load cancelled");
         const double lat = south + z * cellLatDeg;
         for (int x = 0; x < samplesPerAxis; ++x) {
             const double lon = west + x * cellLonDeg;
@@ -208,8 +230,11 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
             const double h = bilinearHeight(mosaic,
                                             p.x - mosaicOriginX,
                                             p.y - mosaicOriginY);
-            terrain.heights[z * samplesPerAxis + x] =
-                static_cast<float>(std::isfinite(h) ? h : 0.0);
+            if (!std::isfinite(h))
+                throw std::runtime_error(
+                    "Elevation tiles contain missing elevation in the selected area. "
+                    "Choose another area or a complete elevation dataset.");
+            terrain.heights[z * samplesPerAxis + x] = static_cast<float>(h);
         }
     }
     return terrain;

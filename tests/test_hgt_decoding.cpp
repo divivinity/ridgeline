@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -49,7 +51,7 @@ bool writeSrtm3(const std::string& path, std::int16_t fill,
     put(0, 0, northWest);              // HGT row 0 is the NORTH edge
     put(kSamples - 1, 0, southWest);
 
-    std::ofstream out(path, std::ios::binary);
+    std::ofstream out(std::filesystem::u8path(path), std::ios::binary);
     if (!out) return false;
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     return static_cast<bool>(out);
@@ -90,15 +92,21 @@ void test_north_south_rows_are_flipped() {
     std::remove(path.c_str());
 }
 
-void test_void_samples_become_zero() {
+void test_void_samples_are_rejected() {
     const std::string path = "N40W075.hgt";
-    // -32768 marks a void; it must not surface as a -32768 m elevation.
+    // Missing elevation must not silently become sea level in the solver.
     if (!writeSrtm3(path, 100, 1000, -32768)) { CHECK(false); return; }
 
-    const TerrainModel t = loadWholeTile(path);
-    CHECK_NEAR(t.heightAt(0, 0), 0.0f, 1e-3);
-    for (float h : t.heights)
-        if (h < -1000.0f) { CHECK(false); break; }
+    bool rejected = false;
+    try { loadWholeTile(path); }
+    catch (const std::runtime_error& e) {
+        rejected = std::string(e.what()).find("missing elevation") != std::string::npos;
+    }
+    CHECK(rejected);
+
+    // A void outside the selected crop must not make valid terrain unusable.
+    const auto cropped = TerrainLoader::fromHGT(path, 40.5f, -74.5f, 32);
+    CHECK_NEAR(cropped.heightAt(0, 0), 100.0f, 1e-3);
 
     std::remove(path.c_str());
 }
@@ -113,6 +121,24 @@ void test_crop_size_is_clamped() {
     CHECK(tooSmall.width == 2);
     CHECK(tooSmall.heights.size() == 4u);
 
+    std::remove(path.c_str());
+}
+
+void test_negative_elevation_and_mosaic_voids() {
+    const std::string path = "N40W075.hgt";
+    if (!writeSrtm3(path, -120, 0, -400)) { CHECK(false); return; }
+    const auto valid = loadWholeTile(path);
+    CHECK_NEAR(valid.heightAt(0, 0), -400.0f, 1e-3);
+    CHECK_NEAR(valid.heightAt(600, 600), -120.0f, 1e-3);
+    const auto mosaic = TerrainLoader::fromHGTDirectory(".", 40.5, -74.5, 1.0, 64);
+    CHECK_NEAR(mosaic.heightAt(0, 0), -120.0f, 1e-3);
+    if (!writeSrtm3(path, -32768, 100, 100)) { CHECK(false); return; }
+    bool rejected = false;
+    try { TerrainLoader::fromHGTDirectory(".", 40.5, -74.5, 1.0, 64); }
+    catch (const std::runtime_error& e) {
+        rejected = std::string(e.what()).find("missing elevation") != std::string::npos;
+    }
+    CHECK(rejected);
     std::remove(path.c_str());
 }
 
@@ -136,15 +162,34 @@ void test_missing_file_throws() {
     CHECK(threw);
 }
 
+void test_unicode_directory_loads() {
+    namespace fs = std::filesystem;
+    const auto directory = fs::temp_directory_path() / fs::u8path(
+        "ridgeline-\xe5\x9c\xb0\xe5\xbd\xa2-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    CHECK(fs::create_directory(directory));
+    struct Cleanup { fs::path path; ~Cleanup() { std::error_code ec; fs::remove_all(path, ec); } } cleanup{directory};
+    const auto path = (directory / "N40W075.hgt").u8string();
+    CHECK(writeSrtm3(path, 100, 1000, 250));
+    try {
+        const auto tile = loadWholeTile(path);
+        CHECK_NEAR(tile.heightAt(600, 600), 100, 1e-3);
+        const auto mosaic = TerrainLoader::fromHGTDirectory(directory.u8string(), 40.5, -74.5, 1.0, 64);
+        CHECK_NEAR(mosaic.heightAt(0, 0), 100, 1e-3);
+    } catch (const std::exception& e) { std::cerr << e.what() << '\n'; CHECK(false); }
+}
+
 }  // namespace
 
 int main() {
     test_big_endian_samples_are_decoded();
     test_north_south_rows_are_flipped();
-    test_void_samples_become_zero();
+    test_void_samples_are_rejected();
     test_crop_size_is_clamped();
+    test_negative_elevation_and_mosaic_voids();
     test_wrong_sized_file_throws();
     test_missing_file_throws();
+    test_unicode_directory_loads();
 
     if (g_fail == 0)
         std::cout << "HGT decoding tests passed.\n";

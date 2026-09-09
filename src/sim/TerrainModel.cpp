@@ -2,9 +2,33 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 static constexpr float kEffectiveEarthRadiusM = 6371000.0f * 4.0f / 3.0f;
 static constexpr double kPi = 3.14159265358979323846;
+
+void TerrainModel::validate() const {
+    if (width < 1 || height < 1 ||
+        heights.size() / static_cast<std::size_t>(width) != static_cast<std::size_t>(height) ||
+        heights.size() % static_cast<std::size_t>(width) != 0)
+        throw std::invalid_argument("Coverage requires a complete terrain grid.");
+    const float sx = metersPerCellX(), sz = metersPerCellZ();
+    if (!std::isfinite(sx) || !std::isfinite(sz) || sx <= 0 || sz <= 0 ||
+        !std::isfinite(cellSizeX) || !std::isfinite(cellSizeZ) || cellSizeX < 0 || cellSizeZ < 0)
+        throw std::invalid_argument("Terrain sample spacing must be finite and positive.");
+    if (std::any_of(heights.begin(), heights.end(), [](float h) { return !std::isfinite(h); }))
+        throw std::invalid_argument("Terrain contains missing elevation. Load a complete elevation dataset before solving.");
+    const glm::vec3 extent = worldSize();
+    if (!std::isfinite(extent.x) || !std::isfinite(extent.z))
+        throw std::invalid_argument("Terrain extent must be finite.");
+    if (georeferenced &&
+        (!std::isfinite(originLatDeg) || !std::isfinite(originLonDeg) ||
+         !std::isfinite(cellLatDeg) || !std::isfinite(cellLonDeg) ||
+         cellLatDeg <= 0 || cellLonDeg <= 0 ||
+         originLatDeg < -90 || originLatDeg + (height - 1.0) * cellLatDeg > 90 ||
+         originLonDeg < -180 || originLonDeg > 180 || (width - 1.0) * cellLonDeg >= 180))
+        throw std::invalid_argument("Terrain has an invalid north-up WGS84 reference.");
+}
 
 static double normalizeLongitude(double lonDeg) {
     double wrapped = std::fmod(lonDeg + 180.0, 360.0);

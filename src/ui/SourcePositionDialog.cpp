@@ -111,7 +111,8 @@ SourcePositionDialog::SourcePositionDialog(const TerrainModel& terrain,
 
     const float ground = terrain.heightAtWorld(antenna.position.x, antenna.position.z);
     const float agl = std::max(0.0f, antenna.position.y - ground);
-    m_status = new QLabel(QString("Current ground %1 m MSL · antenna %2 m AGL")
+    m_status = new QLabel(QString("Current ground %1 m · antenna %2 m AGL\n"
+                                 "Heights use the terrain's native vertical reference.")
         .arg(ground, 0, 'f', 1).arg(agl, 0, 'f', 1));
     m_status->setObjectName("PositionStatus");
     m_status->setWordWrap(true);
@@ -131,7 +132,7 @@ SourcePositionDialog::SourcePositionDialog(const TerrainModel& terrain,
     setStyleSheet(R"(
         QDialog { background: #0b1220; color: #e8eef7; }
         QLabel#DialogTitle { color: #f8fafc; font-size: 20px; font-weight: 650; }
-        QLabel#DialogHelp, QLabel#PositionStatus { color: #94a3b8; font-size: 11px; }
+        QLabel#DialogHelp, QLabel#PositionStatus { color: #a8b7ca; font-size: 12px; }
         QLineEdit, QDoubleSpinBox, QComboBox {
             min-height: 34px; background: #111c2e; border: 1px solid #26364d;
             border-radius: 7px; padding: 2px 10px; color: #e8eef7;
