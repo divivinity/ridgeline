@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <limits>
+#include <cmath>
 #include <glm/glm.hpp>
 
 struct ReceiverSettings {
@@ -85,6 +86,18 @@ struct FieldGrid {
             std::min(originXZ.y + static_cast<float>(z) * cellSize, maxXZ.y)
         };
     }
-    bool  valid() const { return !dbm.empty(); }
-    std::size_t cellCount() const { return static_cast<std::size_t>(width) * height; }
+    bool valid() const {
+        return cellCount() > 0 && dbm.size() == cellCount() &&
+               std::isfinite(cellSize) && cellSize > 0.0f &&
+               std::isfinite(originXZ.x) && std::isfinite(originXZ.y) &&
+               (std::isfinite(maxXZ.x) || maxXZ.x == std::numeric_limits<float>::infinity()) &&
+               (std::isfinite(maxXZ.y) || maxXZ.y == std::numeric_limits<float>::infinity());
+    }
+    std::size_t cellCount() const {
+        if (width <= 0 || height <= 0 ||
+            static_cast<std::size_t>(width) >
+                std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(height))
+            return 0;
+        return static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    }
 };

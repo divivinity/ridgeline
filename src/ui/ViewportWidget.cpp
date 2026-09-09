@@ -1,4 +1,5 @@
 #include "ViewportWidget.h"
+#include "TerrainPresentation.h"
 #include "render/TerrainRaycast.h"
 #include <QApplication>
 #include <QMouseEvent>
@@ -20,8 +21,9 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     m_basemap.setPrepareOpenGLCallback([this]() { makeCurrent(); });
 
     m_heatmapLegend = new HeatmapLegend(this);
-    // Heatmap starts visible (matches OverlayToolbar default of checked=true)
-    m_heatmapLegend->show();
+    // The coverage toggle may be on before any result exists. Don't imply a
+    // computed field by displaying its scale on an unsolved scene.
+    m_heatmapLegend->hide();
     m_comparisonHeatmap.visible = false;
     m_losRay.visible = false;
     m_antennaLobe.visible = false;
@@ -29,12 +31,14 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     m_fresnel.visible = false;
 
     m_mapInfoLabel = new QLabel(this);
+    m_mapInfoLabel->setObjectName("MapTerrainSummary");
     m_mapInfoLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_mapInfoLabel->setStyleSheet(
         "QLabel { background: rgba(7, 14, 25, 205); border: 1px solid rgba(148,163,184,35);"
         " border-radius: 9px; color: #dbeafe; padding: 9px 12px; font-size: 11px; }"
     );
     m_attributionLabel = new QLabel(this);
+    m_attributionLabel->setObjectName("ElevationAttribution");
     m_attributionLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_attributionLabel->setStyleSheet(
         "QLabel { background: rgba(7, 14, 25, 185); border-radius: 5px;"
@@ -99,6 +103,7 @@ void ViewportWidget::initializeGL() {
     const FieldGrid& field = m_engine->fieldGrid();
     if (field.valid())
         m_heatmap.update(field, m_heatmap.metric());
+    m_heatmapLegend->setVisible(m_heatmap.visible && field.valid());
 
     const bool comparisonValid =
         field.valid() && m_serviceTransition.size() == field.cellCount();
@@ -213,6 +218,7 @@ void ViewportWidget::drawAntennaMarkers() {
 }
 
 void ViewportWidget::refreshOverlays() {
+    m_heatmapLegend->setVisible(m_heatmap.visible && m_engine->fieldGrid().valid());
     makeCurrent();
     m_heatmap.update(m_engine->fieldGrid(), m_heatmap.metric());
     m_losRay.update(m_engine->antennas(), m_engine->terrain());
@@ -228,6 +234,7 @@ void ViewportWidget::refreshOverlays() {
 }
 
 void ViewportWidget::reloadTerrain() {
+    m_heatmapLegend->hide();
     m_analysisPointActive = false;
     m_analysisSourceIndex = -1;
     makeCurrent();
@@ -383,29 +390,23 @@ void ViewportWidget::updateMapHud() {
     if (terrain.hasGeoReference()) {
         const auto center = terrain.worldToLatLon(
             terrain.worldSize().x * 0.5f, terrain.worldSize().z * 0.5f);
-        mapText = QString("%1°, %2°\n%3 × %4 km  ·  %5 m terrain grid")
+        mapText = QString("%1°, %2°\n%3  ·  %4 m terrain grid")
             .arg(center.latDeg, 0, 'f', 5)
             .arg(center.lonDeg, 0, 'f', 5)
-            .arg(terrain.worldSize().x / 1000.0f, 0, 'f', 1)
-            .arg(terrain.worldSize().z / 1000.0f, 0, 'f', 1)
+            .arg(TerrainPresentation::areaSummary(terrain.worldSize().x, terrain.worldSize().z))
             .arg(std::max(terrain.metersPerCellX(), terrain.metersPerCellZ()), 0, 'f', 1);
     }
     m_mapInfoLabel->setText(mapText);
     m_mapInfoLabel->adjustSize();
 
-    QString attribution;
+    QString attribution = m_elevationCredit;
     if (terrain.hasGeoReference() && !m_basemap.hasTexture()) {
-        attribution = QStringLiteral("Satellite imagery unavailable");
-        if (!m_basemap.lastError().isEmpty())
-            attribution += QStringLiteral(" · ") + m_basemap.lastError();
-        attribution += QStringLiteral("  ·  Elevation © Mapzen and contributors");
-    } else {
-        attribution = m_basemap.attribution().isEmpty()
-            ? QStringLiteral("Elevation © Mapzen and source contributors")
-            : m_basemap.attribution() +
-                QStringLiteral("  ·  Elevation © Mapzen and contributors");
+        attribution.prepend(QStringLiteral("Imagery unavailable  ·  "));
+    } else if (terrain.hasGeoReference() && !m_basemap.attribution().isEmpty()) {
+        attribution.prepend(m_basemap.attribution() + QStringLiteral("  ·  "));
     }
     m_attributionLabel->setText(attribution);
+    m_attributionLabel->setToolTip(m_basemap.lastError());
     m_attributionLabel->adjustSize();
     emit basemapInfoChanged(m_basemap.providerName(),
                             m_basemap.attribution(),
@@ -474,7 +475,7 @@ void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
     switch (overlay) {
         case Basemap: m_basemap.visible      = visible; break;
         case Heatmap: m_heatmap.visible      = visible;
-                      m_heatmapLegend->setVisible(visible); break;
+                      m_heatmapLegend->setVisible(visible && m_engine->fieldGrid().valid()); break;
         case LOS:     m_losRay.visible       = visible; break;
         case Lobe:    m_antennaLobe.visible  = visible; break;
         case Jammer:  m_jammerBubble.visible = visible; break;
@@ -504,11 +505,10 @@ void ViewportWidget::keyPressEvent(QKeyEvent* e) {
             }
             break;
         case Qt::Key_T:
-            m_camera.orbit(0.0f, 89.0f - m_camera.elevation);  // snap to ceiling via orbit
+            topView();
             break;
         case Qt::Key_R:
-            if (m_defaultCamera.radius > 0.0f)
-                m_camera = m_defaultCamera;    // reset to saved default
+            resetView();
             break;
         case Qt::Key_Left:
             m_camera.orbit(-5.0f, 0.0f);

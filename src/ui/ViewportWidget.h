@@ -34,6 +34,12 @@ public:
     void setOverlayVisible(Overlay overlay, bool visible);
     bool isOverlayVisible(Overlay overlay) const;
     void setBasemapOpacity(float opacity);
+    void resetView() { m_camera = m_defaultCamera; update(); }
+    void topView() { m_camera.orbit(0.0f, 89.0f - m_camera.elevation); update(); }
+    void setElevationCredit(const QString& credit) {
+        m_elevationCredit = credit;
+        updateMapHud();
+    }
     void setPlacementMode(bool active, bool jammer = false);
     void setAnalysisPoint(int sourceIndex, const glm::vec3& receiverPosition);
     void clearAnalysisPoint();
@@ -52,6 +58,7 @@ public:
         makeCurrent();
         m_heatmap.update(m_engine->fieldGrid(), metric);
         doneCurrent();
+        if (m_heatmapLegend) m_heatmapLegend->setMetric(metric);
         update();
     }
 
@@ -93,6 +100,7 @@ private:
     HeatmapLegend* m_heatmapLegend = nullptr;
     QLabel* m_mapInfoLabel = nullptr;
     QLabel* m_attributionLabel = nullptr;
+    QString m_elevationCredit = QStringLiteral("Synthetic elevation · Demo only");
     QLabel* m_placementHint = nullptr;
     QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;

@@ -36,6 +36,99 @@ void testNoiseFloor() {
     NEAR(RFModels::noiseFloorDbm(rx), -125.02, 0.15);
 }
 
+void testFieldGridValidity() {
+    FieldGrid grid;
+    grid.dbm = {-80.0f};
+    CHECK(!grid.valid()); // A buffer alone is not a valid raster.
+    grid.width = 2; grid.height = 1;
+    CHECK(!grid.valid());
+    grid.dbm.push_back(-std::numeric_limits<float>::infinity());
+    CHECK(grid.valid()); // No signal is a legitimate solved result.
+    grid.cellSize = 0;
+    CHECK(!grid.valid());
+    grid.cellSize = 10;
+    grid.originXZ.x = std::numeric_limits<float>::quiet_NaN();
+    CHECK(!grid.valid());
+    grid.originXZ.x = 0;
+    grid.height = -1;
+    CHECK(!grid.valid());
+    CHECK(grid.cellCount() == 0);
+}
+
+template <typename Solver>
+void testInvalidSolveInputs() {
+    Solver solver;
+    solver.gridResolution = 40;
+    const TerrainModel terrain = flatTerrain(5, 5, 20);
+    MaterialLibrary materials;
+    Antenna source;
+    source.position = {40, 10, 40};
+    auto rejects = [&](const TerrainModel& t, const Antenna& a, const char* message) {
+        bool rejected = false;
+        int progressCalls = 0;
+        try { solver.solve(t, {a}, materials, [&](int, int) { ++progressCalls; }); }
+        catch (const std::invalid_argument& e) {
+            rejected = std::string(e.what()).find(message) != std::string::npos;
+        }
+        CHECK(rejected);
+        CHECK(progressCalls == 0); // Fail before publishing progress or sampling.
+    };
+    auto broken = terrain;
+    broken.heights.pop_back();
+    rejects(broken, source, "complete terrain grid");
+    broken = terrain;
+    broken.heights[0] = std::numeric_limits<float>::quiet_NaN();
+    rejects(broken, source, "missing elevation");
+    broken = terrain;
+    broken.cellSizeX = std::numeric_limits<float>::quiet_NaN();
+    rejects(broken, source, "sample spacing");
+    broken = terrain;
+    broken.setGeoReference(100, 0, .001, .001);
+    rejects(broken, source, "WGS84 reference");
+    auto outside = source;
+    outside.position.x = terrain.worldSize().x + 1;
+    rejects(terrain, outside, "outside analysis area");
+    outside = source;
+    outside.position.y = std::numeric_limits<float>::infinity();
+    rejects(terrain, outside, "position must be finite");
+    auto badRadio = source;
+    badRadio.frequencyMHz = 0;
+    rejects(terrain, badRadio, "RF settings");
+    badRadio = source;
+    badRadio.azimuthPatternDb = {0, std::numeric_limits<float>::quiet_NaN()};
+    rejects(terrain, badRadio, "antenna pattern");
+    solver.gridResolution = 0;
+    rejects(terrain, source, "grid resolution");
+    solver.gridResolution = 1e-10f;
+    rejects(terrain, source, "grid is too large");
+    solver.gridResolution = 40;
+    solver.receiver.bandwidthHz = -1;
+    rejects(terrain, source, "Receiver settings");
+    solver.receiver.bandwidthHz = 25000;
+    CHECK(solver.solve(terrain, {source}, materials).valid());
+}
+
+void testRejectedTerrainPreservesScenario() {
+    SimEngine engine;
+    auto terrain = flatTerrain(5, 5, 20);
+    engine.setTerrain(terrain);
+    Antenna source;
+    source.position = {40, 10, 40};
+    engine.addAntenna(source);
+    engine.mode = SimEngine::Mode::Preview;
+    engine.solve();
+    const auto field = engine.fieldGrid();
+    terrain.heights.pop_back();
+    bool rejected = false;
+    try { engine.setTerrain(terrain); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    CHECK(engine.terrain().heights.size() == 25);
+    CHECK(engine.antennas()[0].position == source.position);
+    CHECK(engine.fieldGrid().dbm == field.dbm);
+    CHECK(engine.fieldGrid().valid());
+}
+
 void testDirectionalGainAndPolarization() {
     ReceiverSettings rx;
     rx.polarization = "vertical";
@@ -493,6 +586,10 @@ void testLegacyScenarioDefaultsReceiverHeight() {
 }
 
 int main() {
+    testFieldGridValidity();
+    testInvalidSolveInputs<FastSolver>();
+    testInvalidSolveInputs<FullSolver>();
+    testRejectedTerrainPreservesScenario();
     testNoiseFloor();
     testDirectionalGainAndPolarization();
     testPatternImport();

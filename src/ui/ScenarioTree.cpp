@@ -8,24 +8,28 @@ ScenarioTree::ScenarioTree(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(14, 14, 14, 14);
     layout->setSpacing(10);
 
-    auto* title = new QLabel("EMITTERS & JAMMERS");
-    title->setStyleSheet("color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+    auto* title = new QLabel("Signal sources");
+    title->setStyleSheet("color: #f1f5f9; font-size: 16px; font-weight: 600;");
     layout->addWidget(title);
     auto* help = new QLabel("Choose a placement tool, then click the terrain.");
     help->setWordWrap(true);
-    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    help->setStyleSheet("color: #a8b7ca; font-size: 12px;");
     layout->addWidget(help);
 
     m_list = new QListWidget();
+    m_list->setObjectName("SourceList");
+    m_list->setAccessibleName("Signal sources");
+    m_list->setTextElideMode(Qt::ElideRight);
     m_list->setStyleSheet(
         "QListWidget {"
         "  background: #0c1625;"
         "  border: 1px solid #223148;"
         "  border-radius: 9px;"
         "  color: #dbe7f5;"
-        "  font-size: 11px;"
+        "  font-size: 13px;"
         "  padding: 5px;"
         "}"
+        "QListWidget::item { padding: 9px 6px; border-radius: 5px; }"
         "QListWidget::item:selected {"
         "  background: #123c43;"
         "  color: #ecfeff;"
@@ -47,7 +51,7 @@ ScenarioTree::ScenarioTree(QWidget* parent) : QWidget(parent) {
         "  border: 1px solid #2a3b52;"
         "  border-radius: 7px;"
         "  color: #dbe7f5;"
-        "  font-size: 11px;"
+        "  font-size: 12px;"
         "  padding: 7px 9px;"
         "}"
         "QPushButton:hover { background: #1c304b; border-color: #3b526e; }"
@@ -72,8 +76,7 @@ ScenarioTree::ScenarioTree(QWidget* parent) : QWidget(parent) {
     layout->addLayout(btnRow);
 
     setMinimumWidth(230);
-    setMaximumWidth(330);
-    setStyleSheet("background: #0b1422;");
+    setStyleSheet("ScenarioTree { background: #101a29; }");
 }
 
 void ScenarioTree::refresh(const std::vector<Antenna>& antennas) {
@@ -84,11 +87,12 @@ void ScenarioTree::refresh(const std::vector<Antenna>& antennas) {
     int antennaIdx = 1, jammerIdx = 1;
     for (const auto& a : antennas) {
         const QString label = a.isJammer
-            ? QString("●  Jammer %1     %2 MHz · %3 W")
+            ? QString("Jammer %1\n%2 MHz · %3 W")
                 .arg(jammerIdx++).arg(a.frequencyMHz, 0, 'f', 0).arg(a.powerW, 0, 'f', 0)
-            : QString("◆  Emitter %1    %2 MHz · %3 W")
+            : QString("Emitter %1\n%2 MHz · %3 W")
                 .arg(antennaIdx++).arg(a.frequencyMHz, 0, 'f', 0).arg(a.powerW, 0, 'f', 0);
         m_list->addItem(label);
+        m_list->item(m_list->count() - 1)->setToolTip(label);
     }
 
     // Restore selection if still valid.

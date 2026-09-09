@@ -1,6 +1,7 @@
 #include "TileBatchDownloader.h"
 
 #include <QDir>
+#include <QCryptographicHash>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -8,6 +9,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QStandardPaths>
+#include <QSaveFile>
 #include <QTimer>
 #include <algorithm>
 
@@ -36,9 +38,12 @@ void writeCache(const QString& relativePath, const QByteArray& bytes) {
     const QString path = fullCachePath(relativePath);
     const QFileInfo info(path);
     QDir().mkpath(info.absolutePath());
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
-    file.write(bytes);
+    QSaveFile file(path);
+    // Never replace a usable cached tile with an interrupted/partial write.
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly)) return;
+    if (file.write(bytes) != bytes.size()) return;
+    file.commit();
 }
 
 } // namespace
@@ -52,6 +57,12 @@ QString TileBatchDownloader::cacheRoot() {
 
 bool TileBatchDownloader::offlineMode() {
     return envFlag("RIDGELINE_OFFLINE");
+}
+
+QString TileBatchDownloader::customProviderCacheKey(const QString& urlTemplate) {
+    const QByteArray digest = QCryptographicHash::hash(
+        urlTemplate.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("custom-") + QString::fromLatin1(digest);
 }
 
 std::vector<TileDownloadResult> TileBatchDownloader::download(
@@ -76,6 +87,14 @@ std::vector<TileDownloadResult> TileBatchDownloader::download(
     int completed = 0;
 
     for (int i = 0; i < total; ++i) {
+        if (cancel && cancel()) {
+            for (int remaining = 0; remaining < total; ++remaining) {
+                if (!results[remaining].fromCache)
+                    results[remaining].error = QStringLiteral("cancelled");
+            }
+            if (progress) progress(total, total);
+            return results;
+        }
         const QByteArray cached = readCache(requests[i].cacheRelativePath);
         if (!cached.isEmpty()) {
             results[i].bytes = cached;
@@ -154,7 +173,10 @@ std::vector<TileDownloadResult> TileBatchDownloader::download(
         if (!cancel || !cancel()) return;
         cancelled = true;
         cancelPoll.stop();
-        for (QNetworkReply* reply : active)
+        // abort() can emit finished synchronously; its handler erases from
+        // active. Iterate a snapshot so no iterator is invalidated mid-loop.
+        const auto repliesToAbort = active;
+        for (QNetworkReply* reply : repliesToAbort)
             if (reply) reply->abort();
 
         while (nextPending < static_cast<int>(pending.size())) {

@@ -13,8 +13,10 @@ signals:
     void overlayToggled(ViewportWidget::Overlay overlay, bool visible);
     void basemapOpacityChanged(float opacity);
     void heatmapMetricChanged(HeatmapOverlay::Metric metric);
+    void resetViewRequested();
+    void topViewRequested();
 
 private:
-    void buildCheckbox(const QString& label, ViewportWidget::Overlay id,
+    QCheckBox* buildCheckbox(const QString& label, ViewportWidget::Overlay id,
                        QBoxLayout* layout, bool checked = true);
 };

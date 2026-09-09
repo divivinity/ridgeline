@@ -22,6 +22,7 @@
 #include <limits>
 
 class QUndoStack;
+class QProgressDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -75,6 +76,7 @@ private:
     Antenna          m_propsAntennaView;
     bool             m_scenarioDirty = false;  // non-undoable unsaved changes
     bool             m_solveInProgress = false;  // a coverage run owns the UI
+    bool             m_terrainLoadInProgress = false;
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;
@@ -117,7 +119,8 @@ private:
     void refreshTree();
     void refreshPropsPanel();
     void refreshBottomBar();
-    void applyScenarioDoc(const ScenarioDoc& doc);
+    void applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progress,
+                          bool& terrainInstalled);
     void applySourceState(const std::vector<Antenna>& antennas, int selectedIndex);
     void pushSourceChange(std::vector<Antenna> after, int selectedAfter,
                           const QString& description, int mergeId = -1);
