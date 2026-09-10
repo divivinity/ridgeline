@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "CompactLocationLabel.h"
 #include "WorkspaceTheme.h"
+#include "LayersPanel.h"
 #include "TerrainPresentation.h"
 #include <QToolButton>
 #include "RuntimePaths.h"
@@ -251,6 +252,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabifyDockWidget(m_comparisonDock, m_calibrationDock);
     m_calibrationDock->hide();
 
+    m_layersPanel = new LayersPanel(this);
+    m_layersDock = new QDockWidget("Layers", this);
+    m_layersDock->setObjectName("LayersDock");
+    m_layersDock->setWidget(m_layersPanel);
+    m_layersDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_layersDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    m_layersDock->setMinimumWidth(300);
+    addDockWidget(Qt::RightDockWidgetArea, m_layersDock);
+    tabifyDockWidget(m_calibrationDock, m_layersDock);
+
     connect(calibrationAct, &QAction::triggered,
             this, &MainWindow::showCalibrationPanel);
     connect(m_calibrationPanel, &CalibrationPanel::importMeasurementsRequested,
@@ -409,9 +421,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     viewMenu->addAction(m_pointDock->toggleViewAction());
     viewMenu->addAction(m_comparisonDock->toggleViewAction());
     viewMenu->addAction(m_calibrationDock->toggleViewAction());
+    viewMenu->addAction(m_layersDock->toggleViewAction());
     viewMenu->addSeparator();
     auto* resetViewAction = viewMenu->addAction("Reset map view");
     connect(resetViewAction, &QAction::triggered, m_viewport, &ViewportWidget::resetView);
+
+    // Bind the stack last, so the viewport and panel are both live before it
+    // pushes its first state to them.
+    m_viewport->setLayerStack(&m_layerStack);
+    m_layersPanel->setStack(&m_layerStack);
 
     refreshTree();
 
@@ -1465,6 +1483,9 @@ void MainWindow::onSaveScenario() {
     doc.calibrationRmseBeforeDb = m_appliedCalibrationRmseBeforeDb;
     doc.calibrationRmseAfterDb = m_appliedCalibrationRmseAfterDb;
     doc.antennas = m_engine.antennas();
+    doc.layers.clear();
+    for (const LayerStack::State& layer : m_layerStack.state())
+        doc.layers.push_back({layer.id.toStdString(), layer.visible, layer.opacity});
 
     try {
         ScenarioIO::save(doc, path.toStdString());
@@ -1600,6 +1621,13 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     else if (doc.mode == SimEngine::Mode::Engineering) m_modeCombo->setCurrentIndex(2);
     else m_modeCombo->setCurrentIndex(1);
     m_engine.setAntennas(doc.antennas);
+    if (!doc.layers.empty()) {
+        std::vector<LayerStack::State> layers;
+        layers.reserve(doc.layers.size());
+        for (const ScenarioLayerState& layer : doc.layers)
+            layers.push_back({QString::fromStdString(layer.id), layer.visible, layer.opacity});
+        m_layerStack.applyState(layers);
+    }
 
     m_selectedIndex = -1;
     if (m_viewport) {
