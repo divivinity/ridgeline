@@ -26,6 +26,7 @@
 class QUndoStack;
 class LayersPanel;
 class QProgressDialog;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -128,6 +129,16 @@ private:
     void refreshTree();
     void refreshPropsPanel();
     void refreshBottomBar();
+    // The current workspace as a document. Shared by Save and by autosave, so
+    // a recovered workspace can never differ in shape from a saved one.
+    ScenarioDoc currentScenarioDoc() const;
+    // Writes a recovery copy when there is unsaved work and the workspace is
+    // idle. Never interrupts: a failed write just waits for the next tick.
+    void autosaveTick();
+    // Offers to restore a recovery copy left by a previous session.
+    void offerRecovery();
+    QTimer* m_autosaveTimer = nullptr;
+
     void applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progress,
                           bool& terrainInstalled);
     void applySourceState(const std::vector<Antenna>& antennas, int selectedIndex);

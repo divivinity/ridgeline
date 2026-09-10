@@ -9,6 +9,7 @@
 #include "data/TerrainLoader.h"
 #include "data/GlobalTerrainLoader.h"
 #include "data/ScenarioIO.h"
+#include "data/RecoveryStore.h"
 #include "data/MeasurementIO.h"
 #include "data/Exporter.h"
 #include "data/AntennaLibrary.h"
@@ -485,6 +486,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Queued after the deferred dock re-add above, so what is captured is the
     // arrangement the user actually starts with.
     QTimer::singleShot(0, this, [this] { m_defaultLayout = saveState(); });
+
+    // Unsaved work is only as durable as this process, so keep a copy outside
+    // it. Two minutes bounds what a crash can cost without writing constantly.
+    m_autosaveTimer = new QTimer(this);
+    m_autosaveTimer->setObjectName("AutosaveTimer");
+    m_autosaveTimer->setInterval(120000);
+    connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::autosaveTick);
+    m_autosaveTimer->start();
+
+    // Queued so the window is visible before any recovery prompt appears over it.
+    QTimer::singleShot(0, this, [this] { offerRecovery(); });
 
     refreshTree();
 
@@ -1011,6 +1023,9 @@ void MainWindow::markScenarioDirty() {
 }
 
 void MainWindow::markScenarioClean() {
+    // The work now lives in a file the user chose, so a recovery copy would
+    // only offer to restore something already kept.
+    RecoveryStore::clear();
     m_scenarioDirty = false;
     if (m_undoStack) m_undoStack->setClean();
     setWindowModified(false);
@@ -1052,8 +1067,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         event->ignore();
         return;
     }
-    if (confirmDiscardChanges()) event->accept();
-    else                         event->ignore();
+    if (!confirmDiscardChanges()) {
+        event->ignore();
+        return;
+    }
+    // The user has decided: saved, or discarded on purpose. Either way a
+    // recovery copy would resurrect work already dealt with.
+    RecoveryStore::clear();
+    event->accept();
 }
 
 void MainWindow::loadTerrain(const QString& path) {
@@ -1521,19 +1542,13 @@ void MainWindow::onImportMeasurements() {
             : QString{}));
 }
 
-void MainWindow::onSaveScenario() {
-    const QString path = QFileDialog::getSaveFileName(
-        this, "Save Scenario", {},
-        "Ridgeline scenario (*.json);;All files (*)");
-    if (path.isEmpty()) return;
-
+ScenarioDoc MainWindow::currentScenarioDoc() const {
     ScenarioDoc doc;
     doc.terrain = m_terrainSource;
     doc.mode = m_engine.mode;
     doc.receiver = m_engine.receiver;
     doc.calibration = m_engine.calibration;
-    doc.calibrationSourceName =
-        m_appliedCalibrationSourceName.toStdString();
+    doc.calibrationSourceName = m_appliedCalibrationSourceName.toStdString();
     doc.calibrationPairedSamples = m_appliedCalibrationPairedSamples;
     doc.calibrationRmseBeforeDb = m_appliedCalibrationRmseBeforeDb;
     doc.calibrationRmseAfterDb = m_appliedCalibrationRmseAfterDb;
@@ -1541,6 +1556,69 @@ void MainWindow::onSaveScenario() {
     doc.layers.clear();
     for (const LayerStack::State& layer : m_layerStack.state())
         doc.layers.push_back({layer.id.toStdString(), layer.visible, layer.opacity});
+    return doc;
+}
+
+void MainWindow::autosaveTick() {
+    // Nothing to protect, or the workspace is mid-operation and its state is
+    // not coherent enough to copy.
+    if (!isScenarioDirty() || m_solveInProgress || m_terrainLoadInProgress) return;
+    RecoveryStore::write(currentScenarioDoc());
+}
+
+void MainWindow::offerRecovery() {
+    if (!RecoveryStore::exists()) return;
+    const QDateTime savedAt = RecoveryStore::savedAt();
+    const QString when = savedAt.isValid()
+        ? savedAt.toString("d MMMM, h:mm ap") : QStringLiteral("an earlier session");
+
+    QMessageBox ask(this);
+    ask.setObjectName("RecoveryPrompt");
+    ask.setIcon(QMessageBox::Question);
+    ask.setWindowTitle("Recover unsaved work");
+    ask.setText(QStringLiteral("Ridgeline closed with unsaved changes.\n\n"
+                               "A copy from %1 can be restored.").arg(when));
+    QPushButton* restore = ask.addButton("Restore", QMessageBox::AcceptRole);
+    ask.addButton("Discard", QMessageBox::DestructiveRole);
+    ask.setDefaultButton(restore);
+    ask.exec();
+
+    if (ask.clickedButton() != restore) {
+        // Declining is a decision, so the copy goes rather than being offered
+        // again on every start.
+        RecoveryStore::clear();
+        return;
+    }
+
+    QProgressDialog progress("Restoring unsaved work…", "Cancel", 0, 0, this);
+    progress.setWindowTitle("Recovering");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    bool terrainInstalled = false;
+    try {
+        applyScenarioDoc(RecoveryStore::read(), progress, terrainInstalled);
+        // Recovered work is unsaved by definition: it has no file behind it,
+        // so it must stay dirty and keep prompting until the user saves it.
+        markScenarioDirty();
+        m_statusLabel->setText("  Unsaved work restored · save it to keep it");
+    } catch (const std::exception& e) {
+        progress.hide();
+        QMessageBox::warning(this, "Could not recover",
+                             QStringLiteral("The recovery copy could not be restored:\n%1")
+                                 .arg(e.what()));
+    }
+    progress.close();
+}
+
+void MainWindow::onSaveScenario() {
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save Scenario", {},
+        "Ridgeline scenario (*.json);;All files (*)");
+    if (path.isEmpty()) return;
+
+    const ScenarioDoc doc = currentScenarioDoc();
 
     try {
         ScenarioIO::save(doc, path.toStdString());
