@@ -1,4 +1,5 @@
 #include "BasemapOverlay.h"
+#include "map/TileProviders.h"
 #include "data/TileBatchDownloader.h"
 
 #include <QEventLoop>
@@ -15,6 +16,7 @@
 #include <QUrlQuery>
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -123,6 +125,79 @@ void configureEsri(TileProvider& provider) {
         "Imagery © Esri, Maxar, Earthstar Geographics, and contributors";
     provider.cacheKey = "esri";
 }
+
+// Downloads one provider's tiles and paints them into a mosaic covering the
+// whole tile window. Returns the number of tiles that loaded; the caller
+// decides whether zero is fatal for the layer or for the whole basemap.
+int fetchProviderMosaic(QNetworkAccessManager& network,
+                        const TileProvider& provider,
+                        int zoom, int tileMinX, int tileMaxX,
+                        int tileMinY, int tileMaxY,
+                        const std::function<void(int, int)>& progress,
+                        const std::function<bool()>& cancel,
+                        QImage& outMosaic, QString& outError) {
+    std::vector<TileDownloadRequest> requests;
+    std::vector<std::pair<int, int>> tileCoords;
+    const int expected = (tileMaxX - tileMinX + 1) * (tileMaxY - tileMinY + 1);
+    requests.reserve(expected);
+    tileCoords.reserve(expected);
+
+    for (int ty = tileMinY; ty <= tileMaxY; ++ty) {
+        for (int tx = tileMinX; tx <= tileMaxX; ++tx) {
+            const int requestX = wrapTileX(tx, zoom);
+            QString url;
+            if (provider.kind == TileProvider::Kind::Google) {
+                url = googleTileUrl(provider, zoom, requestX, ty);
+            } else {
+                url = provider.urlTemplate;
+                url.replace("{z}", QString::number(zoom));
+                url.replace("{x}", QString::number(requestX));
+                url.replace("{y}", QString::number(ty));
+            }
+            requests.push_back({
+                QUrl(url),
+                QStringLiteral("imagery/%1/%2/%3/%4.tile")
+                    .arg(provider.cacheKey).arg(zoom).arg(requestX).arg(ty)
+            });
+            tileCoords.emplace_back(tx, ty);
+        }
+    }
+
+    const auto results = TileBatchDownloader::download(
+        network, requests, 8, 12000, progress, cancel);
+
+    outMosaic = QImage((tileMaxX - tileMinX + 1) * kTileSize,
+                       (tileMaxY - tileMinY + 1) * kTileSize,
+                       QImage::Format_RGBA8888);
+    outMosaic.fill(Qt::transparent);
+
+    int loaded = 0, failed = 0;
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        QImage tile;
+        tile.loadFromData(results[i].bytes);
+        if (tile.isNull()) {
+            ++failed;
+            if (outError.isEmpty()) {
+                outError = results[i].error.isEmpty()
+                    ? QStringLiteral("%1 tile was invalid").arg(provider.name)
+                    : QStringLiteral("%1 tile failed: %2").arg(provider.name, results[i].error);
+            }
+            continue;
+        }
+        const int tx = tileCoords[i].first;
+        const int ty = tileCoords[i].second;
+        QPainter painter(&outMosaic);
+        painter.drawImage((tx - tileMinX) * kTileSize,
+                          (ty - tileMinY) * kTileSize,
+                          tile.convertToFormat(QImage::Format_RGBA8888));
+        ++loaded;
+    }
+    if (loaded > 0 && failed > 0)
+        outError = QStringLiteral("%1 %2 tile(s) could not be loaded")
+            .arg(failed).arg(provider.name);
+    return loaded;
+}
+
 } // namespace
 
 BasemapOverlay::MercatorPixel
@@ -269,140 +344,143 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
     if (tileMaxX < tileMinX || tileMaxY < tileMinY) return false;
 
     QNetworkAccessManager network;
-    TileProvider provider;
-    const QString customTemplate = qEnvironmentVariable("RIDGELINE_TILE_URL");
-    if (!customTemplate.isEmpty()) {
-        provider.kind = TileProvider::Kind::Custom;
-        provider.urlTemplate = customTemplate;
-        provider.name = "Custom imagery";
-        provider.attribution = qEnvironmentVariable("RIDGELINE_TILE_ATTRIBUTION",
-                                                     "Custom imagery");
-        provider.cacheKey = TileBatchDownloader::customProviderCacheKey(customTemplate);
-    } else {
-        const QString apiKey = qEnvironmentVariable("RIDGELINE_GOOGLE_MAPS_API_KEY");
-        const QString requested = qEnvironmentVariable("RIDGELINE_BASEMAP_PROVIDER").toLower();
-        if (!apiKey.isEmpty() && requested != "esri") {
-            if (TileBatchDownloader::offlineMode()) {
-                provider.kind = TileProvider::Kind::Google;
-                provider.apiKey = apiKey;
-                provider.name = "Google Maps (offline cache)";
-                provider.attribution = "Google Maps";
-                provider.cacheKey = "google";
-            } else {
-                QString googleError;
-                if (!createGoogleSession(network, apiKey, provider, googleError))
-                    m_lastError = "Google Maps unavailable: " + googleError + "; using Esri imagery";
-            }
-        }
-        if (provider.kind != TileProvider::Kind::Google)
-            configureEsri(provider);
-    }
 
-    if (provider.kind == TileProvider::Kind::Google &&
-        !TileBatchDownloader::offlineMode()) {
-        QUrl viewportUrl("https://tile.googleapis.com/tile/v1/viewport");
-        QUrlQuery query;
-        query.addQueryItem("session", provider.session);
-        query.addQueryItem("key", provider.apiKey);
-        query.addQueryItem("zoom", QString::number(zoom));
-        query.addQueryItem("north", QString::number(maxLat, 'f', 8));
-        query.addQueryItem("south", QString::number(minLat, 'f', 8));
-        query.addQueryItem("east", QString::number(normalizeLongitude(maxLon), 'f', 8));
-        query.addQueryItem("west", QString::number(normalizeLongitude(minLon), 'f', 8));
-        viewportUrl.setQuery(query);
-        QNetworkRequest request(viewportUrl);
-        request.setHeader(QNetworkRequest::UserAgentHeader, "Ridgeline-RF-Planner/1.0");
-        request.setTransferTimeout(12000);
-        QString error;
-        const QJsonObject metadata = QJsonDocument::fromJson(
-            waitForReply(network.get(request), error)).object();
-        const QString copyright = metadata.value("copyright").toString();
-        if (!copyright.isEmpty()) provider.attribution = "Google Maps · " + copyright;
-        else {
-            m_lastError = error.isEmpty()
-                ? QStringLiteral("Google Maps attribution metadata was unavailable; using Esri imagery")
-                : QStringLiteral("Google Maps attribution lookup failed: %1; using Esri imagery").arg(error);
-            configureEsri(provider);
-        }
-    }
+    // Composite every visible base raster into one image before upload. Two
+    // rasters textured onto the same terrain surface as separate coplanar
+    // passes would z-fight, so blending happens here rather than in paintGL.
+    std::vector<RasterRequest> requested = m_rasterLayers;
+    if (requested.empty()) requested.push_back({QStringLiteral("satellite"), 1.0f});
 
-    QImage mosaic((tileMaxX - tileMinX + 1) * kTileSize,
-                  (tileMaxY - tileMinY + 1) * kTileSize,
-                  QImage::Format_RGBA8888);
+    const int mosaicWidth  = (tileMaxX - tileMinX + 1) * kTileSize;
+    const int mosaicHeight = (tileMaxY - tileMinY + 1) * kTileSize;
+    QImage mosaic(mosaicWidth, mosaicHeight, QImage::Format_RGBA8888);
     mosaic.fill(Qt::transparent);
 
-    std::vector<TileDownloadRequest> requests;
-    std::vector<std::pair<int, int>> tileCoords;
-    const int expected = (tileMaxX - tileMinX + 1) * (tileMaxY - tileMinY + 1);
-    requests.reserve(expected);
-    tileCoords.reserve(expected);
+    m_attributions.clear();
+    m_providerName.clear();
+    int layersLoaded = 0;
 
-    for (int ty = tileMinY; ty <= tileMaxY; ++ty) {
-        for (int tx = tileMinX; tx <= tileMaxX; ++tx) {
-            const int requestX = wrapTileX(tx, zoom);
-            QString url;
-            if (provider.kind == TileProvider::Kind::Google) {
-                url = googleTileUrl(provider, zoom, requestX, ty);
+    for (const RasterRequest& request : requested) {
+        TileProvider provider;
+        if (request.layerId == QLatin1String("usgs-topo")) {
+            const MapTileProvider spec = TileProviders::usgsTopo();
+            provider.kind = TileProvider::Kind::Custom;
+            provider.urlTemplate = spec.urlTemplate;
+            provider.name = spec.displayName;
+            provider.attribution = spec.attribution;
+            provider.cacheKey = spec.id;
+        } else {
+            const QString customTemplate = qEnvironmentVariable("RIDGELINE_TILE_URL");
+            if (!customTemplate.isEmpty()) {
+                provider.kind = TileProvider::Kind::Custom;
+                provider.urlTemplate = customTemplate;
+                provider.name = "Custom imagery";
+                provider.attribution = qEnvironmentVariable("RIDGELINE_TILE_ATTRIBUTION",
+                                                             "Custom imagery");
+                provider.cacheKey = TileBatchDownloader::customProviderCacheKey(customTemplate);
             } else {
-                url = provider.urlTemplate;
-                url.replace("{z}", QString::number(zoom));
-                url.replace("{x}", QString::number(requestX));
-                url.replace("{y}", QString::number(ty));
+                const QString apiKey = qEnvironmentVariable("RIDGELINE_GOOGLE_MAPS_API_KEY");
+                const QString wanted = qEnvironmentVariable("RIDGELINE_BASEMAP_PROVIDER").toLower();
+                if (!apiKey.isEmpty() && wanted != "esri") {
+                    if (TileBatchDownloader::offlineMode()) {
+                        provider.kind = TileProvider::Kind::Google;
+                        provider.apiKey = apiKey;
+                        provider.name = "Google Maps (offline cache)";
+                        provider.attribution = "Google Maps";
+                        provider.cacheKey = "google";
+                    } else {
+                        QString googleError;
+                        if (!createGoogleSession(network, apiKey, provider, googleError))
+                            m_lastError = "Google Maps unavailable: " + googleError
+                                        + "; using Esri imagery";
+                    }
+                }
+                if (provider.kind != TileProvider::Kind::Google) configureEsri(provider);
             }
-            requests.push_back({
-                QUrl(url),
-                QStringLiteral("imagery/%1/%2/%3/%4.tile")
-                    .arg(provider.cacheKey).arg(zoom).arg(requestX).arg(ty)
-            });
-            tileCoords.emplace_back(tx, ty);
+
+            if (provider.kind == TileProvider::Kind::Google &&
+                !TileBatchDownloader::offlineMode()) {
+                QUrl viewportUrl("https://tile.googleapis.com/tile/v1/viewport");
+                QUrlQuery query;
+                query.addQueryItem("session", provider.session);
+                query.addQueryItem("key", provider.apiKey);
+                query.addQueryItem("zoom", QString::number(zoom));
+                query.addQueryItem("north", QString::number(maxLat, 'f', 8));
+                query.addQueryItem("south", QString::number(minLat, 'f', 8));
+                query.addQueryItem("east", QString::number(normalizeLongitude(maxLon), 'f', 8));
+                query.addQueryItem("west", QString::number(normalizeLongitude(minLon), 'f', 8));
+                viewportUrl.setQuery(query);
+                QNetworkRequest metaRequest(viewportUrl);
+                metaRequest.setHeader(QNetworkRequest::UserAgentHeader, "Ridgeline-RF-Planner/1.0");
+                metaRequest.setTransferTimeout(12000);
+                QString metaError;
+                const QJsonObject metadata = QJsonDocument::fromJson(
+                    waitForReply(network.get(metaRequest), metaError)).object();
+                const QString copyright = metadata.value("copyright").toString();
+                if (!copyright.isEmpty()) {
+                    provider.attribution = "Google Maps · " + copyright;
+                } else {
+                    m_lastError = metaError.isEmpty()
+                        ? QStringLiteral("Google Maps attribution metadata was unavailable; using Esri imagery")
+                        : QStringLiteral("Google Maps attribution lookup failed: %1; using Esri imagery").arg(metaError);
+                    configureEsri(provider);
+                }
+            }
         }
+
+        QImage layerMosaic;
+        QString layerError;
+        const int loaded = fetchProviderMosaic(network, provider, zoom,
+                                               tileMinX, tileMaxX, tileMinY, tileMaxY,
+                                               m_loadProgress, m_loadCancel,
+                                               layerMosaic, layerError);
+        if (m_loadCancel && m_loadCancel()) {
+            m_lastError = "Basemap loading cancelled";
+            return false;
+        }
+        if (loaded == 0) {
+            // USGS publishes no tiles outside the United States. Say so, rather
+            // than leaving a blank base map to be read as a failure to load.
+            if (request.layerId == QLatin1String("usgs-topo")) {
+                m_lastError = QStringLiteral("No topographic coverage for this area");
+            } else if (TileBatchDownloader::offlineMode() && layerError.isEmpty()) {
+                m_lastError = QString("Offline imagery cache has no tiles for this area: %1")
+                    .arg(TileBatchDownloader::cacheRoot());
+            } else if (!layerError.isEmpty()) {
+                m_lastError = layerError;
+            }
+            continue;
+        }
+        if (!layerError.isEmpty() && m_lastError.isEmpty()) m_lastError = layerError;
+
+        QPainter painter(&mosaic);
+        painter.setOpacity(std::clamp(request.opacity, 0.0f, 1.0f));
+        painter.drawImage(0, 0, layerMosaic);
+        painter.end();
+
+        ++layersLoaded;
+        if (!provider.attribution.isEmpty()) m_attributions << provider.attribution;
+        m_providerName = provider.name;
     }
 
-    const auto results = TileBatchDownloader::download(
-        network, requests, 8, 12000, m_loadProgress, m_loadCancel);
+    // Relief alone is a legitimate map: composite it over neutral ground so it
+    // stays readable when no raster loaded or none was requested.
+    const bool haveHillshade = !m_hillshade.isNull() && m_hillshadeOpacity > 0.0f;
+    if (layersLoaded == 0 && !haveHillshade) return false;
+    if (layersLoaded == 0 && haveHillshade) {
+        mosaic.fill(QColor(150, 150, 150));
+        if (m_lastError.isEmpty())
+            m_lastError = QStringLiteral("Showing relief shading only; no imagery loaded");
+    }
+
     // The nested network loop and a modal QProgressDialog may process paint
     // events, changing the QOpenGLWidget context. Reassert the owning widget's
-    // context before any texture upload or subsequent overlay construction.
+    // context before any texture upload.
     if (m_prepareOpenGL) m_prepareOpenGL();
     if (!expectedContext || QOpenGLContext::currentContext() != expectedContext) {
         m_lastError = "Could not restore the map's OpenGL context for imagery upload";
         return false;
     }
-    if (m_loadCancel && m_loadCancel()) {
-        m_lastError = "Basemap loading cancelled";
-        return false;
-    }
-
-    int loaded = 0;
-    int failed = 0;
-    for (size_t i = 0; i < results.size(); ++i) {
-        QImage tile;
-        tile.loadFromData(results[i].bytes);
-        if (tile.isNull()) {
-            ++failed;
-            if (m_lastError.isEmpty()) {
-                m_lastError = results[i].error.isEmpty()
-                    ? QStringLiteral("Imagery tile was invalid")
-                    : QStringLiteral("Imagery tile failed: %1").arg(results[i].error);
-            }
-            continue;
-        }
-        const int tx = tileCoords[i].first;
-        const int ty = tileCoords[i].second;
-        QPainter painter(&mosaic);
-        painter.drawImage((tx - tileMinX) * kTileSize,
-                          (ty - tileMinY) * kTileSize,
-                          tile.convertToFormat(QImage::Format_RGBA8888));
-        ++loaded;
-    }
-    if (loaded == 0) {
-        if (TileBatchDownloader::offlineMode() && m_lastError.isEmpty())
-            m_lastError = QString("Offline imagery cache has no tiles for this area: %1")
-                .arg(TileBatchDownloader::cacheRoot());
-        return false;
-    }
-    if (failed > 0)
-        m_lastError = QString("%1 imagery tile(s) could not be loaded").arg(failed);
 
     const QRectF sourceRect(nwPx.x - tileMinX * kTileSize,
                             nwPx.y - tileMinY * kTileSize,
@@ -416,6 +494,16 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
         QPainter painter(&image);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
         painter.drawImage(QRectF(0, 0, targetW, targetH), mosaic, sourceRect);
+        if (haveHillshade) {
+            // Multiply keeps the base map's colour and darkens by relief. The
+            // shade image is already north-up, matching this image before the
+            // mirror below, and covers exactly the terrain extent.
+            painter.setCompositionMode(QPainter::CompositionMode_Multiply);
+            painter.setOpacity(std::clamp(m_hillshadeOpacity, 0.0f, 1.0f));
+            painter.drawImage(QRectF(0, 0, targetW, targetH),
+                              m_hillshade.convertToFormat(QImage::Format_RGBA8888),
+                              QRectF(0, 0, m_hillshade.width(), m_hillshade.height()));
+        }
     }
     image = image.mirrored(false, true);
     if (image.isNull()) return false;
@@ -441,8 +529,8 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
             .arg(static_cast<unsigned int>(uploadError), 0, 16);
         return false;
     }
-    m_providerName = provider.name;
-    m_attribution = provider.attribution;
+    // Credit every raster that actually contributed pixels, in stack order.
+    m_attribution = m_attributions.join(QStringLiteral("  ·  "));
     return true;
 }
 
