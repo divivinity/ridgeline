@@ -152,6 +152,37 @@ redistributable package, which those projects' tile policies prohibit.
 Layer visibility, opacity and order are saved in the scenario file. Scenarios
 written before layers existed load with the defaults above.
 
+## LiDAR-derived elevation
+
+Ridgeline has no LiDAR importer, and does not need one to use LiDAR data. What
+a propagation model consumes is a raster of ground heights, and the useful
+LiDAR products are already published in that form.
+
+The USGS 3DEP programme publishes 1 m bare-earth DEMs derived from LiDAR as
+GeoTIFFs, downloadable per tile from [The National Map](https://apps.nationalmap.gov/downloader/).
+Load one through **File → Load Terrain** in a build with GDAL, and the location
+tooltip reports its source resolution — about 1 m, against the roughly 10 m of
+the best streamed elevation.
+
+Two things this deliberately does not do:
+
+**It does not label the data as LiDAR.** A 1 m GeoTIFF does not say how it was
+produced, so Ridgeline reports the resolution it can measure rather than a
+provenance it would be guessing at.
+
+**It does not read point clouds.** LAS and LAZ files hold millions of returns
+with no grid structure, while `TerrainModel` is a regular height grid and every
+solver, raycast and overlay assumes that. Supporting point clouds means a
+second terrain representation and a second render path, not an importer — which
+is why the roadmap ranks it last rather than bundling it with this. Deriving a
+DEM from a point cloud is well served by existing tools (PDAL, LAStools, or
+`gdal_grid`); the output loads through the GeoTIFF path above.
+
+Canopy height, the difference between a surface model and a bare-earth model,
+needs both rasters and a subtraction step. 3DEP publishes both, but Ridgeline
+loads one terrain at a time and has no raster arithmetic, so this is not yet
+possible in the application.
+
 ## Portable offline terrain and imagery packages
 
 Successful terrain and imagery tile responses are saved as raw portable files.

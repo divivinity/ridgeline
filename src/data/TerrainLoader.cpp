@@ -329,6 +329,9 @@ TerrainModel TerrainLoader::fromHGT(const std::string& path,
         }
     }
 
+    // A single-tile HGT crop takes the posts as they are, so the grid spacing
+    // is the source resolution.
+    t.sourceResolutionM = std::min(t.metersPerCellX(), t.metersPerCellZ());
     return t;
 }
 
@@ -464,6 +467,13 @@ TerrainModel TerrainLoader::fromHGTDirectory(const std::string& directory,
                     + hgtTileName(swLat, swLon));
             terrain.heights[z * outW + x] = static_cast<float>(raw);
         }
+    }
+    // A mosaic resamples onto its own grid, so the source resolution is the
+    // tiles' native post spacing, which the output grid may be coarser than.
+    if (!tiles.empty() && tiles.begin()->second.samples > 1) {
+        terrain.sourceResolutionM = static_cast<float>(
+            TerrainModel::metersPerDegreeLat(centerLat) /
+            (tiles.begin()->second.samples - 1));
     }
     return terrain;
 }
@@ -602,6 +612,10 @@ TerrainModel TerrainLoader::fromGeoTIFF(const std::string& path,
         }
     }
 
+    // A GeoTIFF's pixels are its samples, so the post spacing is the source
+    // resolution. This is how a USGS 3DEP LiDAR-derived DEM reports its 1 m
+    // detail once loaded.
+    t.sourceResolutionM = std::min(t.metersPerCellX(), t.metersPerCellZ());
     return t;
 }
 #endif // HAVE_GDAL / !HAVE_GDAL

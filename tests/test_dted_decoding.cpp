@@ -168,6 +168,13 @@ int main(int argc, char** argv) {
                     }
                 return sum;
             };
+            // DTED posts are the source samples, so the post spacing is the
+            // resolution. 30 arc-seconds is about 926 m north-south but only
+            // about 673 m east-west at 43.5 N, and sourceResolutionM reports
+            // the finer of the two axes rather than averaging them.
+            require(reference.sourceResolutionM > 600.0f &&
+                        reference.sourceResolutionM < 700.0f,
+                    "reference reports its true 30 arc-second post spacing");
             require(rasterChecksum(0, 0, 121, 121) == 49187, "GDAL reference elevation checksum");
             require(rasterChecksum(5, 5, 5, 5) == 305, "GDAL reference subwindow checksum");
             std::cout << "GDAL n43 reference registration and elevation checksums passed\n";
