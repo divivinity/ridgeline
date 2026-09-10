@@ -471,6 +471,13 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
               "leaving the ruler clears its measurement");
     }
 
+    // The cursor readout exists and starts hidden: it must never report a
+    // position the cursor is not actually over.
+    auto* readout = window.findChild<QLabel*>("CursorReadout");
+    check(readout != nullptr, "the viewport carries a cursor readout");
+    check(readout && readout->isHidden(),
+          "the cursor readout stays hidden until the cursor is over terrain");
+
     auto* dock = window.findChild<QDockWidget*>("SourcesDock");
     auto* toggle = window.findChild<QToolButton*>("SourcesPanelButton");
     check(dock && toggle, "source dock and toolbar toggle exist");

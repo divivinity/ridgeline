@@ -34,6 +34,10 @@ ScaleBar chooseScaleBar(double metresPerPixel, double maxPixels);
 // Formats a distance with a unit that suits its magnitude.
 QString formatDistance(double metres);
 
+// Rounds a value that would display as a signed zero to a plain zero, so a
+// hair-below-datum elevation reads "0 m" rather than "-0 m".
+double withoutNegativeZero(double value, int decimals = 0);
+
 // Compass point for a bearing, e.g. 0 -> "N", 45 -> "NE".
 QString compassPoint(double bearingDeg);
 

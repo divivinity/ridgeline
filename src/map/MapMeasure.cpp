@@ -92,6 +92,13 @@ QString MapMeasure::formatDistance(double metres) {
     return QString::number(km, 'f', km < 10.0 ? 2 : 1) + " km";
 }
 
+double MapMeasure::withoutNegativeZero(double value, int decimals) {
+    if (!std::isfinite(value)) return value;
+    const double scale = std::pow(10.0, decimals);
+    const double rounded = std::round(value * scale) / scale;
+    return rounded == 0.0 ? 0.0 : rounded;
+}
+
 QString MapMeasure::compassPoint(double bearingDeg) {
     if (!std::isfinite(bearingDeg)) return {};
     static const char* points[] = {"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
