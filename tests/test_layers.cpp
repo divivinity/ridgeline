@@ -3,6 +3,8 @@
 #include "map/LayerStack.h"
 #include "map/Hillshade.h"
 #include "map/TileProviders.h"
+
+#include <QColor>
 #include "data/TerrainLoader.h"
 
 #include <cmath>
@@ -177,6 +179,27 @@ void testProviders() {
           "cache path uses the provider namespace and logical x/y");
     check(TileProviders::cachePath(esri, 5, 7, 22) != TileProviders::cachePath(topo, 5, 7, 22),
           "two providers never share a cache path");
+
+    // USGS answers out-of-coverage requests with HTTP 200 and a uniform fill,
+    // so a successful download is not evidence that a map arrived. Verified
+    // against the live service: an Atlantic tile returns a flat pale blue.
+    QImage blank(256, 256, QImage::Format_RGBA8888);
+    blank.fill(QColor(186, 226, 253));
+    check(TileProviders::isFeatureless(blank), "a uniform no-data tile is featureless");
+
+    QImage jpegish = blank;
+    for (int y = 0; y < jpegish.height(); ++y)
+        for (int x = 0; x < jpegish.width(); ++x)
+            jpegish.setPixel(x, y, qRgb(186 + ((x + y) % 3), 226, 253));
+    check(TileProviders::isFeatureless(jpegish),
+          "slight compression noise across a flat fill is still featureless");
+
+    QImage cartography = blank;
+    for (int x = 0; x < cartography.width(); ++x)
+        cartography.setPixel(x, 128, qRgb(120, 90, 40));   // a contour line
+    check(!TileProviders::isFeatureless(cartography),
+          "a tile carrying any cartography is not featureless");
+    check(TileProviders::isFeatureless(QImage()), "a null image is featureless");
 
     MapTileProvider found;
     check(TileProviders::forLayer("usgs-topo", found) && found.id == "usgs-topo",

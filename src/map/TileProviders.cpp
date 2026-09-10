@@ -1,5 +1,8 @@
 #include "map/TileProviders.h"
 
+#include <algorithm>
+#include <cstdlib>
+
 MapTileProvider TileProviders::esriImagery() {
     MapTileProvider p;
     p.id = "satellite";
@@ -49,4 +52,24 @@ QString TileProviders::cachePath(const MapTileProvider& provider, int z, int x, 
     // inspectable by provider.
     return QStringLiteral("imagery/%1/%2/%3/%4.tile")
         .arg(provider.id).arg(z).arg(x).arg(y);
+}
+
+bool TileProviders::isFeatureless(const QImage& image) {
+    if (image.isNull() || image.width() < 2 || image.height() < 2) return true;
+    const QImage rgb = image.convertToFormat(QImage::Format_RGB32);
+    const QRgb reference = rgb.pixel(0, 0);
+    const int r0 = qRed(reference), g0 = qGreen(reference), b0 = qBlue(reference);
+    // Every pixel, not a sample grid: a sparse grid can step straight over a
+    // single contour line, and the blank case exits on the first differing
+    // pixel anyway, so the full scan only runs when the tile really is flat.
+    for (int y = 0; y < rgb.height(); ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
+        for (int x = 0; x < rgb.width(); ++x) {
+            // JPEG tiles vary slightly even across a flat fill.
+            if (std::abs(qRed(line[x]) - r0) > 6 || std::abs(qGreen(line[x]) - g0) > 6 ||
+                std::abs(qBlue(line[x]) - b0) > 6)
+                return false;
+        }
+    }
+    return true;
 }
