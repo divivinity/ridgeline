@@ -12,8 +12,16 @@ class OverlayToolbar : public QWidget {
 public:
     explicit OverlayToolbar(QWidget* parent = nullptr);
 
+public slots:
+    // Kept in step when the viewport cancels the ruler itself, e.g. on Escape.
+    void setMeasureChecked(bool checked);
+
 signals:
     void heatmapMetricChanged(HeatmapOverlay::Metric metric);
+    void measureModeToggled(bool active);
     void resetViewRequested();
     void topViewRequested();
+
+private:
+    class QToolButton* m_measureButton = nullptr;
 };

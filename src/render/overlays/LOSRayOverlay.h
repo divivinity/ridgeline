@@ -23,6 +23,10 @@ public:
     // inside draw() previously meant one overlay served two concerns and the
     // caller had to draw unconditionally to keep the probe alive.
     void drawProbe(const glm::mat4& mvp);
+    // Draws an arbitrary span, used by the ruler. Same geometry as the
+    // inspected-point probe, so it needs no second overlay.
+    void setProbeSpan(const glm::vec3& from, const glm::vec3& to);
+    void clearProbe() { m_hasProbe = false; }
     void destroy();
 
 private:

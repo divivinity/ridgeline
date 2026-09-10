@@ -444,6 +444,33 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
         north->setCameraAzimuth(before);
     }
 
+    // The ruler: two terrain points give a ground distance, and it must not
+    // fight the placement tool for the same click.
+    auto* measure = window.findChild<QToolButton*>("MeasureButton");
+    check(measure && measure->isCheckable(), "the toolbar offers a measure toggle");
+    if (measure && viewport) {
+        measure->setChecked(true);
+        settle(60);
+        check(viewport->measureMode(), "the toggle turns the ruler on");
+        check(viewport->measurementSummary().isEmpty(),
+              "no measurement exists before any point is taken");
+
+        // Placement and measuring both consume a terrain click, so starting
+        // one must cancel the other rather than leaving the click ambiguous.
+        viewport->setPlacementMode(true);
+        settle(60);
+        viewport->setMeasureMode(true);
+        settle(60);
+        check(viewport->measureMode(), "measuring survives being re-enabled");
+
+        viewport->setMeasureMode(false);
+        settle(60);
+        check(!viewport->measureMode() && !measure->isChecked(),
+              "turning the ruler off unchecks the toolbar toggle");
+        check(viewport->measurementSummary().isEmpty(),
+              "leaving the ruler clears its measurement");
+    }
+
     auto* dock = window.findChild<QDockWidget*>("SourcesDock");
     auto* toggle = window.findChild<QToolButton*>("SourcesPanelButton");
     check(dock && toggle, "source dock and toolbar toggle exist");

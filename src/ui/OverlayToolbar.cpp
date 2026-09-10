@@ -2,6 +2,7 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSignalBlocker>
 #include <QToolButton>
 
 OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
@@ -34,6 +35,16 @@ OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
     layout->addWidget(metric);
     layout->addStretch();
 
+    m_measureButton = new QToolButton();
+    m_measureButton->setObjectName("MeasureButton");
+    m_measureButton->setText("Measure");
+    m_measureButton->setCheckable(true);
+    m_measureButton->setToolTip(
+        "Measure ground distance and bearing between two points on the map");
+    connect(m_measureButton, &QToolButton::toggled,
+            this, &OverlayToolbar::measureModeToggled);
+    layout->addWidget(m_measureButton);
+
     auto* top = new QToolButton();
     top->setObjectName("TopMapViewButton");
     top->setText("Top view");
@@ -47,4 +58,10 @@ OverlayToolbar::OverlayToolbar(QWidget* parent) : QWidget(parent) {
     fit->setToolTip("Return to the default terrain view (R while the map is focused)");
     connect(fit, &QToolButton::clicked, this, &OverlayToolbar::resetViewRequested);
     layout->addWidget(fit);
+}
+
+void OverlayToolbar::setMeasureChecked(bool checked) {
+    if (!m_measureButton || m_measureButton->isChecked() == checked) return;
+    const QSignalBlocker blocker(m_measureButton);
+    m_measureButton->setChecked(checked);
 }

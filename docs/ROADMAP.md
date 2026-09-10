@@ -520,6 +520,34 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Map interaction: scale, north and a ruler — September 10
+
+- Roadmap item 3, the second of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.
+- MapMeasure holds the geodesic maths with no widget or GL dependency, so it is
+  tested headlessly: great-circle distance, initial bearing, planar distance for
+  scenes without a georeference, and a 1/2/5 rounded scale bar.
+- A scale bar and a north indicator are painted children of the viewport, so
+  they composite into an exported PNG the way the result legend already does.
+  Scale is computed at the camera's focus from the 45 degree projection and is
+  labelled as such: a perspective view of a tilted plane has no single scale.
+- A ruler mode measures ground distance, bearing and rise between two clicked
+  terrain points, reusing the inspector's probe geometry to draw the span.
+  Without a georeference it reports distance and rise but no bearing, rather
+  than inventing a north that does not exist. Placement and measuring both
+  consume a terrain click, so enabling one cancels the other.
+- Reviewing it on screen caught a defect no test would have: the north arrow
+  was 180 degrees wrong. Camera parks the eye at +Z for azimuth zero and looks
+  back at the target, so the view faces -Z, and terrain rows run south to north
+  with rising Z - azimuth zero is looking SOUTH. northScreenAngleDeg() now
+  exposes that convention and a regression pins all four quadrants.
+- Verified on screen: the scale bar reads 200 m on the 2000 m demo scene, which
+  matches the camera maths; the ruler reported 779 m and a 9.0 m rise with no
+  bearing on the ungeoreferenced demo terrain, as designed.
+- Not established: no measurement against a surveyed reference distance, and no
+  check on a georeferenced scene where the bearing path is exercised. Scale is
+  accurate at the view centre only. No 2D/3D mode switch, no coordinate readout
+  under the cursor, no zoom-to-cursor.
+
 ### Map layer stack, hillshade and USGS topographic — September 10
 
 - Roadmap item 6, the first of five slices in the agreed order 6 -> 3 -> 2 -> 7

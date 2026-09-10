@@ -376,6 +376,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     overlayTb->addWidget(m_overlayBar);
     connect(m_overlayBar, &OverlayToolbar::heatmapMetricChanged,
             m_viewport, &ViewportWidget::setHeatmapMetric);
+    connect(m_overlayBar, &OverlayToolbar::measureModeToggled,
+            m_viewport, &ViewportWidget::setMeasureMode);
+    connect(m_viewport, &ViewportWidget::measureModeChanged,
+            m_overlayBar, &OverlayToolbar::setMeasureChecked);
+    connect(m_viewport, &ViewportWidget::measureModeChanged, this, [this](bool active) {
+        if (active)
+            m_statusLabel->setText("  Measuring · click two points on the map · Esc to stop");
+        else
+            m_statusLabel->setText("  Ready");
+    });
+    connect(m_viewport, &ViewportWidget::measurementChanged, this, [this](const QString& text) {
+        if (!text.isEmpty()) m_statusLabel->setText("  " + text);
+    });
     connect(m_overlayBar, &OverlayToolbar::resetViewRequested,
             m_viewport, &ViewportWidget::resetView);
     connect(m_overlayBar, &OverlayToolbar::topViewRequested,
