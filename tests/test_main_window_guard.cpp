@@ -845,6 +845,236 @@ void testScenarioOpeningProgressAndRecovery() {
 
 }  // namespace
 
+// The application's own Export dialogs, end to end. A solved georeferenced map
+// is exported through File > Export, reopened from disk and checked for the
+// selected metric's legend, the elevation attribution and coordinate content,
+// alongside picker cancellation, a deterministic write failure and a retry.
+void testExportsThroughApplicationDialogs() {
+    QTemporaryDir out;
+    QTemporaryDir cache;
+    check(out.isValid() && cache.isValid(), "export fixture directory is available");
+    if (!out.isValid() || !cache.isValid()) return;
+
+    // Keep the run hermetic: an empty cache in offline mode means no basemap
+    // request reaches the network, so the export under test cannot depend on
+    // a live tile provider or stall on one.
+    const QByteArray oldCache = qgetenv("RIDGELINE_CACHE_DIR");
+    const QByteArray oldOffline = qgetenv("RIDGELINE_OFFLINE");
+    const auto envGuard = qScopeGuard([&] {
+        qputenv("RIDGELINE_CACHE_DIR", oldCache);
+        qputenv("RIDGELINE_OFFLINE", oldOffline);
+    });
+    qputenv("RIDGELINE_CACHE_DIR", cache.path().toUtf8());
+    qputenv("RIDGELINE_OFFLINE", "1");
+
+    // Georeferenced terrain, so exported rows carry latitude and longitude.
+    // Origin 10E/45N at one arc-second spacing; heights are distinct, positive
+    // and finite so a wrong sample cannot pass a range check by accident.
+    const int samples = 16;
+    const int recordSize = 8 + samples * 2 + 4;
+    QByteArray dted(3428 + samples * recordSize, ' ');
+    auto field = [&](int at, const QByteArray& value) {
+        dted.replace(at, value.size(), value);
+    };
+    field(0, "UHL1"); field(4, "0100000E"); field(12, "0450000N");
+    field(20, "0010"); field(24, "0010");
+    const QByteArray count = QByteArray::number(samples).rightJustified(4, '0');
+    field(47, count); field(51, count);
+    field(80, "DSI"); field(224, "WGS84"); field(728, "ACC");
+    for (int col = 0; col < samples; ++col) {
+        const int at = 3428 + col * recordSize;
+        field(at, QByteArray(recordSize, '\0'));
+        dted[at] = char(0xaa);
+        dted[at + 3] = char(col);
+        dted[at + 5] = char(col);
+        for (int row = 0; row < samples; ++row) {
+            const int metres = 120 + row * 4 + col;
+            dted[at + 8 + row * 2] = char((metres >> 8) & 0xff);
+            dted[at + 9 + row * 2] = char(metres & 0xff);
+        }
+        quint32 sum = 0;
+        for (int i = 0; i < recordSize - 4; ++i)
+            sum += static_cast<unsigned char>(dted[at + i]);
+        for (int i = 0; i < 4; ++i)
+            dted[at + recordSize - 4 + i] = char((sum >> (24 - i * 8)) & 255);
+    }
+    const QString terrainPath = out.filePath("export-fixture.dt1");
+    QFile terrainFile(terrainPath);
+    check(terrainFile.open(QIODevice::WriteOnly), "export terrain fixture opens");
+    check(terrainFile.write(dted) == dted.size(), "export terrain fixture is complete");
+    terrainFile.close();
+
+    MainWindow window;
+    window.show();
+    settle(200);
+    window.loadTerrain(terrainPath);
+    settle(200);
+
+    auto* run = findButton(window, "Run coverage");
+    auto* status = window.findChild<QLabel*>("WorkspaceStatus");
+    auto* legend = window.findChild<HeatmapLegend*>();
+    auto* attribution = window.findChild<QLabel*>("ElevationAttribution");
+    auto* viewport = window.findChild<ViewportWidget*>();
+    auto* metric = window.findChild<QComboBox*>("CoverageMetricCombo");
+    check(run && status && legend && attribution && viewport && metric,
+          "export fixture workspace is ready");
+    if (!run || !status || !legend || !attribution || !viewport || !metric) return;
+
+    if (QComboBox* mode = findModeCombo(window)) mode->setCurrentIndex(0);
+    qApp->processEvents();
+    run->click();
+    settle(200);
+    check(legend->isVisible(), "solved coverage shows its result legend before export");
+
+    // The legend was previously hardcoded to dBm for every metric. Compare its
+    // rendered pixels across two selections: identical output would mean the
+    // exported map credits the wrong scale to the displayed field.
+    metric->setCurrentIndex(0);
+    settle(150);
+    const QImage desiredLegend = legend->grab().toImage();
+    metric->setCurrentIndex(2);
+    settle(150);
+    const QImage snrLegend = legend->grab().toImage();
+    check(!desiredLegend.isNull() && !snrLegend.isNull() && desiredLegend != snrLegend,
+          "result legend redraws for the selected coverage metric");
+    check(attribution->isVisible() && attribution->text().contains("imported DTED"),
+          "map attribution credits the imported elevation source");
+
+    // Drive the application's own save dialog, as a user would.
+    auto exportThroughDialog = [&](const char* slot, const QString& path,
+                                   bool cancel, bool expectError,
+                                   bool reserveAfterAccept = false) {
+        bool sawPicker = false, sawError = false, timedOut = false;
+        QString errorText;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            if (auto* dialog = window.findChild<QFileDialog*>(); dialog && dialog->isVisible()) {
+                sawPicker = true;
+                if (cancel || elapsed.elapsed() > 10000) {
+                    timedOut = !cancel;
+                    dialog->reject();
+                } else if (auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit")) {
+                    edit->setText(path);
+                    QMetaObject::invokeMethod(dialog, "accept");
+                    // Reserve the freshly validated target as a directory only
+                    // after the picker returns it. Creating it beforehand would
+                    // make QFileDialog navigate into it instead of accepting a
+                    // filename, so the export would never be attempted.
+                    if (reserveAfterAccept && dialog->result() == QDialog::Accepted)
+                        check(QDir().mkdir(path), "export failure fixture reserves its target");
+                }
+            } else if (auto* box = window.findChild<QMessageBox*>(); box && box->isVisible()) {
+                sawError = true;
+                errorText = box->text();
+                box->reject();
+            }
+        });
+        driver.start(25);
+        check(QMetaObject::invokeMethod(&window, slot), "export action is reachable");
+        driver.stop();
+        check(sawPicker && !timedOut && sawError == expectError,
+              "export dialog completes with the expected outcome");
+        return errorText;
+    };
+
+    // Unicode destinations: a narrow-path writer creates a differently named
+    // file, or none, and the reopen below would fail.
+    const QString csvPath = out.filePath(QString::fromUtf8("覆盖-é.csv"));
+    exportThroughDialog("onExportCsv", csvPath, true, false);
+    check(!QFile::exists(csvPath), "cancelling the CSV picker writes no file");
+
+    exportThroughDialog("onExportCsv", csvPath, false, false);
+    check(status->text().contains("CSV exported"), "successful CSV export is reported");
+    QFile csv(csvPath);
+    check(csv.open(QIODevice::ReadOnly), "exported CSV reopens from its Unicode path");
+    const QString csvText = QString::fromUtf8(csv.readAll());
+    csv.close();
+    const qint64 csvSize = QFileInfo(csvPath).size();
+    const QStringList rows = csvText.split('\n', Qt::SkipEmptyParts);
+    check(rows.size() >= 2, "exported CSV has a header and at least one data row");
+
+    const QStringList header = rows.value(0).split(',');
+    check(header.size() == 12 && header.value(0) == "x_m" &&
+              header.value(2) == "latitude" && header.value(3) == "longitude" &&
+              header.value(4) == "terrain_elevation_m" &&
+              header.value(11).trimmed() == "in_service",
+          "georeferenced CSV header names its coordinate and metric columns");
+
+    // Twelve fields per row also proves the classic numeric locale held: a
+    // comma-decimal setting would split every number into extra columns.
+    bool rowsWellFormed = rows.size() >= 2;
+    for (int i = 1; i < rows.size() && rowsWellFormed; ++i) {
+        const QStringList cells = rows.at(i).split(',');
+        if (cells.size() != 12) { rowsWellFormed = false; break; }
+        bool okLat = false, okLon = false, okElevation = false;
+        const double lat = cells.value(2).toDouble(&okLat);
+        const double lon = cells.value(3).toDouble(&okLon);
+        const double elevation = cells.value(4).toDouble(&okElevation);
+        rowsWellFormed = okLat && okLon && okElevation &&
+            lat >= 45.0 && lat <= 45.01 && lon >= 10.0 && lon <= 10.01 &&
+            elevation >= 119.0 && elevation <= 201.0;
+    }
+    check(rowsWellFormed,
+          "every exported row carries fixture coordinates, elevation and 12 locale-safe columns");
+
+    const QString pngPath = out.filePath(QString::fromUtf8("覆盖-é.png"));
+    exportThroughDialog("onExportPng", pngPath, true, false);
+    check(!QFile::exists(pngPath), "cancelling the PNG picker writes no file");
+
+    exportThroughDialog("onExportPng", pngPath, false, false);
+    check(status->text().contains("PNG exported"), "successful PNG export is reported");
+    const QImage exported(pngPath);
+    check(!exported.isNull(), "exported PNG reopens and decodes from its Unicode path");
+
+    // The legend and attribution are child widgets of the viewport, so they
+    // reach the file only if grab() composites them. Hiding both and grabbing
+    // again gives a baseline the exported bytes must differ from.
+    legend->hide();
+    attribution->hide();
+    settle(150);
+    const QImage withoutOverlays = viewport->grab().toImage();
+    legend->show();
+    attribution->show();
+    settle(150);
+    check(!exported.isNull() && exported.size() == withoutOverlays.size(),
+          "exported PNG covers the whole map viewport");
+    check(!exported.isNull() && exported != withoutOverlays,
+          "exported PNG contains the result legend and elevation attribution");
+
+    // A destination reserved as a directory fails deterministically, without
+    // changing permissions or touching an existing user file.
+    const QString blocked = out.filePath("blocked.csv");
+    const QString error = exportThroughDialog("onExportCsv", blocked, false, true, true);
+    check(error.contains("Could not write CSV"), "failed export explains the write failure");
+    check(QFileInfo(blocked).isDir(), "failed export leaves the reserved target untouched");
+    check(QFileInfo(csvPath).size() == csvSize,
+          "a failed export does not disturb an earlier exported file");
+    check(QDir().rmdir(blocked), "remove the export blocker for retry");
+    exportThroughDialog("onExportCsv", blocked, false, false);
+    check(QFileInfo(blocked).isFile() && QFileInfo(blocked).size() > 0,
+          "retry after a failed export writes the file");
+
+    // Programmatic checks cannot judge whether a human can read the legend or
+    // the attribution. Keep the exported pair for review when a caller asks,
+    // without overwriting anything already in the chosen directory.
+    const QString captureDir = qEnvironmentVariable("RIDGELINE_QA_CAPTURE_DIR");
+    if (!captureDir.isEmpty()) {
+        const QString pngCapture = QDir(captureDir).filePath("exported-coverage.png");
+        const QString csvCapture = QDir(captureDir).filePath("exported-coverage.csv");
+        check(QDir().mkpath(captureDir) && !QFile::exists(pngCapture) &&
+                  !QFile::exists(csvCapture),
+              "export capture uses new output paths");
+        if (!QFile::exists(pngCapture))
+            check(QFile::copy(pngPath, pngCapture), "exported map PNG captured for review");
+        if (!QFile::exists(csvCapture))
+            check(QFile::copy(csvPath, csvCapture), "exported metrics CSV captured for review");
+    }
+
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
 int main(int argc, char** argv) {
     QSurfaceFormat format;
     format.setVersion(3, 3);
@@ -866,6 +1096,7 @@ int main(int argc, char** argv) {
     testOverlayCheckboxesMatchWhatTheViewportDraws();
     testTerrainFailureAndCancellationPreserveWorkspace();
     testScenarioOpeningProgressAndRecovery();
+    testExportsThroughApplicationDialogs();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";
