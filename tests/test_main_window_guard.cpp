@@ -10,6 +10,7 @@
 // requires MainWindow to expose test hooks.
 #include "ui/MainWindow.h"
 #include "ui/WorkspaceTheme.h"
+#include "ui/MapFurniture.h"
 #include "ui/LocationDialog.h"
 
 #include <QAbstractButton>
@@ -43,6 +44,7 @@
 #include <QElapsedTimer>
 #include "data/TileBatchDownloader.h"
 
+#include <cmath>
 #include <iostream>
 #include <string>
 
@@ -395,6 +397,51 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
         coverageOpacity->setValue(40);
         settle(60);
         check(coverageOpacity->value() == 40, "opacity keeps the value it was given");
+    }
+
+    // Map furniture: a scale bar that reports a real ground distance, and a
+    // north arrow that tracks the camera.
+    auto* scaleBar = window.findChild<MapScaleBar*>("MapScaleBar");
+    auto* north = window.findChild<NorthIndicator*>("NorthIndicator");
+    check(scaleBar && north, "the viewport carries a scale bar and a north indicator");
+    if (scaleBar) {
+        check(scaleBar->isVisible(), "the scale bar is shown once a camera exists");
+        check(scaleBar->metresPerPixel() > 0.0, "the scale bar has a real ground scale");
+        check(scaleBar->barMetres() > 0.0 && !scaleBar->barLabel().isEmpty(),
+              "the scale bar reports a labelled distance");
+        // The demo scene is 2000 m across, so a bar spanning the whole view
+        // would be wrong by orders of magnitude either way.
+        check(scaleBar->barMetres() <= 2000.0,
+              "the scale bar is not larger than the scene it measures");
+        const QRect bounds(scaleBar->mapTo(&window, QPoint{}), scaleBar->size());
+        check(window.rect().contains(bounds), "the scale bar is not clipped");
+    }
+    if (north && viewport) {
+        const double before = north->cameraAzimuth();
+        viewport->topView();
+        settle(80);
+        viewport->resetView();
+        settle(80);
+        check(std::abs(north->cameraAzimuth() - before) < 1e-6,
+              "resetting the view restores the north indicator's bearing");
+        check(!north->toolTip().isEmpty(), "the north indicator explains itself");
+        // Camera parks the eye at +Z for azimuth zero and looks back at the
+        // target, so it faces -Z. Terrain rows run south to north with rising
+        // Z, so azimuth zero is looking SOUTH and north is at the bottom of
+        // the screen. An arrow drawn at -azimuth points exactly backwards.
+        north->setCameraAzimuth(0.0);
+        check(std::abs(north->northScreenAngleDeg() - 180.0) < 1e-9,
+              "at azimuth zero the camera looks south, so north points down");
+        north->setCameraAzimuth(90.0);
+        check(std::abs(north->northScreenAngleDeg() - 90.0) < 1e-9,
+              "at azimuth ninety north is a quarter turn clockwise from up");
+        north->setCameraAzimuth(180.0);
+        check(std::abs(north->northScreenAngleDeg()) < 1e-9,
+              "at azimuth one eighty the camera looks north, so north points up");
+        north->setCameraAzimuth(-90.0);
+        check(std::abs(north->northScreenAngleDeg() - 270.0) < 1e-9,
+              "a negative azimuth wraps into range");
+        north->setCameraAzimuth(before);
     }
 
     auto* dock = window.findChild<QDockWidget*>("SourcesDock");

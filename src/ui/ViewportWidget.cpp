@@ -31,6 +31,8 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     m_jammerBubble.visible = false;
     m_fresnel.visible = false;
 
+    m_scaleBar = new MapScaleBar(this);
+    m_northIndicator = new NorthIndicator(this);
     m_mapInfoLabel = new QLabel(this);
     m_mapInfoLabel->setObjectName("MapTerrainSummary");
     m_mapInfoLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -141,6 +143,11 @@ void ViewportWidget::initializeGL() {
 void ViewportWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
     m_heatmapLegend->reposition(QSize(w, h));
+    if (m_scaleBar)
+        m_scaleBar->move(14, h - m_scaleBar->height() - 14);
+    if (m_northIndicator)
+        m_northIndicator->move(w - m_northIndicator->width() - 14, 14);
+    updateMapFurniture();
     repositionHud();
 }
 
@@ -152,6 +159,7 @@ void ViewportWidget::paintGL() {
     const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
                                             glm::vec3(1.0f, kVertScale, 1.0f));
     m_lastMVP = m_camera.mvp(aspect) * vertScale;
+    updateMapFurniture();
 
     m_terrain.draw(m_lastMVP);
     // Base rasters and relief are composited into the basemap texture, so they
@@ -255,6 +263,24 @@ void ViewportWidget::refreshOverlays() {
     buildMarkers();
     doneCurrent();
     update();
+}
+
+
+// Ground metres per screen pixel at the camera's focus. The projection is a
+// 45-degree vertical perspective, so the visible height at the target distance
+// is 2 * radius * tan(22.5 degrees). Vertical exaggeration scales Y only and
+// therefore does not affect horizontal scale.
+void ViewportWidget::updateMapFurniture() {
+    if (!m_scaleBar && !m_northIndicator) return;
+    if (m_northIndicator) m_northIndicator->setCameraAzimuth(m_camera.azimuth);
+    if (!m_scaleBar) return;
+    if (height() <= 0 || !(m_camera.radius > 0.0f)) {
+        m_scaleBar->setMetresPerPixel(0.0);
+        return;
+    }
+    const double visibleHeightM =
+        2.0 * static_cast<double>(m_camera.radius) * std::tan(45.0 * 0.5 * 3.14159265358979323846 / 180.0);
+    m_scaleBar->setMetresPerPixel(visibleHeightM / static_cast<double>(height()));
 }
 
 void ViewportWidget::reloadTerrain() {

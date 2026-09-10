@@ -3,6 +3,7 @@
 #include "map/LayerStack.h"
 #include "map/Hillshade.h"
 #include "map/TileProviders.h"
+#include "map/MapMeasure.h"
 
 #include <QColor>
 #include "data/TerrainLoader.h"
@@ -210,6 +211,67 @@ void testProviders() {
           "an analysis layer has no tile provider");
 }
 
+
+void testMeasurement() {
+    // Asheville NC to Charlotte NC: about 160 km on a bearing near east-southeast.
+    const double d = MapMeasure::haversineMetres(35.5951, -82.5515, 35.2271, -80.8431);
+    check(d > 155000.0 && d < 165000.0, "great-circle distance matches a known pair");
+    const double b = MapMeasure::initialBearingDeg(35.5951, -82.5515, 35.2271, -80.8431);
+    check(b > 100.0 && b < 115.0, "initial bearing points east-southeast");
+
+    // One degree of latitude is close to 111 km anywhere.
+    const double degree = MapMeasure::haversineMetres(0.0, 0.0, 1.0, 0.0);
+    check(std::abs(degree - 111195.0) < 400.0, "one degree of latitude is about 111 km");
+    check(std::abs(MapMeasure::haversineMetres(10.0, 20.0, 10.0, 20.0)) < 1e-6,
+          "a point is zero distance from itself");
+
+    // A path across the antimeridian must take the short way round.
+    const double wrapped = MapMeasure::haversineMetres(0.0, 179.5, 0.0, -179.5);
+    check(wrapped > 100000.0 && wrapped < 120000.0,
+          "an antimeridian crossing measures the short way round");
+
+    check(std::abs(MapMeasure::initialBearingDeg(0.0, 0.0, 1.0, 0.0)) < 1e-6,
+          "due north is bearing zero");
+    check(std::abs(MapMeasure::initialBearingDeg(0.0, 0.0, 0.0, 1.0) - 90.0) < 1e-6,
+          "due east is bearing ninety");
+    check(std::abs(MapMeasure::initialBearingDeg(0.0, 0.0, -1.0, 0.0) - 180.0) < 1e-6,
+          "due south is bearing one eighty");
+
+    check(std::abs(MapMeasure::planarMetres(0, 0, 3, 4) - 5.0) < 1e-9,
+          "planar distance is euclidean");
+
+    check(MapMeasure::compassPoint(0) == "N", "zero degrees is north");
+    check(MapMeasure::compassPoint(45) == "NE", "forty five degrees is north east");
+    check(MapMeasure::compassPoint(359) == "N", "just short of a full turn is north");
+    check(MapMeasure::compassPoint(-90) == "W", "a negative bearing wraps");
+}
+
+void testScaleBar() {
+    // 10 m per pixel over 200 px is 2000 m, so the bar should read 2 km.
+    const auto bar = MapMeasure::chooseScaleBar(10.0, 200.0);
+    check(bar.valid(), "a positive scale produces a bar");
+    check(std::abs(bar.metres - 2000.0) < 1e-9, "the bar takes a round 1/2/5 value");
+    check(std::abs(bar.pixels - 200.0) < 1e-9, "the bar is drawn at its true width");
+    check(bar.label == "2.00 km", "the bar is labelled in kilometres");
+    check(bar.pixels <= 200.0, "the bar never exceeds the space allowed");
+
+    for (double scale : {0.05, 0.5, 3.0, 42.0, 1234.0}) {
+        const auto b = MapMeasure::chooseScaleBar(scale, 180.0);
+        check(b.valid() && b.pixels <= 180.0,
+              "every scale yields a bar that fits the space allowed");
+        check(!b.label.isEmpty(), "every bar carries a label");
+    }
+
+    check(!MapMeasure::chooseScaleBar(0.0, 200.0).valid(), "a zero scale has no bar");
+    check(!MapMeasure::chooseScaleBar(-1.0, 200.0).valid(), "a negative scale has no bar");
+    check(!MapMeasure::chooseScaleBar(10.0, 0.0).valid(), "no space means no bar");
+
+    check(MapMeasure::formatDistance(0.5) == "0.50 m", "sub-metre keeps two decimals");
+    check(MapMeasure::formatDistance(250.0) == "250 m", "metres round to whole numbers");
+    check(MapMeasure::formatDistance(15000.0) == "15.0 km", "long distances use kilometres");
+    check(MapMeasure::formatDistance(-1.0) == "unavailable", "a negative distance is unavailable");
+}
+
 } // namespace
 
 int main() {
@@ -220,6 +282,8 @@ int main() {
     testScenarioRoundTrip();
     testHillshade();
     testProviders();
+    testMeasurement();
+    testScaleBar();
     if (failures == 0) std::cout << "Layer tests passed.\n";
     return failures == 0 ? 0 : 1;
 }
