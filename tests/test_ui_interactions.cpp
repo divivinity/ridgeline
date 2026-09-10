@@ -112,7 +112,14 @@ void testCompactMapControls() {
     const QString details = TerrainPresentation::gridDetails(rectangular);
     CHECK(details.contains("120 × 80 samples"));
     CHECK(details.contains("12.5 m east–west × 30.0 m north–south"));
-    CHECK(details.contains("not a claim of source resolution or accuracy"));
+    // The old blanket disclaimer is replaced by a concrete statement: this
+    // model carries no source resolution, so it must say so rather than let
+    // the grid spacing be read as the data's resolution.
+    CHECK(details.contains("Source resolution is not known"));
+    rectangular.sourceResolutionM = 30.0f;
+    const QString withSource = TerrainPresentation::gridDetails(rectangular);
+    CHECK(withSource.contains("Source resolution: about 30.0 m"));
+    CHECK(withSource.contains("interpolated"));
     for (auto type : {TerrainSource::Type::Hills, TerrainSource::Type::Flat}) {
         CHECK(TerrainPresentation::elevationReference(type).contains("Synthetic"));
         CHECK(!TerrainPresentation::elevationReference(type).contains("MSL"));

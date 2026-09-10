@@ -520,6 +520,31 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Terrain definition: resolution reporting and finer elevation — September 10
+
+- Roadmap item 7, the fourth of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.
+- Streamed elevation was floored at 8 m per pixel and capped at zoom 14, so a
+  2 km analysis area fetched no finer data than a 15 km one and every extra
+  output sample was interpolation. The floor is now 2 m and the cap zoom 15.
+- Zoom 15 was verified against the live service rather than assumed: a zoom-15
+  Terrarium tile returns 88 KB of PNG and zoom 16 returns 404, so 15 is exactly
+  the right ceiling.
+- TerrainModel now carries sourceResolutionM, the ground sampling distance of
+  the data a grid was built from, set from the fetched zoom for streamed
+  terrain and from the post spacing for DTED. Zero means unknown.
+- The location tooltip previously carried a blanket disclaimer that grid
+  spacing was "not a claim of source resolution". It now states the source
+  resolution and says which way the grid differs: whether the extra samples are
+  interpolated, whether detail is being discarded, or neither. An unknown
+  source resolution is reported as unknown rather than guessed.
+- Cache implication, worth knowing before shipping: the zoom a request resolves
+  to determines its cache paths, so portable offline packages built for small
+  areas under the old cap will miss and re-download at zoom 15. Larger areas
+  resolve to the same zoom as before and are unaffected. Four test fixtures had
+  to move from zoom 14 to 15 for exactly this reason.
+- Not established: no higher-resolution imagery work, no progressive or
+  incremental loading, and no LiDAR-derived elevation - that is item 12.
+
 ### Workspace: menus, shortcuts and layout recovery — September 10
 
 - Roadmap item 2, the third of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.

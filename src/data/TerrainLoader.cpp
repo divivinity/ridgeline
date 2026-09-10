@@ -167,6 +167,8 @@ TerrainModel TerrainLoader::fromDTED(const std::string& path) {
         }
     }
 
+    // DTED posts are the source samples, so the grid spacing is the resolution.
+    t.sourceResolutionM = std::min(cellSizeXM, cellSizeZM);
     t.validate();
     return t;
 }
