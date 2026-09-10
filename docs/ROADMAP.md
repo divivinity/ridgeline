@@ -520,6 +520,38 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### LiDAR: derived elevation supported, point clouds deferred — September 10
+
+- Roadmap item 12, the last of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.
+  Delivered as the tractable half, with the rest written up rather than
+  half-built.
+- What works: USGS 3DEP publishes 1 m bare-earth DEMs derived from LiDAR as
+  GeoTIFFs. Those load through the existing GeoTIFF path, and now report their
+  source resolution, so a 1 m LiDAR-derived DEM is legible as such against the
+  roughly 10 m of the best streamed elevation.
+- sourceResolutionM is now set by every loader, not just DTED: single-tile HGT
+  takes its post spacing, an HGT mosaic reports its tiles' native spacing rather
+  than the coarser output grid it resamples onto, and GeoTIFF takes its pixel
+  spacing. Asserted against the committed GDAL reference: n43.dt0's 30
+  arc-second posts report about 673 m, which is the east-west spacing at 43.5 N.
+  sourceResolutionM reports the finer axis rather than averaging, and the first
+  version of that assertion was wrong because it compared against the 926 m
+  north-south figure instead.
+- Deliberately not labelled as LiDAR: a 1 m GeoTIFF does not record how it was
+  produced, so the application reports the resolution it can measure rather
+  than a provenance it would be guessing at.
+- Point clouds are not supported and are not a missing importer. LAS and LAZ
+  hold unstructured returns while TerrainModel is a regular height grid that
+  every solver, raycast and overlay assumes. Supporting them means a second
+  terrain representation and a second render path. Deriving a DEM externally
+  (PDAL, LAStools, gdal_grid) and loading the result is the supported route.
+- Canopy height needs a surface model minus a bare-earth model. 3DEP publishes
+  both, but Ridgeline loads one terrain at a time and has no raster arithmetic,
+  so it is not possible in the application today.
+- Not established: no 3DEP GeoTIFF was actually loaded end to end, because GDAL
+  is not available in this environment. The GeoTIFF path is compiled and its
+  suite runs only on the Ubuntu CI leg, added earlier today.
+
 ### Terrain definition: resolution reporting and finer elevation — September 10
 
 - Roadmap item 7, the fourth of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.
