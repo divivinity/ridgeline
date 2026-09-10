@@ -117,7 +117,14 @@ add_executable(ridgeline_dted_decoding_tests
     tests/test_dted_decoding.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
 target_include_directories(ridgeline_dted_decoding_tests PRIVATE src)
 target_link_libraries(ridgeline_dted_decoding_tests glm::glm nlohmann_json::nlohmann_json)
+# The published GDAL reference fixtures are committed under tests/data/dted, so
+# the checksum and datum-rejection checks run on every build rather than only
+# when a developer remembers to pass them. Both paths are always supplied: the
+# decoder throws on a missing file, so a dropped fixture fails the suite instead
+# of silently reducing it to the synthetic cases.
 add_test(NAME dted_decoding_tests COMMAND ridgeline_dted_decoding_tests
+        "${CMAKE_SOURCE_DIR}/tests/data/dted/n43.dt0"
+        "${CMAKE_SOURCE_DIR}/tests/data/dted/n43_wgs72.dt0"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_hgt_georef_tests

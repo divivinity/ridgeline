@@ -187,7 +187,10 @@ refuses to silently clamp it to the terrain edge.
 
 Ridgeline requires Qt 6 (Widgets, OpenGL, OpenGLWidgets, Network, Concurrent),
 CMake, and a C++17 compiler. GDAL is optional and enables GeoTIFF loading/tests.
-The build fetches pinned GLM, nlohmann/json, and NTIA ITM v1.4 sources.
+The build fetches pinned GLM, nlohmann/json, and NTIA ITM v1.4 sources, so the
+first configure needs network access.
+
+### Windows
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH=C:\Qt\6.8.3\mingw_64
@@ -195,11 +198,65 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-CI builds and tests Ridgeline on both Windows and Ubuntu. Regression coverage
-includes physics, WGS84 source reprojection, antimeridian/high-latitude and
-southern/western coordinates, renamed HGT files, adjacent HGT seams, GeoTIFF
-geometry when GDAL is available, RF metrics/ITM/pattern import, cancellation,
-and portable offline cache behavior.
+### Linux (Ubuntu/Debian)
+
+```sh
+sudo apt-get update    # without this, the mesa/libinput dependencies 404
+sudo apt-get install -y ninja-build qt6-base-dev libgl1-mesa-dev libglu1-mesa-dev
+
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
+
+CI installs Qt with the official installer rather than distro packages, so the
+package list above is a convenience for local setup, not the configuration CI
+exercises.
+
+### Optional: GeoTIFF support
+
+GDAL is detected automatically by `find_package(GDAL QUIET)`. Without it the
+app still reads SRTM `.hgt` and DTED `.dt0/.dt1/.dt2`, `.tif` loading reports
+that GDAL is not compiled in, and `geotiff_tests` is not registered at all.
+
+```sh
+sudo apt-get install -y libgdal-dev    # then re-configure
+```
+
+## Tests
+
+```sh
+ctest --test-dir build -C Release --output-on-failure
+```
+
+A default configure registers 13 suites. Two more are conditional: GDAL adds
+`geotiff_tests`, and `-DRIDGELINE_GUI_TESTS=ON` adds `main_window_tests`, for
+15 with both.
+
+`main_window_tests` is opt-in because it drives a real `MainWindow`, whose
+`QOpenGLWidget` needs a genuine GL context, so it cannot run on the offscreen
+platform.
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRIDGELINE_GUI_TESTS=ON
+cmake --build build --parallel
+# A real desktop session works directly; headless needs a display:
+xvfb-run -a -s "-screen 0 1280x900x24" ctest --test-dir build -C Release --output-on-failure
+```
+
+`dted_decoding_tests` checks the decoder against GDAL's published reference
+expectations using fixtures committed under `tests/data/dted/`; see the README
+there for provenance and for what those checksums do and do not establish.
+
+CI builds and tests Ridgeline on both Windows and Ubuntu, with the GUI suite and
+GDAL enabled on the Ubuntu leg. Regression coverage includes physics, WGS84
+source reprojection, antimeridian/high-latitude and southern/western
+coordinates, renamed HGT files, adjacent HGT seams, DTED decoding against
+published reference data, GeoTIFF geometry, RF metrics/ITM/pattern import,
+cancellation, coverage export through the application's own dialogs, and
+portable offline cache behavior.
+
+> **Note:** the SRTM tiles under `assets/terrain/` are ~891 MB and are tracked
+> directly in git, so both clones and the per-build asset copy are large.
 
 ## Attribution
 

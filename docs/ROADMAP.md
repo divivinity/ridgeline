@@ -520,6 +520,44 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Reference-test wiring, GDAL CI and build docs — September 9
+
+- The GDAL reference checks were never running. `add_test` registered
+  `dted_decoding_tests` with no arguments, so the `argv`-gated n43 checksum and
+  WGS72 rejection blocks were skipped on every ctest run, in CI and locally.
+  The fixtures also lived in ignored `build2/reference-dted`, so they would
+  vanish on a clean and the validation would become unreproducible.
+- Both fixtures (34 KB each, SHA-256 verified against the values recorded in
+  the Unicode paths checkpoint above) are now committed under `tests/data/dted`
+  with a provenance README, and CMake always passes them. Verified in both
+  directions: `ctest -V` shows the GDAL blocks executing, and removing a
+  fixture fails the suite rather than silently reducing it to synthetic cases.
+- `geotiff_tests` ran on no platform: neither CI leg installed GDAL and it is
+  absent locally, so GeoTIFF had zero automated coverage. The Ubuntu leg now
+  installs `libgdal-dev`, and a step after configure fails the run if
+  `geotiff_tests` is not registered, because `find_package(GDAL QUIET)`
+  otherwise degrades to a smaller green suite. That guard was checked locally,
+  where it correctly reports the absence.
+- Not yet established: the `HAVE_GDAL` code has never been compiled anywhere,
+  so the Ubuntu leg is its first build. A failure there is a real finding about
+  unbuilt code, not a regression from this change.
+- Found while reviewing that path: `fromGeoTIFF` still substitutes 0 m for
+  nodata and non-finite samples, and does not call `TerrainModel::validate()`.
+  Every other loader now rejects missing elevation instead. The GeoTIFF suite
+  does not exercise nodata, so enabling it in CI will not surface this. Left
+  unchanged deliberately — extending the rejection policy is a product
+  decision, not a mechanical fix, and it is recorded here rather than made.
+- README build docs: added Linux/Ubuntu setup, the GDAL option and its effect
+  on suite registration, the `-DRIDGELINE_GUI_TESTS=ON` invocation with xvfb,
+  and the SRTM clone-size caveat. Suite counts stated there were measured, not
+  assumed: 13 by default, 14 with GUI tests, 15 with both.
+- Salvaged from `claude/session-lurc62` before that branch is deleted. Its
+  run-from-the-build-directory warning was deliberately not imported: it is
+  stale, since `RuntimePaths::resolve` now prefers assets beside the executable
+  and falls back to the working directory. Its `ridgeline_lib` and
+  `gui_test_main.cpp` references no longer match the tree either.
+- All 14 suites pass locally in 23.40 seconds; git diff --check clean.
+
 ### Export dialog verification checkpoint — September 9
 
 - Completes the handoff's next focused workflow. A solved map is now exported
