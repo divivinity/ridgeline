@@ -1,4 +1,7 @@
 #include "ViewportWidget.h"
+#include "TerrainPresentation.h"
+#include "map/Hillshade.h"
+#include "map/MapMeasure.h"
 #include "render/TerrainRaycast.h"
 #include <QApplication>
 #include <QMouseEvent>
@@ -20,21 +23,33 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
     m_basemap.setPrepareOpenGLCallback([this]() { makeCurrent(); });
 
     m_heatmapLegend = new HeatmapLegend(this);
-    // Heatmap starts visible (matches OverlayToolbar default of checked=true)
-    m_heatmapLegend->show();
+    // The coverage toggle may be on before any result exists. Don't imply a
+    // computed field by displaying its scale on an unsolved scene.
+    m_heatmapLegend->hide();
     m_comparisonHeatmap.visible = false;
     m_losRay.visible = false;
     m_antennaLobe.visible = false;
     m_jammerBubble.visible = false;
     m_fresnel.visible = false;
 
+    m_scaleBar = new MapScaleBar(this);
+    m_northIndicator = new NorthIndicator(this);
+    m_cursorReadout = new QLabel(this);
+    m_cursorReadout->setObjectName("CursorReadout");
+    m_cursorReadout->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_cursorReadout->setStyleSheet(
+        "QLabel { background: rgba(7, 14, 25, 205); border: 1px solid rgba(148,163,184,35);"
+        " border-radius: 7px; color: #dbeafe; padding: 6px 10px; font-size: 12px; }");
+    m_cursorReadout->hide();
     m_mapInfoLabel = new QLabel(this);
+    m_mapInfoLabel->setObjectName("MapTerrainSummary");
     m_mapInfoLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_mapInfoLabel->setStyleSheet(
         "QLabel { background: rgba(7, 14, 25, 205); border: 1px solid rgba(148,163,184,35);"
         " border-radius: 9px; color: #dbeafe; padding: 9px 12px; font-size: 11px; }"
     );
     m_attributionLabel = new QLabel(this);
+    m_attributionLabel->setObjectName("ElevationAttribution");
     m_attributionLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_attributionLabel->setStyleSheet(
         "QLabel { background: rgba(7, 14, 25, 185); border-radius: 5px;"
@@ -99,6 +114,7 @@ void ViewportWidget::initializeGL() {
     const FieldGrid& field = m_engine->fieldGrid();
     if (field.valid())
         m_heatmap.update(field, m_heatmap.metric());
+    m_heatmapLegend->setVisible(m_heatmap.visible && field.valid());
 
     const bool comparisonValid =
         field.valid() && m_serviceTransition.size() == field.cellCount();
@@ -127,12 +143,19 @@ void ViewportWidget::initializeGL() {
     m_camera.radius  = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
     m_defaultCamera = m_camera;   // save for R key
+    // The stack may have been bound before this context existed.
+    applyRasterLayers(true);
     updateMapHud();
 }
 
 void ViewportWidget::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
     m_heatmapLegend->reposition(QSize(w, h));
+    if (m_scaleBar)
+        m_scaleBar->move(14, h - m_scaleBar->height() - 14);
+    if (m_northIndicator)
+        m_northIndicator->move(w - m_northIndicator->width() - 14, 14);
+    updateMapFurniture();
     repositionHud();
 }
 
@@ -144,16 +167,38 @@ void ViewportWidget::paintGL() {
     const glm::mat4 vertScale = glm::scale(glm::mat4(1.0f),
                                             glm::vec3(1.0f, kVertScale, 1.0f));
     m_lastMVP = m_camera.mvp(aspect) * vertScale;
+    updateMapFurniture();
 
     m_terrain.draw(m_lastMVP);
-    if (m_basemap.visible)      m_basemap.draw(m_lastMVP);
-    if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
-    if (m_comparisonHeatmap.visible)
-        m_comparisonHeatmap.draw(m_lastMVP);
-    m_losRay.draw(m_lastMVP);
-    if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
-    if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
-    if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
+    // Base rasters and relief are composited into the basemap texture, so they
+    // draw once here rather than as separate coplanar passes.
+    if (m_basemap.visible) m_basemap.draw(m_lastMVP);
+
+    if (m_layers) {
+        // Analysis layers draw in stack order, so reordering the panel
+        // reorders what covers what.
+        for (std::size_t i = 0; i < m_layers->size(); ++i) {
+            const MapLayer& layer = m_layers->at(i);
+            if (layer.kind != LayerKind::Analysis || !layer.visible) continue;
+            if (layer.id == QLatin1String("coverage"))        m_heatmap.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("comparison")) m_comparisonHeatmap.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("los"))        m_losRay.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("pattern"))    m_antennaLobe.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("jamming"))    m_jammerBubble.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("fresnel"))    m_fresnel.draw(m_lastMVP);
+        }
+    } else {
+        if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
+        if (m_comparisonHeatmap.visible) m_comparisonHeatmap.draw(m_lastMVP);
+        if (m_losRay.visible)       m_losRay.draw(m_lastMVP);
+        if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
+        if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
+        if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
+    }
+
+    // The inspected-point path belongs to the result inspector, not the LOS
+    // layer, so it survives that layer being hidden.
+    m_losRay.drawProbe(m_lastMVP);
     drawAntennaMarkers();
 }
 
@@ -213,6 +258,7 @@ void ViewportWidget::drawAntennaMarkers() {
 }
 
 void ViewportWidget::refreshOverlays() {
+    m_heatmapLegend->setVisible(m_heatmap.visible && m_engine->fieldGrid().valid());
     makeCurrent();
     m_heatmap.update(m_engine->fieldGrid(), m_heatmap.metric());
     m_losRay.update(m_engine->antennas(), m_engine->terrain());
@@ -227,7 +273,26 @@ void ViewportWidget::refreshOverlays() {
     update();
 }
 
+
+// Ground metres per screen pixel at the camera's focus. The projection is a
+// 45-degree vertical perspective, so the visible height at the target distance
+// is 2 * radius * tan(22.5 degrees). Vertical exaggeration scales Y only and
+// therefore does not affect horizontal scale.
+void ViewportWidget::updateMapFurniture() {
+    if (!m_scaleBar && !m_northIndicator) return;
+    if (m_northIndicator) m_northIndicator->setCameraAzimuth(m_camera.azimuth);
+    if (!m_scaleBar) return;
+    if (height() <= 0 || !(m_camera.radius > 0.0f)) {
+        m_scaleBar->setMetresPerPixel(0.0);
+        return;
+    }
+    const double visibleHeightM =
+        2.0 * static_cast<double>(m_camera.radius) * std::tan(45.0 * 0.5 * 3.14159265358979323846 / 180.0);
+    m_scaleBar->setMetresPerPixel(visibleHeightM / static_cast<double>(height()));
+}
+
 void ViewportWidget::reloadTerrain() {
+    m_heatmapLegend->hide();
     m_analysisPointActive = false;
     m_analysisSourceIndex = -1;
     makeCurrent();
@@ -260,6 +325,10 @@ void ViewportWidget::reloadTerrain() {
     m_defaultCamera    = m_camera;   // save for R key
     updateMapHud();
     doneCurrent();
+    // New terrain means new tiles and a new hillshade, so the cached signature
+    // no longer describes what is on screen.
+    m_rasterSignature.clear();
+    applyRasterLayers(true);
     update();
 }
 
@@ -294,7 +363,11 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
         }
         if (!m_cameraDragging &&
             delta.manhattanLength() < QApplication::startDragDistance()) {
-            if (m_placementActive) {
+            if (m_measureActive) {
+                float wx = 0.0f, wz = 0.0f;
+                if (raycastTerrain(e->pos(), wx, wz))
+                    takeMeasurementPoint(wx, wz);
+            } else if (m_placementActive) {
                 float wx = 0.0f, wz = 0.0f;
                 if (raycastTerrain(e->pos(), wx, wz))
                     emit terrainClicked(wx, wz);
@@ -355,8 +428,75 @@ int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
     return bestIndex;
 }
 
-void ViewportWidget::setBasemapOpacity(float opacity) {
-    m_basemap.setOpacity(opacity);
+
+
+void ViewportWidget::setMeasureMode(bool active) {
+    if (m_measureActive == active) return;
+    m_measureActive = active;
+    // Placement and measuring both consume a terrain click, so one cancels the
+    // other rather than leaving the next click ambiguous.
+    if (active && m_placementActive) setPlacementMode(false);
+    if (!active) clearMeasurement();
+    setCursor(active ? Qt::CrossCursor : Qt::ArrowCursor);
+    emit measureModeChanged(m_measureActive);
+    update();
+}
+
+void ViewportWidget::clearMeasurement() {
+    m_measureHasFirst = false;
+    if (!m_measurementSummary.isEmpty()) {
+        m_measurementSummary.clear();
+        emit measurementChanged(m_measurementSummary);
+    }
+    m_losRay.clearProbe();
+    update();
+}
+
+void ViewportWidget::takeMeasurementPoint(float worldX, float worldZ) {
+    if (!m_measureHasFirst) {
+        m_measureFirstX = worldX;
+        m_measureFirstZ = worldZ;
+        m_measureHasFirst = true;
+        m_measurementSummary = QStringLiteral("Measuring from here - click a second point");
+        emit measurementChanged(m_measurementSummary);
+        update();
+        return;
+    }
+
+    const TerrainModel& terrain = m_engine->terrain();
+    double metres = 0.0;
+    QString bearingText;
+    if (terrain.hasGeoReference()) {
+        // Geodesic distance, so a long path is not shortened by the flat
+        // projection the terrain grid is stored in.
+        const auto from = terrain.worldToLatLon(m_measureFirstX, m_measureFirstZ);
+        const auto to = terrain.worldToLatLon(worldX, worldZ);
+        metres = MapMeasure::haversineMetres(from.latDeg, from.lonDeg, to.latDeg, to.lonDeg);
+        const double bearing = MapMeasure::initialBearingDeg(from.latDeg, from.lonDeg,
+                                                            to.latDeg, to.lonDeg);
+        bearingText = QStringLiteral("%1° %2")
+            .arg(bearing, 0, 'f', 1)
+            .arg(MapMeasure::compassPoint(bearing));
+    } else {
+        // No georeference means no true bearing; report the grid distance and
+        // say nothing about north rather than inventing one.
+        metres = MapMeasure::planarMetres(m_measureFirstX, m_measureFirstZ, worldX, worldZ);
+    }
+
+    const float groundFrom = terrain.heightAtWorld(m_measureFirstX, m_measureFirstZ);
+    const float groundTo = terrain.heightAtWorld(worldX, worldZ);
+    m_measurementSummary = MapMeasure::formatDistance(metres);
+    if (!bearingText.isEmpty())
+        m_measurementSummary += QStringLiteral("  ·  ") + bearingText;
+    m_measurementSummary += QStringLiteral("  ·  %1 m rise")
+        .arg(MapMeasure::withoutNegativeZero(static_cast<double>(groundTo - groundFrom), 1),
+             0, 'f', 1);
+
+    // Reuse the inspector's probe line to draw the measured span.
+    m_losRay.setProbeSpan({m_measureFirstX, groundFrom, m_measureFirstZ},
+                          {worldX, groundTo, worldZ});
+    m_measureHasFirst = false;
+    emit measurementChanged(m_measurementSummary);
     update();
 }
 
@@ -383,29 +523,23 @@ void ViewportWidget::updateMapHud() {
     if (terrain.hasGeoReference()) {
         const auto center = terrain.worldToLatLon(
             terrain.worldSize().x * 0.5f, terrain.worldSize().z * 0.5f);
-        mapText = QString("%1°, %2°\n%3 × %4 km  ·  %5 m terrain grid")
+        mapText = QString("%1°, %2°\n%3  ·  %4 m terrain grid")
             .arg(center.latDeg, 0, 'f', 5)
             .arg(center.lonDeg, 0, 'f', 5)
-            .arg(terrain.worldSize().x / 1000.0f, 0, 'f', 1)
-            .arg(terrain.worldSize().z / 1000.0f, 0, 'f', 1)
+            .arg(TerrainPresentation::areaSummary(terrain.worldSize().x, terrain.worldSize().z))
             .arg(std::max(terrain.metersPerCellX(), terrain.metersPerCellZ()), 0, 'f', 1);
     }
     m_mapInfoLabel->setText(mapText);
     m_mapInfoLabel->adjustSize();
 
-    QString attribution;
+    QString attribution = m_elevationCredit;
     if (terrain.hasGeoReference() && !m_basemap.hasTexture()) {
-        attribution = QStringLiteral("Satellite imagery unavailable");
-        if (!m_basemap.lastError().isEmpty())
-            attribution += QStringLiteral(" · ") + m_basemap.lastError();
-        attribution += QStringLiteral("  ·  Elevation © Mapzen and contributors");
-    } else {
-        attribution = m_basemap.attribution().isEmpty()
-            ? QStringLiteral("Elevation © Mapzen and source contributors")
-            : m_basemap.attribution() +
-                QStringLiteral("  ·  Elevation © Mapzen and contributors");
+        attribution.prepend(QStringLiteral("Imagery unavailable  ·  "));
+    } else if (terrain.hasGeoReference() && !m_basemap.attribution().isEmpty()) {
+        attribution.prepend(m_basemap.attribution() + QStringLiteral("  ·  "));
     }
     m_attributionLabel->setText(attribution);
+    m_attributionLabel->setToolTip(m_basemap.lastError());
     m_attributionLabel->adjustSize();
     emit basemapInfoChanged(m_basemap.providerName(),
                             m_basemap.attribution(),
@@ -433,12 +567,16 @@ void ViewportWidget::repositionHud() {
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
     if (!m_dragging) {
-        if (!m_placementActive) {
+        if (!m_placementActive && !m_measureActive) {
             setCursor(antennaAtScreenPosition(e->pos()) >= 0
                 ? Qt::PointingHandCursor : Qt::ArrowCursor);
         }
+        updateCursorReadout(e->pos());
         return;
     }
+    // While the camera is being dragged the readout would chase the cursor
+    // across a moving scene, which reads as noise.
+    hideCursorReadout();
 
     if (m_markerPressIndex >= 0 && (e->buttons() & Qt::LeftButton)) {
         if ((e->pos() - m_pressPos).manhattanLength() >=
@@ -466,49 +604,174 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void ViewportWidget::wheelEvent(QWheelEvent* e) {
-    m_camera.zoom(e->angleDelta().y() / 120.0f);
+    const float steps = e->angleDelta().y() / 120.0f;
+    const float radiusBefore = m_camera.radius;
+
+    // Zoom toward the ground under the cursor rather than the current target,
+    // so closing in on a ridge does not slide it out of frame and force a pan.
+    float wx = 0.0f, wz = 0.0f;
+    const bool overTerrain = raycastTerrain(e->position().toPoint(), wx, wz);
+
+    m_camera.zoom(steps);
+
+    if (overTerrain && radiusBefore > 0.0f) {
+        const float shrink = 1.0f - m_camera.radius / radiusBefore;
+        if (std::isfinite(shrink) && shrink > 0.0f) {
+            const glm::vec3 focus{wx, m_engine->terrain().heightAtWorld(wx, wz) * kVertScale, wz};
+            m_camera.target += (focus - m_camera.target) * shrink;
+        }
+    }
+    updateCursorReadout(e->position().toPoint());
     update();
 }
 
-void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
-    switch (overlay) {
-        case Basemap: m_basemap.visible      = visible; break;
-        case Heatmap: m_heatmap.visible      = visible;
-                      m_heatmapLegend->setVisible(visible); break;
-        case LOS:     m_losRay.visible       = visible; break;
-        case Lobe:    m_antennaLobe.visible  = visible; break;
-        case Jammer:  m_jammerBubble.visible = visible; break;
-        case Fresnel: m_fresnel.visible      = visible; break;
+void ViewportWidget::leaveEvent(QEvent* e) {
+    hideCursorReadout();
+    QOpenGLWidget::leaveEvent(e);
+}
+
+void ViewportWidget::hideCursorReadout() {
+    if (m_cursorReadout && m_cursorReadout->isVisible()) m_cursorReadout->hide();
+}
+
+void ViewportWidget::updateCursorReadout(const QPoint& screenPos) {
+    if (!m_cursorReadout) return;
+    float wx = 0.0f, wz = 0.0f;
+    if (!raycastTerrain(screenPos, wx, wz)) {
+        hideCursorReadout();
+        return;
     }
+    const TerrainModel& terrain = m_engine->terrain();
+    const float ground = terrain.heightAtWorld(wx, wz);
+    QString text;
+    if (terrain.hasGeoReference()) {
+        const auto p = terrain.worldToLatLon(wx, wz);
+        text = QStringLiteral("%1°, %2°   %3 m")
+                   .arg(p.latDeg, 0, 'f', 5)
+                   .arg(p.lonDeg, 0, 'f', 5)
+                   .arg(MapMeasure::withoutNegativeZero(static_cast<double>(ground)), 0, 'f', 0);
+    } else {
+        text = QStringLiteral("X %1 m · Z %2 m   %3 m")
+                   .arg(static_cast<double>(wx), 0, 'f', 0)
+                   .arg(static_cast<double>(wz), 0, 'f', 0)
+                   .arg(MapMeasure::withoutNegativeZero(static_cast<double>(ground)), 0, 'f', 0);
+    }
+    m_cursorReadout->setText(text);
+    m_cursorReadout->adjustSize();
+    // Sit just below-right of the cursor, flipped back inside near an edge.
+    int x = screenPos.x() + 18;
+    int y = screenPos.y() + 20;
+    if (x + m_cursorReadout->width() > width()) x = screenPos.x() - m_cursorReadout->width() - 12;
+    if (y + m_cursorReadout->height() > height()) y = screenPos.y() - m_cursorReadout->height() - 12;
+    m_cursorReadout->move(std::max(0, x), std::max(0, y));
+    m_cursorReadout->show();
+    m_cursorReadout->raise();
+}
+
+void ViewportWidget::setLayerStack(LayerStack* layers) {
+    m_layers = layers;
+    if (!m_layers) return;
+    m_layers->addListener([this] { refreshLayers(); });
+    refreshLayers();
+}
+
+// A compact description of everything that affects the composited basemap
+// texture. Comparing it means an analysis-layer toggle never triggers a tile
+// fetch, while a raster or relief change always does.
+void ViewportWidget::applyRasterLayers(bool force) {
+    if (!m_layers) return;
+
+    std::vector<BasemapOverlay::RasterRequest> rasters;
+    QString signature;
+    for (const MapLayer& layer : m_layers->visibleOfKind(LayerKind::BaseRaster)) {
+        rasters.push_back({layer.id, layer.opacity});
+        signature += layer.id + QString::number(layer.opacity, 'f', 3) + ";";
+    }
+
+    const MapLayer* relief = m_layers->find(QStringLiteral("hillshade"));
+    const bool reliefOn = relief && relief->visible;
+    if (reliefOn)
+        signature += "hillshade" + QString::number(relief->opacity, 'f', 3) + ";";
+
+    const bool anyRaster = !rasters.empty() || reliefOn;
+    m_basemap.visible = anyRaster;
+    m_activeRasterIds.clear();
+    for (const BasemapOverlay::RasterRequest& raster : rasters)
+        m_activeRasterIds << raster.layerId;
+    if (reliefOn) m_activeRasterIds << QStringLiteral("hillshade");
+
+    // MainWindow binds the stack during construction, before this widget has a
+    // GL context. makeCurrent() and the texture build below both require one,
+    // so defer to initializeGL and leave the signature empty to force it.
+    if (!isValid()) {
+        m_rasterSignature.clear();
+        return;
+    }
+    if (!force && signature == m_rasterSignature) return;
+    m_rasterSignature = signature;
+    if (!anyRaster) return;
+
+    m_basemap.setRasterLayers(std::move(rasters));
+    if (reliefOn) {
+        // Computed from the real elevation grid, never the vertically
+        // exaggerated display mesh.
+        m_basemap.setHillshade(Hillshade::render(m_engine->terrain(), 315.0, 45.0),
+                               relief->opacity);
+    } else {
+        m_basemap.setHillshade(QImage(), 0.0f);
+    }
+
+    makeCurrent();
+    m_basemap.destroy();
+    m_basemap.build(m_engine->terrain());
+    doneCurrent();
+    updateMapHud();
+}
+
+void ViewportWidget::refreshLayers() {
+    if (!m_layers) return;
+    const auto on = [this](const char* id) {
+        const MapLayer* layer = m_layers->find(QLatin1String(id));
+        return layer && layer->visible;
+    };
+    m_heatmap.visible          = on("coverage");
+    m_comparisonHeatmap.visible = on("comparison") && !m_serviceTransition.empty();
+    m_losRay.visible           = on("los");
+    m_antennaLobe.visible      = on("pattern");
+    m_jammerBubble.visible     = on("jamming");
+    m_fresnel.visible          = on("fresnel");
+    m_heatmapLegend->setVisible(m_heatmap.visible && m_engine->fieldGrid().valid());
+    applyRasterLayers(false);
     update();
 }
 
-bool ViewportWidget::isOverlayVisible(Overlay overlay) const {
-    switch (overlay) {
-        case Basemap: return m_basemap.visible;
-        case Heatmap: return m_heatmap.visible;
-        case LOS:     return m_losRay.visible;
-        case Lobe:    return m_antennaLobe.visible;
-        case Jammer:  return m_jammerBubble.visible;
-        case Fresnel: return m_fresnel.visible;
-    }
-    return false;
+bool ViewportWidget::isLayerVisible(const QString& id) const {
+    if (id == QLatin1String("coverage"))   return m_heatmap.visible;
+    if (id == QLatin1String("comparison")) return m_comparisonHeatmap.visible;
+    if (id == QLatin1String("los"))        return m_losRay.visible;
+    if (id == QLatin1String("pattern"))    return m_antennaLobe.visible;
+    if (id == QLatin1String("jamming"))    return m_jammerBubble.visible;
+    if (id == QLatin1String("fresnel"))    return m_fresnel.visible;
+    // Rasters and relief are composited into one texture, so "drawn" means the
+    // basemap is being drawn and this layer contributed to it.
+    return m_basemap.visible && m_activeRasterIds.contains(id);
 }
 
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {
     switch (e->key()) {
         case Qt::Key_Escape:
-            if (m_placementActive) {
+            if (m_measureActive) {
+                setMeasureMode(false);
+            } else if (m_placementActive) {
                 setPlacementMode(false);
                 emit placementCancelled();
             }
             break;
         case Qt::Key_T:
-            m_camera.orbit(0.0f, 89.0f - m_camera.elevation);  // snap to ceiling via orbit
+            topView();
             break;
         case Qt::Key_R:
-            if (m_defaultCamera.radius > 0.0f)
-                m_camera = m_defaultCamera;    // reset to saved default
+            resetView();
             break;
         case Qt::Key_Left:
             m_camera.orbit(-5.0f, 0.0f);

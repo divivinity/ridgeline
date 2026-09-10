@@ -22,14 +22,16 @@ QLabel* valueLabel(const char* objectName, const QString& initial = QStringLiter
     auto* label = new QLabel(initial);
     label->setObjectName(objectName);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    label->setWordWrap(true);
     label->setStyleSheet(
-        "color: #e2e8f0; font-family: monospace; font-size: 12px; font-weight: 650;");
+        "color: #e2e8f0; font-family: Consolas, monospace; font-size: 14px; font-weight: 650;");
     return label;
 }
 
 QLabel* captionLabel(const QString& text) {
     auto* label = new QLabel(text);
-    label->setStyleSheet("color: #64748b; font-size: 9px;");
+    label->setWordWrap(true);
+    label->setStyleSheet("color: #a9b9cd; font-size: 12px;");
     return label;
 }
 
@@ -87,31 +89,32 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
     outer->setContentsMargins(14, 14, 14, 14);
     outer->setSpacing(10);
 
-    auto* title = new QLabel(QStringLiteral("SCENARIO COMPARISON"));
+    auto* title = new QLabel(QStringLiteral("Scenario comparison"));
     title->setStyleSheet(
-        "color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+        "color: #e8f1fa; font-size: 16px; font-weight: 700;");
     outer->addWidget(title);
 
     auto* help = new QLabel(QStringLiteral(
         "Save a completed coverage result, change the scenario, then run coverage again to see what improved or regressed."));
     help->setWordWrap(true);
-    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    help->setStyleSheet("color: #a9b9cd; font-size: 13px;");
     outer->addWidget(help);
 
     m_statusBadge = new QLabel();
     m_statusBadge->setObjectName("ScenarioComparisonStatus");
     m_statusBadge->setAlignment(Qt::AlignCenter);
+    m_statusBadge->setWordWrap(true);
     outer->addWidget(m_statusBadge);
 
     m_statusDetail = new QLabel();
     m_statusDetail->setObjectName("ScenarioComparisonDetail");
     m_statusDetail->setWordWrap(true);
-    m_statusDetail->setStyleSheet("color: #94a3b8; font-size: 10px;");
+    m_statusDetail->setStyleSheet("color: #a9b9cd; font-size: 13px;");
     outer->addWidget(m_statusDetail);
 
     auto* serviceTitle = new QLabel(QStringLiteral("SERVICE COVERAGE"));
     serviceTitle->setStyleSheet(
-        "color: #94a3b8; font-size: 9px; font-weight: 700; letter-spacing: 0.7px;");
+        "color: #a9b9cd; font-size: 12px; font-weight: 700;");
     outer->addWidget(serviceTitle);
 
     auto* serviceGrid = new QGridLayout();
@@ -135,7 +138,7 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
 
     auto* transitionsTitle = new QLabel(QStringLiteral("CELL TRANSITIONS"));
     transitionsTitle->setStyleSheet(
-        "color: #94a3b8; font-size: 9px; font-weight: 700; letter-spacing: 0.7px;");
+        "color: #a9b9cd; font-size: 12px; font-weight: 700;");
     outer->addWidget(transitionsTitle);
 
     auto* transitionGrid = new QGridLayout();
@@ -143,10 +146,10 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
     transitionGrid->setVerticalSpacing(6);
     m_gained = valueLabel("ScenarioGainedCells");
     m_gained->setStyleSheet(
-        "color: #6ee7b7; font-family: monospace; font-size: 11px; font-weight: 650;");
+        "color: #6ee7b7; font-family: Consolas, monospace; font-size: 14px; font-weight: 650;");
     m_lost = valueLabel("ScenarioLostCells");
     m_lost->setStyleSheet(
-        "color: #fca5a5; font-family: monospace; font-size: 11px; font-weight: 650;");
+        "color: #fca5a5; font-family: Consolas, monospace; font-size: 14px; font-weight: 650;");
     m_retained = valueLabel("ScenarioRetainedCells");
     m_unchanged = valueLabel("ScenarioUnchangedCells");
     const QString transitionNames[] = {
@@ -167,7 +170,7 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
 
     auto* metricsTitle = new QLabel(QStringLiteral("MEAN RF CHANGE"));
     metricsTitle->setStyleSheet(
-        "color: #94a3b8; font-size: 9px; font-weight: 700; letter-spacing: 0.7px;");
+        "color: #a9b9cd; font-size: 12px; font-weight: 700;");
     outer->addWidget(metricsTitle);
 
     auto* metricGrid = new QGridLayout();
@@ -190,7 +193,7 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
     auto* meanHelp = new QLabel(QStringLiteral(
         "Positive values mean the current result is stronger. Means use cells with valid values in both runs."));
     meanHelp->setWordWrap(true);
-    meanHelp->setStyleSheet("color: #52637a; font-size: 8px;");
+    meanHelp->setStyleSheet("color: #a9b9cd; font-size: 12px;");
     outer->addWidget(meanHelp);
 
     m_showChanges = new QCheckBox(QStringLiteral("Show changes on map"));
@@ -199,11 +202,12 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
         "Highlight gained service in green and lost service in red."));
     outer->addWidget(m_showChanges);
 
-    m_setBaseline = new QPushButton(QStringLiteral("Set current result as baseline"));
+    m_setBaseline = new QPushButton(QStringLiteral("Use current as baseline"));
     m_setBaseline->setObjectName("ScenarioSetBaselineButton");
     outer->addWidget(m_setBaseline);
 
-    m_replaceBaseline = new QPushButton(QStringLiteral("Replace baseline with current result"));
+    m_replaceBaseline = new QPushButton(QStringLiteral("Replace baseline"));
+    m_replaceBaseline->setToolTip(QStringLiteral("Replace the saved baseline with the current coverage result."));
     m_replaceBaseline->setObjectName("ScenarioReplaceBaselineButton");
     outer->addWidget(m_replaceBaseline);
 
@@ -233,12 +237,12 @@ ScenarioComparisonPanel::ScenarioComparisonPanel(QWidget* parent) : QWidget(pare
         "QScrollBar:vertical { background: #0b1422; width: 8px; }"
         "QScrollBar::handle:vertical { background: #334155; border-radius: 4px; min-height: 24px; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        "QCheckBox { color: #cbd5e1; font-size: 10px; spacing: 8px; }"
+        "QCheckBox { color: #cbd5e1; font-size: 13px; spacing: 8px; }"
         "QCheckBox:disabled { color: #52637a; }"
         "QCheckBox::indicator { width: 15px; height: 15px; }"
         "QCheckBox::indicator:unchecked { background: #101c2c; border: 1px solid #3b4d65; border-radius: 3px; }"
         "QCheckBox::indicator:checked { background: #0f766e; border: 1px solid #5eead4; border-radius: 3px; }"
-        "QPushButton { background: #132237; border: 1px solid #334a65; border-radius: 6px; color: #cbd5e1; padding: 7px 9px; font-size: 10px; }"
+        "QPushButton { background: #132237; border: 1px solid #334a65; border-radius: 6px; color: #cbd5e1; padding: 9px; font-size: 13px; }"
         "QPushButton:hover { background: #1a2c45; border-color: #4f6987; }"
         "QPushButton:pressed { background: #0d1929; }"
         "QPushButton:disabled { background: #0e1928; border-color: #243449; color: #52637a; }"
@@ -300,7 +304,7 @@ void ScenarioComparisonPanel::setComparison(const ScenarioComparisonResult& comp
     const double net = comparison.currentServicePercent - comparison.baselineServicePercent;
     m_netChange->setText(formatSignedPercentagePoints(net));
     m_netChange->setStyleSheet(QStringLiteral(
-        "color: %1; font-family: monospace; font-size: 12px; font-weight: 700;")
+        "color: %1; font-family: Consolas, monospace; font-size: 14px; font-weight: 700;")
         .arg(net > 0.05 ? QStringLiteral("#6ee7b7")
                        : net < -0.05 ? QStringLiteral("#fca5a5")
                                      : QStringLiteral("#e2e8f0")));
@@ -338,7 +342,7 @@ void ScenarioComparisonPanel::resetValues() {
     m_currentService->setText(empty);
     m_netChange->setText(empty);
     m_netChange->setStyleSheet(
-        "color: #e2e8f0; font-family: monospace; font-size: 12px; font-weight: 650;");
+        "color: #e2e8f0; font-family: Consolas, monospace; font-size: 14px; font-weight: 650;");
     m_gained->setText(empty);
     m_lost->setText(empty);
     m_retained->setText(empty);
@@ -367,7 +371,7 @@ void ScenarioComparisonPanel::setStatus(const QString& title, const QString& det
                                         const QString& foreground) {
     m_statusBadge->setText(title);
     m_statusBadge->setStyleSheet(QStringLiteral(
-        "background: %1; border: 1px solid %2; border-radius: 8px; color: %3; padding: 7px; font-weight: 750;")
+        "background: %1; border: 1px solid %2; border-radius: 8px; color: %3; padding: 7px; font-size: 12px; font-weight: 750;")
         .arg(background, border, foreground));
     m_statusDetail->setText(detail);
 }

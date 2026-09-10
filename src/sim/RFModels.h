@@ -1,9 +1,15 @@
 #pragma once
 
 #include "Types.h"
+#include "TerrainModel.h"
 #include <glm/glm.hpp>
 
 namespace RFModels {
+
+// Validate once before sampling terrain or allocating a coverage grid.
+void validateSolveInputs(const TerrainModel& terrain,
+                         const std::vector<Antenna>& antennas,
+                         const ReceiverSettings& receiver, float resolutionM);
 
 float dbmToMw(float dbm);
 float mwToDbm(float mw);

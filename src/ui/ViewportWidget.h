@@ -3,6 +3,7 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QKeyEvent>
 #include <QPoint>
+#include <QStringList>
 #include "render/Camera.h"
 #include "render/TerrainMesh.h"
 #include "render/ShaderProgram.h"
@@ -12,8 +13,10 @@
 #include "render/overlays/JammerBubbleOverlay.h"
 #include "render/overlays/FresnelOverlay.h"
 #include "render/BasemapOverlay.h"
+#include "map/LayerStack.h"
 #include "sim/SimEngine.h"
 #include "HeatmapLegend.h"
+#include "MapFurniture.h"
 #include <glm/glm.hpp>
 #include <functional>
 #include <cstdint>
@@ -26,15 +29,37 @@ class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
 public:
-    enum Overlay { Basemap = 0, Heatmap = 1, LOS = 2, Lobe = 3, Jammer = 4, Fresnel = 5 };
-
     explicit ViewportWidget(SimEngine* engine, QWidget* parent = nullptr);
     void refreshOverlays();
     void reloadTerrain();
-    void setOverlayVisible(Overlay overlay, bool visible);
-    bool isOverlayVisible(Overlay overlay) const;
-    void setBasemapOpacity(float opacity);
+
+    // The stack is owned by MainWindow and outlives the viewport.
+    void setLayerStack(LayerStack* layers);
+    // Re-read the stack and apply it. Rebuilds the basemap texture only when
+    // the raster or relief state actually changed, so toggling an analysis
+    // layer never re-fetches tiles.
+    void refreshLayers();
+
+    // What the renderer will actually draw for a layer id, read from the
+    // overlay objects rather than from the stack. Two unlinked places decide
+    // this - the stack and the renderer - so a test that reads the stack back
+    // could not catch them drifting apart.
+    bool isLayerVisible(const QString& id) const;
+    void resetView() { m_camera = m_defaultCamera; update(); }
+    void topView() { m_camera.orbit(0.0f, 89.0f - m_camera.elevation); update(); }
+    void setElevationCredit(const QString& credit) {
+        m_elevationCredit = credit;
+        updateMapHud();
+    }
     void setPlacementMode(bool active, bool jammer = false);
+
+    // Ruler mode: two terrain clicks report ground distance and bearing.
+    // Mutually exclusive with placement, since both consume a terrain click.
+    void setMeasureMode(bool active);
+    bool measureMode() const { return m_measureActive; }
+    void clearMeasurement();
+    // Empty until two points have been taken.
+    QString measurementSummary() const { return m_measurementSummary; }
     void setAnalysisPoint(int sourceIndex, const glm::vec3& receiverPosition);
     void clearAnalysisPoint();
     void setScenarioComparison(
@@ -52,6 +77,7 @@ public:
         makeCurrent();
         m_heatmap.update(m_engine->fieldGrid(), metric);
         doneCurrent();
+        if (m_heatmapLegend) m_heatmapLegend->setMetric(metric);
         update();
     }
 
@@ -62,12 +88,16 @@ signals:
     void terrainInspected(float worldX, float worldZ);
     void basemapInfoChanged(QString provider, QString attribution, QString error);
     void placementCancelled();
+    void measurementChanged(QString summary);
+    void measureModeChanged(bool active);
 
 protected:
     void initializeGL() override;
     void resizeGL(int w, int h) override;
     void paintGL() override;
     void mousePressEvent(QMouseEvent*) override;
+    // The readout must not linger over a map the cursor has left.
+    void leaveEvent(QEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
@@ -93,9 +123,27 @@ private:
     HeatmapLegend* m_heatmapLegend = nullptr;
     QLabel* m_mapInfoLabel = nullptr;
     QLabel* m_attributionLabel = nullptr;
+    QString m_elevationCredit = QStringLiteral("Synthetic elevation · Demo only");
+    LayerStack* m_layers = nullptr;
+    QString m_rasterSignature;
+    void applyRasterLayers(bool force);
+    QStringList m_activeRasterIds;
+    MapScaleBar* m_scaleBar = nullptr;
+    NorthIndicator* m_northIndicator = nullptr;
+    void updateMapFurniture();
     QLabel* m_placementHint = nullptr;
     QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;
+    bool m_measureActive = false;
+    bool m_measureHasFirst = false;
+    float m_measureFirstX = 0.0f, m_measureFirstZ = 0.0f;
+    QString m_measurementSummary;
+    void takeMeasurementPoint(float worldX, float worldZ);
+    // Live readout of whatever the cursor is over. Empty when the cursor is
+    // off the terrain, so it never reports a stale position.
+    QLabel* m_cursorReadout = nullptr;
+    void updateCursorReadout(const QPoint& screenPos);
+    void hideCursorReadout();
     bool m_placingJammer = false;
     glm::mat4 m_lastMVP{1.0f};
     bool m_analysisPointActive = false;

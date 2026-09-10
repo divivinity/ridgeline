@@ -125,8 +125,10 @@ protected:
         painter.setPen(QPen(QColor("#38bdf8"), 1.8));
         painter.drawPath(losPath);
 
-        painter.setPen(QColor("#718096"));
-        painter.setFont(QFont("monospace", 8));
+        painter.setPen(QColor("#a8b7ca"));
+        QFont axisFont("Segoe UI");
+        axisFont.setPixelSize(12);
+        painter.setFont(axisFont);
         painter.drawText(QRectF(0, plot.top() - 7, 42, 16),
                          Qt::AlignRight, QString::number(maximum, 'f', 0));
         painter.drawText(QRectF(0, plot.bottom() - 8, 42, 16),
@@ -146,7 +148,8 @@ QLabel* metricValue(const QString& objectName) {
     auto* label = new QLabel("—");
     label->setObjectName(objectName);
     label->setStyleSheet(
-        "color: #e2e8f0; font-family: monospace; font-size: 12px; font-weight: 650;");
+        "color: #e2e8f0; font-family: 'Consolas'; font-size: 15px; font-weight: 600;");
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     return label;
 }
 
@@ -166,14 +169,14 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     outer->setContentsMargins(14, 14, 14, 14);
     outer->setSpacing(10);
 
-    auto* title = new QLabel("RESULT INSPECTOR");
+    auto* title = new QLabel("Result inspector");
     title->setStyleSheet(
-        "color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+        "color: #f1f5f9; font-size: 16px; font-weight: 600;");
     outer->addWidget(title);
     auto* help = new QLabel(
         "Click any location on a completed coverage map to explain the result.");
     help->setWordWrap(true);
-    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    help->setStyleSheet("color: #a8b7ca; font-size: 12px;");
     outer->addWidget(help);
 
     m_resultBadge = new QLabel("No result selected");
@@ -185,13 +188,13 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     m_position->setObjectName("PointPosition");
     m_position->setWordWrap(true);
     m_position->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_position->setStyleSheet("color: #94a3b8; font-family: monospace; font-size: 9px;");
+    m_position->setStyleSheet("color: #b8c8da; font-size: 12px;");
     outer->addWidget(m_position);
 
     m_serving = new QLabel("—");
     m_serving->setObjectName("PointServingSource");
     m_serving->setWordWrap(true);
-    m_serving->setStyleSheet("color: #dbeafe; font-size: 11px; font-weight: 650;");
+    m_serving->setStyleSheet("color: #dbeafe; font-size: 13px; font-weight: 600;");
     outer->addWidget(m_serving);
 
     auto* metrics = new QGridLayout();
@@ -209,7 +212,8 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
         m_signal, m_strongestSignal, m_jammer, m_snr, m_sinr, m_margin};
     for (int i = 0; i < names.size(); ++i) {
         auto* name = new QLabel(names[i]);
-        name->setStyleSheet("color: #64748b; font-size: 9px;");
+        name->setStyleSheet("color: #a8b7ca; font-size: 12px;");
+        name->setWordWrap(true);
         metrics->addWidget(name, i / 2 * 2, i % 2);
         metrics->addWidget(values[i], i / 2 * 2 + 1, i % 2);
     }
@@ -218,7 +222,7 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     m_path = new QLabel("—");
     m_path->setObjectName("PointPathSummary");
     m_path->setWordWrap(true);
-    m_path->setStyleSheet("color: #cbd5e1; font-size: 10px;");
+    m_path->setStyleSheet("color: #cbd5e1; font-size: 12px;");
     outer->addWidget(m_path);
 
     m_profile = new ProfileWidget(this);
@@ -227,7 +231,7 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     auto* legend = new QLabel(
         "Cyan: direct path   ·   Amber: 60% Fresnel boundary   ·   Green: terrain + effective Earth curvature");
     legend->setWordWrap(true);
-    legend->setStyleSheet("color: #64748b; font-size: 8px;");
+    legend->setStyleSheet("color: #a8b7ca; font-size: 12px;");
     outer->addWidget(legend);
 
     m_explanation = new QLabel("Run coverage, then click the map.");
@@ -235,7 +239,7 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     m_explanation->setWordWrap(true);
     m_explanation->setStyleSheet(
         "background: #101c2c; border: 1px solid #24364d; border-radius: 8px;"
-        " color: #cbd5e1; font-size: 10px; padding: 9px;");
+        " color: #cbd5e1; font-size: 13px; padding: 9px;");
     outer->addWidget(m_explanation);
     outer->addStretch();
 

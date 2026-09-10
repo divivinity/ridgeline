@@ -20,7 +20,7 @@ HeatmapLegend::HeatmapLegend(QWidget* parent)
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_TranslucentBackground);
-    setFixedSize(72, 210);
+    setFixedSize(100, 210);
 }
 
 void HeatmapLegend::reposition(const QSize& parentSize) {
@@ -29,6 +29,18 @@ void HeatmapLegend::reposition(const QSize& parentSize) {
 }
 
 void HeatmapLegend::paintEvent(QPaintEvent*) {
+    using Metric = HeatmapOverlay::Metric;
+    QString title = "Desired power", unit = "dBm";
+    float minimum = -120, maximum = -40;
+    switch (m_metric) {
+        case Metric::DesiredPower: break;
+        case Metric::JammerPower: title = "Jammer power"; break;
+        case Metric::Snr: title = "SNR"; unit = "dB"; minimum = -20; maximum = 40; break;
+        case Metric::Sinr: title = "SINR"; unit = "dB"; minimum = -20; maximum = 40; break;
+        case Metric::JOverS: title = "J/S"; unit = "dB"; minimum = -40; maximum = 40; break;
+        case Metric::FadeMargin: title = "Fade margin"; unit = "dB"; minimum = -20; maximum = 40; break;
+        case Metric::Service: title = "Service"; unit = ""; break;
+    }
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
@@ -46,7 +58,14 @@ void HeatmapLegend::paintEvent(QPaintEvent*) {
     titleFont.setBold(true);
     p.setFont(titleFont);
     p.setPen(QColor(210, 220, 230));
-    p.drawText(QRect(0, 6, width(), 16), Qt::AlignHCenter, "Signal");
+    p.drawText(QRect(0, 6, width(), 16), Qt::AlignHCenter, title);
+    if (m_metric == Metric::Service) {
+        p.fillRect(QRect(12, 36, 16, 16), QColor(0, 153, 255));
+        p.drawText(QRect(8, 60, 84, 32), Qt::AlignCenter | Qt::TextWordWrap, "In service");
+        p.drawText(QRect(8, 108, 84, 78), Qt::AlignCenter | Qt::TextWordWrap,
+                   "Unshaded: outside service or no data");
+        return;
+    }
 
     // --- gradient bar (top = strong, bottom = dead) ---
     const QRect bar(10, 26, 20, 150);
@@ -72,10 +91,10 @@ void HeatmapLegend::paintEvent(QPaintEvent*) {
     // Four ticks at t = 0.0, 0.33, 0.66, 1.0
     struct Tick { float t; QString label; };
     const Tick ticks[] = {
-        { 0.00f, "-40" },
-        { 0.33f, "-67" },
-        { 0.66f, "-93" },
-        { 1.00f, "-120" },
+        { 0.00f, QString::number(maximum, 'f', 0) },
+        { 0.33f, QString::number(maximum - .33f * (maximum - minimum), 'f', 0) },
+        { 0.66f, QString::number(maximum - .66f * (maximum - minimum), 'f', 0) },
+        { 1.00f, QString::number(minimum, 'f', 0) },
     };
     const int barTop    = bar.top();
     const int barBottom = bar.bottom();
@@ -95,5 +114,5 @@ void HeatmapLegend::paintEvent(QPaintEvent*) {
     unitFont.setPixelSize(9);
     p.setFont(unitFont);
     p.setPen(QColor(140, 160, 180));
-    p.drawText(QRect(0, bar.bottom() + 6, width(), 14), Qt::AlignHCenter, "dBm");
+    p.drawText(QRect(0, bar.bottom() + 6, width(), 14), Qt::AlignHCenter, unit);
 }

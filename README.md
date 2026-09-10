@@ -96,12 +96,92 @@ original CSV is later moved.
   500 ms debounced live typeahead without freezing the search field.
 - Local DTED, SRTM HGT, and (when built with GDAL) GeoTIFF DEMs are supported
   from **File → Load Terrain**.
+
+  - DTED import requires an explicit WGS84 horizontal datum, standard UHL-first headers and complete sequential
+    profiles with valid checksums. Signed-magnitude negative elevations are
+    preserved; void samples reject the import rather than becoming sea level.
+    Legacy header variants, sparse profiles and incorrectly two's-complement
+    encoded files are not repaired automatically. Local decoding is synchronous.
 - Analysis areas can cross the ±180° antimeridian; longitude conversion and tile
   X requests wrap continuously.
 
 Worldwide streamed maps use Web Mercator coverage (approximately 85°S to 85°N).
 Rotated/sheared GeoTIFFs are rejected rather than silently misregistered; warp
 such rasters to a north-up grid before loading them.
+
+## Map layers
+
+The **Layers** dock holds an ordered stack. Each row has its own visibility
+toggle and opacity, and rows can be dragged to reorder — layers higher in the
+list draw on top. Nothing else in the UI owns layer state, so the map cannot
+disagree with the controls.
+
+| Layer | Source |
+| --- | --- |
+| Satellite | Streamed imagery (Esri by default) |
+| USGS topographic | USGS National Map, public domain, United States only |
+| Hillshade | Computed from the loaded elevation grid |
+| Coverage, Scenario compare, LOS, Antenna pattern, Jamming range, Fresnel zone | Analysis results |
+
+Because it is a stack rather than a set of exclusive choices, Satellite and
+USGS topographic can both be visible with opacity between them, and hillshade
+multiplies over whatever is beneath it. Topographic plus relief is the
+combination worth having: contours give the height, shading gives the shape.
+
+Visible raster layers are composited into a single terrain texture rather than
+drawn as separate passes, which is what stops two maps on the same surface from
+z-fighting.
+
+**Hillshade** is Lambertian relief shading from the northwest at 45°, computed
+from true elevations and the grid's real east–west and north–south sample
+spacing — never from the vertically exaggerated display mesh, which would
+overstate every slope. It needs no network, so it works offline, inside
+portable packages, and on the procedural demo scene.
+
+**USGS topographic** covers the United States only. Outside that footprint the
+service answers with a uniform no-data fill rather than an error, so Ridgeline
+checks whether a tile carries any cartography and reports *No topographic
+coverage for this area* instead of showing a blank blue map. An area that is
+entirely water reads the same way, which is accurate enough — there is no
+topographic detail to show there either.
+
+OpenStreetMap and OpenTopoMap are deliberately not offered. Ridgeline
+batch-downloads every tile for an analysis area and bakes it into a
+redistributable package, which those projects' tile policies prohibit.
+
+Layer visibility, opacity and order are saved in the scenario file. Scenarios
+written before layers existed load with the defaults above.
+
+## LiDAR-derived elevation
+
+Ridgeline has no LiDAR importer, and does not need one to use LiDAR data. What
+a propagation model consumes is a raster of ground heights, and the useful
+LiDAR products are already published in that form.
+
+The USGS 3DEP programme publishes 1 m bare-earth DEMs derived from LiDAR as
+GeoTIFFs, downloadable per tile from [The National Map](https://apps.nationalmap.gov/downloader/).
+Load one through **File → Load Terrain** in a build with GDAL, and the location
+tooltip reports its source resolution — about 1 m, against the roughly 10 m of
+the best streamed elevation.
+
+Two things this deliberately does not do:
+
+**It does not label the data as LiDAR.** A 1 m GeoTIFF does not say how it was
+produced, so Ridgeline reports the resolution it can measure rather than a
+provenance it would be guessing at.
+
+**It does not read point clouds.** LAS and LAZ files hold millions of returns
+with no grid structure, while `TerrainModel` is a regular height grid and every
+solver, raycast and overlay assumes that. Supporting point clouds means a
+second terrain representation and a second render path, not an importer — which
+is why the roadmap ranks it last rather than bundling it with this. Deriving a
+DEM from a point cloud is well served by existing tools (PDAL, LAStools, or
+`gdal_grid`); the output loads through the GeoTIFF path above.
+
+Canopy height, the difference between a surface model and a bare-earth model,
+needs both rasters and a subtraction step. 3DEP publishes both, but Ridgeline
+loads one terrain at a time and has no raster arithmetic, so this is not yet
+possible in the application.
 
 ## Portable offline terrain and imagery packages
 
@@ -125,6 +205,21 @@ In offline mode Ridgeline never attempts missing bulk terrain/imagery tile
 requests. A missing tile is reported as an offline cache miss. The package
 contains provider-separated imagery and terrain tile trees, making its contents
 inspectable and reproducible rather than relying on an opaque HTTP cache.
+
+Built-in elevation retains `terrain/{z}/{x}/{y}.png`; built-in imagery retains
+`imagery/esri/{z}/{x}/{y}.tile` (or `imagery/google/...`). Custom URL templates
+use separate `terrain/custom-<sha256>/...` and `imagery/custom-<sha256>/...`
+folders. The hash covers the exact full template, including query parameters.
+Changing a dataset, style, version or credential therefore selects a new cache;
+copying a custom offline package requires the same template on the destination.
+URLs and credentials are not written into these folder names. A cache hit does
+not establish that upstream content is still current.
+
+Older builds shared custom imagery under `imagery/custom` and wrote custom
+elevation into the default `terrain` tree. Those files have no reliable source
+identity, so they are not automatically migrated into custom namespaces. If
+you used custom elevation with an older build, select a fresh cache directory
+and reload before trusting default terrain. Existing files are left untouched.
 
 ## Optional Google Maps imagery
 
@@ -166,7 +261,10 @@ refuses to silently clamp it to the terrain edge.
 
 Ridgeline requires Qt 6 (Widgets, OpenGL, OpenGLWidgets, Network, Concurrent),
 CMake, and a C++17 compiler. GDAL is optional and enables GeoTIFF loading/tests.
-The build fetches pinned GLM, nlohmann/json, and NTIA ITM v1.4 sources.
+The build fetches pinned GLM, nlohmann/json, and NTIA ITM v1.4 sources, so the
+first configure needs network access.
+
+### Windows
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH=C:\Qt\6.8.3\mingw_64
@@ -174,11 +272,65 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-CI builds and tests Ridgeline on both Windows and Ubuntu. Regression coverage
-includes physics, WGS84 source reprojection, antimeridian/high-latitude and
-southern/western coordinates, renamed HGT files, adjacent HGT seams, GeoTIFF
-geometry when GDAL is available, RF metrics/ITM/pattern import, cancellation,
-and portable offline cache behavior.
+### Linux (Ubuntu/Debian)
+
+```sh
+sudo apt-get update    # without this, the mesa/libinput dependencies 404
+sudo apt-get install -y ninja-build qt6-base-dev libgl1-mesa-dev libglu1-mesa-dev
+
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
+
+CI installs Qt with the official installer rather than distro packages, so the
+package list above is a convenience for local setup, not the configuration CI
+exercises.
+
+### Optional: GeoTIFF support
+
+GDAL is detected automatically by `find_package(GDAL QUIET)`. Without it the
+app still reads SRTM `.hgt` and DTED `.dt0/.dt1/.dt2`, `.tif` loading reports
+that GDAL is not compiled in, and `geotiff_tests` is not registered at all.
+
+```sh
+sudo apt-get install -y libgdal-dev    # then re-configure
+```
+
+## Tests
+
+```sh
+ctest --test-dir build -C Release --output-on-failure
+```
+
+A default configure registers 13 suites. Two more are conditional: GDAL adds
+`geotiff_tests`, and `-DRIDGELINE_GUI_TESTS=ON` adds `main_window_tests`, for
+15 with both.
+
+`main_window_tests` is opt-in because it drives a real `MainWindow`, whose
+`QOpenGLWidget` needs a genuine GL context, so it cannot run on the offscreen
+platform.
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRIDGELINE_GUI_TESTS=ON
+cmake --build build --parallel
+# A real desktop session works directly; headless needs a display:
+xvfb-run -a -s "-screen 0 1280x900x24" ctest --test-dir build -C Release --output-on-failure
+```
+
+`dted_decoding_tests` checks the decoder against GDAL's published reference
+expectations using fixtures committed under `tests/data/dted/`; see the README
+there for provenance and for what those checksums do and do not establish.
+
+CI builds and tests Ridgeline on both Windows and Ubuntu, with the GUI suite and
+GDAL enabled on the Ubuntu leg. Regression coverage includes physics, WGS84
+source reprojection, antimeridian/high-latitude and southern/western
+coordinates, renamed HGT files, adjacent HGT seams, DTED decoding against
+published reference data, GeoTIFF geometry, RF metrics/ITM/pattern import,
+cancellation, coverage export through the application's own dialogs, and
+portable offline cache behavior.
+
+> **Note:** the SRTM tiles under `assets/terrain/` are ~891 MB and are tracked
+> directly in git, so both clones and the per-build asset copy are large.
 
 ## Attribution
 

@@ -5,6 +5,16 @@
 #include "ui/PointAnalysisPanel.h"
 #include "ui/ScenarioComparisonPanel.h"
 #include "ui/CalibrationPanel.h"
+#include "ui/OverlayToolbar.h"
+#include "ui/LayersPanel.h"
+#include "map/LayerStack.h"
+#include "ui/ScenarioTree.h"
+#include "ui/WorkspaceTheme.h"
+#include "ui/TerrainPresentation.h"
+#include <QMenu>
+#include <QSlider>
+#include <QScrollArea>
+#include <QScrollBar>
 #include "sim/TerrainModel.h"
 #include "sim/ScenarioComparison.h"
 #include "sim/MeasurementCalibration.h"
@@ -20,12 +30,15 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QHostAddress>
 #include <QLineEdit>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QPixmap>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -35,7 +48,16 @@
 #include <cstdio>
 #include <functional>
 #include <fstream>
+#include <sstream>
+#include <locale>
 #include <iostream>
+#include <limits>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -48,6 +70,17 @@ int failures = 0;
     } \
 } while (0)
 
+// Optional offscreen QA artifacts, using only synthetic test data. A caller
+// supplies a new directory; never overwrite an existing capture.
+void capturePanel(QWidget& panel, const QString& name) {
+    const QString directory = qEnvironmentVariable("RIDGELINE_QA_CAPTURE_DIR");
+    if (directory.isEmpty()) return;
+    CHECK(QDir().mkpath(directory));
+    const QString path = QDir(directory).filePath(name + ".png");
+    CHECK(!QFileInfo::exists(path));
+    if (!QFileInfo::exists(path)) CHECK(panel.grab().save(path, "PNG"));
+}
+
 bool waitUntil(const std::function<bool()>& condition, int timeoutMs) {
     QElapsedTimer timer;
     timer.start();
@@ -56,6 +89,115 @@ bool waitUntil(const std::function<bool()>& condition, int timeoutMs) {
         if (condition()) return true;
     }
     return condition();
+}
+
+void testCompactMapControls() {
+    auto area = [](double x, double z) {
+        return TerrainPresentation::areaSummary(x, z).replace(QChar(0x00a0), ' ');
+    };
+    CHECK(area(22, 31) == "22.0 × 31.0 m");
+    CHECK(area(15000, 15000) == "15.0 × 15.0 km");
+    CHECK(area(999.9, 1000) == "999.9 × 1000.0 m");
+    CHECK(area(1000, 1000) == "1.0 × 1.0 km");
+    CHECK(area(15000, 31) == "15000.0 × 31.0 m");
+    CHECK(area(0.01, 0.09) == "<0.1 × <0.1 m");
+    CHECK(area(0, 31) == "Area unavailable");
+    CHECK(area(-1, 31) == "Area unavailable");
+    CHECK(area(std::numeric_limits<double>::infinity(), 31) == "Area unavailable");
+    CHECK(area(31, std::numeric_limits<double>::quiet_NaN()) == "Area unavailable");
+    TerrainModel rectangular;
+    rectangular.width = 120;
+    rectangular.height = 80;
+    rectangular.setCellSpacing(12.5f, 30.0f);
+    const QString details = TerrainPresentation::gridDetails(rectangular);
+    CHECK(details.contains("120 × 80 samples"));
+    CHECK(details.contains("12.5 m east–west × 30.0 m north–south"));
+    // The old blanket disclaimer is replaced by a concrete statement: this
+    // model carries no source resolution, so it must say so rather than let
+    // the grid spacing be read as the data's resolution.
+    CHECK(details.contains("Source resolution is not known"));
+    rectangular.sourceResolutionM = 30.0f;
+    const QString withSource = TerrainPresentation::gridDetails(rectangular);
+    CHECK(withSource.contains("Source resolution: about 30.0 m"));
+    CHECK(withSource.contains("interpolated"));
+    for (auto type : {TerrainSource::Type::Hills, TerrainSource::Type::Flat}) {
+        CHECK(TerrainPresentation::elevationReference(type).contains("Synthetic"));
+        CHECK(!TerrainPresentation::elevationReference(type).contains("MSL"));
+    }
+    for (auto type : {TerrainSource::Type::Hgt, TerrainSource::Type::Dted,
+                      TerrainSource::Type::GeoTiff, TerrainSource::Type::Global}) {
+        CHECK(TerrainPresentation::elevationReference(type).contains("datum unverified"));
+        CHECK(!TerrainPresentation::elevationReference(type).contains("MSL"));
+    }
+    CHECK(TerrainPresentation::elevationCredit(TerrainSource::Type::Global).contains("Provider unverified"));
+    CHECK(!TerrainPresentation::elevationCredit(TerrainSource::Type::Global).contains("Mapzen"));
+    CHECK(TerrainPresentation::elevationCredit(TerrainSource::Type::Global,
+        TerrainModel::ElevationProvider::Mapzen).contains("Mapzen"));
+    const QString customCredit = TerrainPresentation::elevationCredit(TerrainSource::Type::Global,
+        TerrainModel::ElevationProvider::Custom);
+    CHECK(customCredit.contains("custom Terrarium") && !customCredit.contains("Mapzen"));
+    CHECK(TerrainPresentation::elevationCredit(TerrainSource::Type::Hills).contains("Demo only"));
+    CHECK(!TerrainPresentation::elevationCredit(TerrainSource::Type::Hgt).contains("Mapzen"));
+    CHECK(TerrainPresentation::elevationCredit(TerrainSource::Type::GeoTiff).contains("GeoTIFF"));
+    CHECK(TerrainPresentation::elevationCredit(TerrainSource::Type::Dted).contains("DTED"));
+    CHECK(TerrainPresentation::elevationCredit(TerrainSource::Type::Flat).contains("Synthetic"));
+    OverlayToolbar toolbar;
+    toolbar.setStyleSheet(WorkspaceTheme::styleSheet() + toolbar.styleSheet());
+    toolbar.resize(900, 50);
+    toolbar.show();
+    QApplication::processEvents();
+    auto* metric = toolbar.findChild<QComboBox*>("CoverageMetricCombo");
+    auto* reset = toolbar.findChild<QToolButton*>("ResetMapViewButton");
+    auto* top = toolbar.findChild<QToolButton*>("TopMapViewButton");
+    CHECK(metric && reset && top);
+    if (!metric || !reset || !top) return;
+    CHECK(metric->count() == 7);
+    CHECK(!metric->accessibleName().isEmpty());
+    HeatmapOverlay::Metric selected = HeatmapOverlay::Metric::DesiredPower;
+    QObject::connect(&toolbar, &OverlayToolbar::heatmapMetricChanged,
+                     [&](HeatmapOverlay::Metric value) { selected = value; });
+    for (int i = 0; i < metric->count(); ++i) {
+        metric->setCurrentIndex(i);
+        CHECK(static_cast<int>(selected) == metric->itemData(i).toInt());
+    }
+    // Layer visibility, opacity and order moved to the Layers dock, which owns
+    // them alone so the two controls cannot disagree. The dock is covered by
+    // testLayersPanelDrivesTheStack below.
+    capturePanel(toolbar, "map-controls-toolbar");
+    int resets = 0;
+    QObject::connect(&toolbar, &OverlayToolbar::resetViewRequested, [&]() { ++resets; });
+    reset->click();
+    CHECK(resets == 1);
+    CHECK(toolbar.rect().contains(reset->geometry()));
+    CHECK(toolbar.sizeHint().width() <= 900);
+    int topViews = 0;
+    QObject::connect(&toolbar, &OverlayToolbar::topViewRequested, [&]() { ++topViews; });
+    top->click();
+    CHECK(topViews == 1);
+}
+
+void testSourceCardsPreserveSelection() {
+    ScenarioTree tree;
+    tree.setStyleSheet(WorkspaceTheme::styleSheet());
+    tree.resize(350, 260);
+    tree.show();
+    Antenna emitter;
+    Antenna jammer;
+    jammer.isJammer = true;
+    tree.refresh({emitter, jammer});
+    tree.selectRow(1);
+    auto* list = tree.findChild<QListWidget*>("SourceList");
+    CHECK(list && list->count() == 2);
+    if (!list) return;
+    CHECK(list->item(0)->text().startsWith("Emitter 1\n"));
+    CHECK(list->item(1)->text().startsWith("Jammer 1\n"));
+    CHECK(!list->item(1)->toolTip().isEmpty());
+    emitter.frequencyMHz = 433.0f;
+    tree.refresh({emitter, jammer});
+    CHECK(tree.selectedIndex() == 1);
+    CHECK(list->item(0)->text().contains("433 MHz"));
+    tree.refresh({emitter});
+    CHECK(tree.selectedIndex() == -1);
 }
 
 void testAdvancedPanelRemainsEditableAndCollapsible() {
@@ -99,6 +241,32 @@ void testAdvancedPanelRemainsEditableAndCollapsible() {
     CHECK(!toggle->isChecked());
     CHECK(!advanced->isVisible());
     CHECK(toggle->isVisible());
+    const auto spins = panel.findChildren<QDoubleSpinBox*>();
+    CHECK(!spins.isEmpty());
+    for (auto* spin : spins) {
+        CHECK(!spin->accessibleName().isEmpty());
+        CHECK(spin->buttonSymbols() == QAbstractSpinBox::UpDownArrows);
+        const double before = spin->value();
+        if (before + spin->singleStep() <= spin->maximum()) {
+            spin->stepUp();
+            CHECK(spin->value() > before);
+            spin->stepDown();
+            CHECK(std::abs(spin->value() - before) < 0.001);
+            if (spin->isVisible()) {
+                const auto key = [spin](int code) {
+                    QKeyEvent press(QEvent::KeyPress, code, Qt::NoModifier);
+                    QApplication::sendEvent(spin, &press);
+                    QKeyEvent release(QEvent::KeyRelease, code, Qt::NoModifier);
+                    QApplication::sendEvent(spin, &release);
+                };
+                key(Qt::Key_Up);
+                CHECK(spin->value() > before);
+                key(Qt::Key_Down);
+                CHECK(std::abs(spin->value() - before) < 0.001);
+            }
+        }
+    }
+    capturePanel(panel, "source-settings-spinboxes");
 }
 
 TerrainModel makeGeoTerrain() {
@@ -122,6 +290,9 @@ void testPreciseSourcePositionDialog() {
     antenna.position = {start.x, 140.0f, start.y};
 
     SourcePositionDialog dialog(terrain, antenna);
+    auto* status = dialog.findChild<QLabel*>("PositionStatus");
+    CHECK(status && status->text().contains("native vertical reference"));
+    CHECK(status && !status->text().contains("MSL"));
     auto* format = dialog.findChild<QComboBox*>("SourcePositionFormatCombo");
     auto* latitude = dialog.findChild<QDoubleSpinBox*>("SourceLatitudeSpin");
     auto* longitude = dialog.findChild<QDoubleSpinBox*>("SourceLongitudeSpin");
@@ -175,6 +346,26 @@ void testPointAnalysisPanelShowsExplanation() {
     CHECK(serving->text().contains("Emitter 1"));
     CHECK(signal->text().contains("-104.5"));
     CHECK(explanation->text().contains("SINR"));
+
+    panel.resize(310, 480);
+    panel.show();
+    QApplication::processEvents();
+    CHECK(panel.width() == 310 && panel.height() == 480);
+    auto* scroll = panel.findChild<QScrollArea*>("ResultInspectorScrollArea");
+    CHECK(scroll && scroll->verticalScrollBar()->maximum() > 0);
+    CHECK(scroll && scroll->widget()->width() <= scroll->viewport()->width());
+    CHECK(signal->font().pixelSize() >= 15);
+    CHECK(explanation->font().pixelSize() >= 13);
+    for (auto* label : panel.findChildren<QLabel*>()) {
+        CHECK(label->font().pixelSize() >= 12);
+        if (scroll) CHECK(label->width() <= scroll->viewport()->width());
+    }
+    if (scroll) {
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        QApplication::processEvents();
+        const QRect bounds(explanation->mapTo(scroll->viewport(), QPoint{}), explanation->size());
+        CHECK(scroll->viewport()->rect().contains(bounds));
+    }
 
     analysis.servingSourceIndex = -1;
     analysis.strongestJammerIndex = 0;
@@ -268,6 +459,32 @@ void testScenarioComparisonPanelWorkflow() {
     CHECK(status->text() == "CANNOT COMPARE");
     CHECK(!showChanges->isEnabled());
     CHECK(!panel.changesVisible());
+
+    // A compact comparison dock must grow vertically, never clip sideways.
+    comparison.compatible = true;
+    panel.setComparison(comparison);
+    panel.resize(310, 480);
+    QApplication::processEvents();
+    auto* scroll = panel.findChild<QScrollArea*>("ScenarioComparisonScrollArea");
+    CHECK(scroll && scroll->verticalScrollBar()->maximum() > 0);
+    CHECK(panel.width() == 310 && panel.height() == 480);
+    CHECK(scroll && scroll->widget()->width() <= scroll->viewport()->width());
+    for (auto* label : panel.findChildren<QLabel*>()) {
+        CHECK(label->font().pixelSize() >= 12);
+        if (scroll) CHECK(label->width() <= scroll->viewport()->width());
+    }
+    CHECK(net->font().pixelSize() >= 14);
+    CHECK(replaceBaseline->font().pixelSize() >= 13);
+    if (scroll) scroll->verticalScrollBar()->setValue(0);
+    QApplication::processEvents();
+    capturePanel(panel, "comparison-compact-top");
+    if (scroll) {
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        QApplication::processEvents();
+        const QRect bounds(clearBaseline->mapTo(scroll->viewport(), QPoint{}), clearBaseline->size());
+        CHECK(scroll->viewport()->rect().contains(bounds));
+        capturePanel(panel, "comparison-compact-bottom");
+    }
 }
 
 void testCalibrationPanelStatesAndSignals() {
@@ -392,6 +609,36 @@ void testCalibrationPanelStatesAndSignals() {
     CHECK(panel.state() == CalibrationPanel::State::NoMeasurements);
     CHECK(panel.report().appliedCorrectionDb == 0.0);
     CHECK(!clearButton->isEnabled());
+
+    // Long warnings and large counts must stay readable in a narrow dock.
+    report.importedSamples = 1234567;
+    report.usableSamples = 1234000;
+    report.rejectedSamples = 567;
+    report.warnings = {QStringLiteral("Some measurements fall outside the analysis area. Review the input coordinates before applying a correction.")};
+    panel.setCalibrationReady(report);
+    panel.resize(320, 480);
+    QApplication::processEvents();
+    auto* scroll = panel.findChild<QScrollArea*>("CalibrationScrollArea");
+    CHECK(panel.width() == 320 && panel.height() == 480);
+    CHECK(scroll && scroll->verticalScrollBar()->maximum() > 0);
+    CHECK(scroll && scroll->widget()->width() <= scroll->viewport()->width());
+    for (auto* label : panel.findChildren<QLabel*>()) {
+        CHECK(label->font().pixelSize() >= 12);
+        if (scroll) CHECK(label->width() <= scroll->viewport()->width());
+    }
+    CHECK(recommended->font().pixelSize() >= 14);
+    CHECK(applyButton->font().pixelSize() >= 13);
+    CHECK(warnings->textInteractionFlags().testFlag(Qt::TextSelectableByMouse));
+    if (scroll) {
+        scroll->verticalScrollBar()->setValue(0);
+        QApplication::processEvents();
+        capturePanel(panel, "calibration-compact-top");
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        QApplication::processEvents();
+        const QRect bounds(clearButton->mapTo(scroll->viewport(), QPoint{}), clearButton->size());
+        CHECK(scroll->viewport()->rect().contains(bounds));
+        capturePanel(panel, "calibration-compact-bottom");
+    }
 }
 
 void testCsvUsesClampedEdgeCellCenter() {
@@ -402,19 +649,117 @@ void testCsvUsesClampedEdgeCellCenter() {
     grid.originXZ = {30.0f, 30.0f};
     grid.maxXZ = {80.0f, 30.0f};
     grid.dbm = {-70.0f, -80.0f};
-    const std::string path = "test_edge_cell_export.csv";
-    CHECK(Exporter::exportCsv(grid, path));
-    std::ifstream input(path);
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("\u5730\u5f62-\u00e9.csv"));
+    struct CommaDecimal : std::numpunct<char> {
+        char do_decimal_point() const override { return ','; }
+    };
+    {
+        struct RestoreLocale {
+            std::locale previous = std::locale();
+            ~RestoreLocale() { std::locale::global(previous); }
+        } restore;
+        std::locale::global(std::locale(std::locale::classic(), new CommaDecimal));
+        CHECK(Exporter::exportCsv(grid, path.toStdString()));
+    }
+    QFile file(path);
+    CHECK(file.open(QIODevice::ReadOnly));
+    const QByteArray original = file.readAll();
+    file.close();
+    std::istringstream input(original.toStdString());
     std::string header;
     std::string first;
     std::string second;
     std::getline(input, header);
     std::getline(input, first);
     std::getline(input, second);
-    input.close();
-    std::remove(path.c_str());
     CHECK(first.rfind("30.000,30.000,", 0) == 0);
     CHECK(second.rfind("80.000,30.000,", 0) == 0);
+    CHECK(!Exporter::exportCsv(FieldGrid{}, path.toStdString()));
+    CHECK(file.open(QIODevice::ReadOnly));
+    CHECK(file.readAll() == original);
+    file.close();
+    CHECK(!Exporter::exportCsv(grid, directory.path().toStdString()));
+    grid.dbm[0] = -65.0f;
+#ifdef Q_OS_WIN
+    {
+        const auto nativePath = path.toStdWString();
+        struct LockedFile {
+            HANDLE handle;
+            ~LockedFile() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+        } locked{CreateFileW(nativePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+        CHECK(locked.handle != INVALID_HANDLE_VALUE);
+        if (locked.handle != INVALID_HANDLE_VALUE) {
+            CHECK(!Exporter::exportCsv(grid, path.toStdString()));
+            CHECK(file.open(QIODevice::ReadOnly));
+            CHECK(file.readAll() == original);
+            file.close();
+            CHECK(QDir(directory.path()).entryList(QDir::Files | QDir::Hidden).size() == 1);
+        }
+    }
+#endif
+    CHECK(Exporter::exportCsv(grid, path.toStdString()));
+    CHECK(file.open(QIODevice::ReadOnly));
+    CHECK(file.readAll().contains("-65.000"));
+    file.close();
+    CHECK(QDir(directory.path()).entryList(QDir::Files | QDir::Hidden).size() == 1);
+    const QString pngPath = directory.filePath(QStringLiteral("\u5730\u5f62-\u00e9.png"));
+    QImage originalImage(3, 2, QImage::Format_ARGB32);
+    originalImage.fill(QColor(10, 20, 30, 180));
+    CHECK(Exporter::savePng(originalImage, pngPath.toStdString()));
+    CHECK(QImage(pngPath).pixelColor(1, 1) == QColor(10, 20, 30, 180));
+    CHECK(QImage(pngPath).size() == originalImage.size());
+    CHECK(!Exporter::savePng(QImage{}, pngPath.toStdString()));
+    CHECK(QImage(pngPath).pixelColor(1, 1) == QColor(10, 20, 30, 180));
+    CHECK(!Exporter::savePng(originalImage, directory.path().toStdString()));
+    originalImage.fill(Qt::green);
+#ifdef Q_OS_WIN
+    {
+        QFile png(pngPath);
+        CHECK(png.open(QIODevice::ReadOnly));
+        const QByteArray before = png.readAll();
+        png.close();
+        const auto nativePath = pngPath.toStdWString();
+        struct PngLock {
+            HANDLE handle;
+            ~PngLock() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+        } lock{CreateFileW(nativePath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+        CHECK(lock.handle != INVALID_HANDLE_VALUE);
+        if (lock.handle != INVALID_HANDLE_VALUE) {
+            CHECK(!Exporter::savePng(originalImage, pngPath.toStdString()));
+            CHECK(png.open(QIODevice::ReadOnly));
+            CHECK(png.readAll() == before);
+            png.close();
+            CHECK(QImage(pngPath).pixelColor(1, 1) == QColor(10, 20, 30, 180));
+            CHECK(QDir(directory.path()).entryList(QDir::Files | QDir::Hidden).size() == 2);
+        }
+    }
+#endif
+    CHECK(Exporter::savePng(originalImage, pngPath.toStdString()));
+    CHECK(QImage(pngPath).pixelColor(1, 1) == QColor(Qt::green));
+    grid.height = 2;
+    grid.maxXZ = {80.0f, 80.0f};
+    grid.dbm = {-80.0f, -60.0f, -70.0f, std::numeric_limits<float>::quiet_NaN()};
+    CHECK(Exporter::exportCsv(grid, path.toStdString()));
+    CHECK(file.open(QIODevice::ReadOnly));
+    const auto rows = file.readAll().split('\n');
+    file.close();
+    CHECK(rows.size() == 6); // Header, four cells, final empty line.
+    if (rows.size() == 6) {
+        CHECK(rows[3].startsWith("30.000,80.000,-70.000,"));
+        CHECK(rows[4].startsWith("80.000,80.000,nan,"));
+        for (int i = 1; i <= 4; ++i) CHECK(rows[i].split(',').size() == 9);
+    }
+    CHECK(Exporter::exportPng(grid, pngPath.toStdString()));
+    const QImage heatmap(pngPath);
+    CHECK(heatmap.size() == QSize(2, 2));
+    CHECK(heatmap.pixelColor(0, 0) == QColor(Qt::red));
+    CHECK(heatmap.pixelColor(1, 0) == QColor(Qt::green));
+    CHECK(heatmap.pixelColor(0, 1) == QColor(Qt::yellow));
+    CHECK(heatmap.pixelColor(1, 1).alpha() == 0);
 }
 
 void testMgrsDialogInput() {
@@ -511,16 +856,87 @@ void testRuntimeAssetsIgnoreLaunchDirectory() {
 
 } // namespace
 
+void testLayersPanelDrivesTheStack() {
+    LayerStack stack;
+    LayersPanel panel;
+    panel.setStyleSheet(WorkspaceTheme::styleSheet());
+    panel.setStack(&stack);
+    panel.resize(320, 420);
+    panel.show();
+    QApplication::processEvents();
+
+    auto* list = panel.findChild<QListWidget*>("LayerList");
+    CHECK(list && list->count() == static_cast<int>(stack.size()));
+
+    // Rows read top-down while the stack is bottom-first, so the topmost row
+    // must be the last layer. Getting this backwards would silently invert
+    // which layer draws over which.
+    CHECK(list && list->item(0)->data(Qt::UserRole).toString() == "fresnel");
+    CHECK(list && list->item(list->count() - 1)->data(Qt::UserRole).toString() == "satellite");
+
+    auto* hillshade = panel.findChild<QCheckBox*>("LayerVisiblehillshade");
+    CHECK(hillshade && !hillshade->isChecked());
+    if (hillshade) {
+        hillshade->setChecked(true);
+        QApplication::processEvents();
+        CHECK(stack.find("hillshade")->visible);
+    }
+
+    auto* opacity = panel.findChild<QSlider*>("LayerOpacitysatellite");
+    CHECK(opacity && opacity->value() == 86);
+    if (opacity) {
+        opacity->setValue(30);
+        QApplication::processEvents();
+        CHECK(std::abs(stack.find("satellite")->opacity - 0.30f) < 0.01f);
+        CHECK(opacity->toolTip().contains("30%"));
+    }
+
+    // A change made anywhere else must reach the panel, so the two can never
+    // disagree about what is on screen.
+    stack.setVisible("los", true);
+    QApplication::processEvents();
+    auto* los = panel.findChild<QCheckBox*>("LayerVisiblelos");
+    CHECK(los && los->isChecked());
+
+    for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
+                           "comparison", "los", "pattern", "jamming", "fresnel"}) {
+        CHECK(panel.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id)) != nullptr);
+        CHECK(panel.findChild<QSlider*>(QString("LayerOpacity%1").arg(id)) != nullptr);
+    }
+    capturePanel(panel, "layers-panel");
+}
+
 int main(int argc, char** argv) {
+    // Permit headless QA on Windows without changing normal native test runs.
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
 #ifdef Q_OS_WIN
-    qputenv("QT_QPA_PLATFORM", "windows");
+        qputenv("QT_QPA_PLATFORM", "windows");
 #else
-    qputenv("QT_QPA_PLATFORM", "offscreen");
+        qputenv("QT_QPA_PLATFORM", "offscreen");
 #endif
+    }
     QApplication application(argc, argv);
+#ifdef Q_OS_WIN
+    if (QApplication::platformName() == "offscreen") {
+        // Qt's offscreen Windows backend does not discover system fonts.
+        // Load the workspace families explicitly instead of testing tofu glyphs.
+        const QDir fonts(QDir(qEnvironmentVariable("WINDIR")).filePath("Fonts"));
+        for (const char* name : {"segoeui.ttf", "segoeuib.ttf", "seguisym.ttf", "consola.ttf", "consolab.ttf"})
+            CHECK(QFontDatabase::addApplicationFont(fonts.filePath(name)) >= 0);
+    }
+#endif
+    application.setStyle("Fusion");
+    application.setPalette(WorkspaceTheme::palette());
+    CHECK(application.palette().color(QPalette::Window) == QColor("#101a29"));
+    CHECK(application.palette().color(QPalette::Text) == QColor("#e2e8f0"));
+    CHECK(application.palette().color(QPalette::Disabled, QPalette::Text) == QColor("#8998aa"));
     QCoreApplication::setOrganizationName("RidgelineTests");
     QCoreApplication::setApplicationName("RidgelineUiTests");
+    application.setStyleSheet(WorkspaceTheme::styleSheet());
 
+    testCompactMapControls();
+    testLayersPanelDrivesTheStack();
+    testSourceCardsPreserveSelection();
     testAdvancedPanelRemainsEditableAndCollapsible();
     testPreciseSourcePositionDialog();
     testPointAnalysisPanelShowsExplanation();

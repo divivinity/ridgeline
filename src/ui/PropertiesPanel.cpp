@@ -19,22 +19,22 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     outerLayout->setContentsMargins(14, 14, 14, 14);
     outerLayout->setSpacing(10);
 
-    auto* title = new QLabel("EMITTER SETTINGS");
+    auto* title = new QLabel("Source settings");
     title->setStyleSheet(
-        "color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+        "color: #f1f5f9; font-size: 16px; font-weight: 600;");
     outerLayout->addWidget(title);
 
     auto* help = new QLabel(
-        "Tune the selected source. Direction, feed loss, polarization and measured patterns are available under Advanced.");
+        "Set frequency, power and placement. Expand Advanced for antenna patterns and direction.");
     help->setWordWrap(true);
-    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    help->setStyleSheet("color: #a8b7ca; font-size: 12px;");
     outerLayout->addWidget(help);
 
     m_noSelLabel = new QLabel("Select an emitter or jammer from the list, or click one in the map.");
     m_noSelLabel->setWordWrap(true);
     m_noSelLabel->setAlignment(Qt::AlignCenter);
     m_noSelLabel->setStyleSheet(
-        "color: #64748b; font-size: 11px; padding: 24px 8px;");
+        "color: #a8b7ca; font-size: 13px; padding: 16px 8px;");
     outerLayout->addWidget(m_noSelLabel, 1);
 
     m_scrollArea = new QScrollArea(this);
@@ -51,6 +51,8 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     );
 
     m_form = new QWidget();
+    m_form->setObjectName("SourceSettingsForm");
+    m_form->setStyleSheet("QWidget#SourceSettingsForm { background: #101a29; }");
     auto* formLayout = new QVBoxLayout(m_form);
     formLayout->setContentsMargins(0, 4, 4, 4);
     formLayout->setSpacing(8);
@@ -65,6 +67,16 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     m_vBeamSpin = makeSpinBox(1.0, 180.0, 1.0, "°");
     m_frontBackSpin = makeSpinBox(0.0, 80.0, 1.0, " dB");
     m_cableLossSpin = makeSpinBox(0.0, 30.0, 0.1, " dB");
+    m_freqSpin->setAccessibleName("Frequency in megahertz");
+    m_powerSpin->setAccessibleName("Transmitter power in watts");
+    m_gainSpin->setAccessibleName("Antenna gain in dBi");
+    m_heightSpin->setAccessibleName("Height above ground in metres");
+    m_azimuthSpin->setAccessibleName("Azimuth in degrees");
+    m_downtiltSpin->setAccessibleName("Downtilt in degrees");
+    m_hBeamSpin->setAccessibleName("Horizontal beamwidth in degrees");
+    m_vBeamSpin->setAccessibleName("Vertical beamwidth in degrees");
+    m_frontBackSpin->setAccessibleName("Front to back ratio in decibels");
+    m_cableLossSpin->setAccessibleName("Cable loss in decibels");
 
     m_typeCombo = new QComboBox();
     m_typeCombo->setObjectName("AntennaTypeCombo");
@@ -75,7 +87,7 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     m_importPatternButton = new QPushButton("Import CSV pattern…");
     m_patternLabel = new QLabel("Analytic pattern");
     m_patternLabel->setWordWrap(true);
-    m_patternLabel->setStyleSheet("color: #64748b; font-size: 9px;");
+    m_patternLabel->setStyleSheet("color: #a8b7ca; font-size: 12px;");
 
     m_eirpLabel = new QLabel();
     m_erpLabel = new QLabel();
@@ -84,13 +96,13 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     m_positionLabel->setWordWrap(true);
     m_positionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_positionLabel->setStyleSheet(
-        "color: #a5b4c8; font-family: monospace; font-size: 9px;");
+        "color: #b8c8da; font-family: 'Consolas'; font-size: 12px;");
     m_editPositionButton = new QPushButton("Edit precise position…");
     m_editPositionButton->setObjectName("EditSourcePositionButton");
     m_editPositionButton->setToolTip(
         "Move this source using map coordinates, latitude/longitude, or MGRS");
     const QString powerReadoutStyle =
-        "color: #ccfbf1; font-family: monospace; font-size: 10px; font-weight: 600;";
+        "color: #ccfbf1; font-family: 'Consolas'; font-size: 12px; font-weight: 600;";
     m_eirpLabel->setStyleSheet(powerReadoutStyle);
     m_erpLabel->setStyleSheet(powerReadoutStyle);
     m_eirpLabel->setWordWrap(true);
@@ -103,7 +115,8 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* basicForm = new QFormLayout();
     basicForm->setContentsMargins(0, 0, 0, 0);
     basicForm->setSpacing(10);
-    basicForm->setLabelAlignment(Qt::AlignRight);
+    basicForm->setLabelAlignment(Qt::AlignLeft);
+    basicForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     basicForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     basicForm->addRow("Frequency:", m_freqSpin);
     basicForm->addRow("Power:", m_powerSpin);
@@ -135,7 +148,8 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
     auto* advancedForm = new QFormLayout(m_advancedPanel);
     advancedForm->setContentsMargins(0, 2, 0, 0);
     advancedForm->setSpacing(10);
-    advancedForm->setLabelAlignment(Qt::AlignRight);
+    advancedForm->setLabelAlignment(Qt::AlignLeft);
+    advancedForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
     advancedForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     advancedForm->addRow("Type:", m_typeCombo);
     advancedForm->addRow("Gain:", m_gainSpin);
@@ -202,10 +216,9 @@ PropertiesPanel::PropertiesPanel(QWidget* parent) : QWidget(parent) {
 
     updatePowerReadout();
     setMinimumWidth(250);
-    setMaximumWidth(380);
     setStyleSheet(
-        "QWidget { background: #0b1422; }"
-        "QToolButton { color: #94a3b8; border: none; padding: 6px 2px; text-align: left; }"
+        "PropertiesPanel { background: #101a29; }"
+        "QToolButton { color: #b8c8da; padding: 7px 6px; text-align: left; }"
         "QToolButton:hover { color: #e2e8f0; }"
         "QPushButton { background: #111c2e; border: 1px solid #2a3b52; border-radius: 6px; padding: 5px; }"
     );
@@ -349,9 +362,8 @@ QDoubleSpinBox* PropertiesPanel::makeSpinBox(double min, double max,
     sb->setDecimals((suffix == " MHz" || suffix == " m" || suffix == "°") ? 1 : 3);
     sb->setStyleSheet(
         "QDoubleSpinBox { background: #111c2e; border: 1px solid #2a3b52;"
-        " border-radius: 7px; color: #e2e8f0; font-size: 11px; padding: 5px 7px; }"
-        "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
-        " background: #172338; border: none; }"
+        " border-radius: 5px; color: #e2e8f0; font-size: 13px; padding: 6px 7px; }"
+        "QDoubleSpinBox:focus { border-color: #5eead4; }"
     );
     return sb;
 }

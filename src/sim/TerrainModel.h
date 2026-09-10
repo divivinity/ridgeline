@@ -4,6 +4,17 @@
 
 class TerrainModel {
 public:
+    // Configured provider for this loaded grid, not proof of data accuracy or
+    // vertical datum. Keep it with the grid when runtime settings change.
+    enum class ElevationProvider { Unspecified, Mapzen, Custom };
+    ElevationProvider elevationProvider = ElevationProvider::Unspecified;
+
+    // Ground sampling distance of the data this grid was built from, in metres.
+    // Zero when unknown. Distinct from the grid spacing: resampling to a finer
+    // grid does not create detail, and a grid coarser than its source discards
+    // it. Reporting both is the only way to tell those apart on screen.
+    float sourceResolutionM = 0.0f;
+
     struct GeoPoint {
         double latDeg = 0.0;
         double lonDeg = 0.0;
@@ -22,6 +33,9 @@ public:
     double cellLonDeg    = 0.0;
 
     std::vector<float> heights;
+
+    // Throws before malformed or incomplete terrain can replace a live model.
+    void validate() const;
 
     enum class LOSStatus { Clear, Diffracted, Blocked };
 
