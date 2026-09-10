@@ -3,6 +3,7 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QKeyEvent>
 #include <QPoint>
+#include <QStringList>
 #include "render/Camera.h"
 #include "render/TerrainMesh.h"
 #include "render/ShaderProgram.h"
@@ -27,8 +28,6 @@ class ViewportWidget : public QOpenGLWidget,
                        protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
 public:
-    enum Overlay { Basemap = 0, Heatmap = 1, LOS = 2, Lobe = 3, Jammer = 4, Fresnel = 5 };
-
     explicit ViewportWidget(SimEngine* engine, QWidget* parent = nullptr);
     void refreshOverlays();
     void reloadTerrain();
@@ -40,11 +39,11 @@ public:
     // layer never re-fetches tiles.
     void refreshLayers();
 
-    // Retained while the overlay regressions are rewritten against the stack;
-    // both delegate to it rather than owning any state of their own.
-    void setOverlayVisible(Overlay overlay, bool visible);
-    bool isOverlayVisible(Overlay overlay) const;
-    void setBasemapOpacity(float opacity);
+    // What the renderer will actually draw for a layer id, read from the
+    // overlay objects rather than from the stack. Two unlinked places decide
+    // this - the stack and the renderer - so a test that reads the stack back
+    // could not catch them drifting apart.
+    bool isLayerVisible(const QString& id) const;
     void resetView() { m_camera = m_defaultCamera; update(); }
     void topView() { m_camera.orbit(0.0f, 89.0f - m_camera.elevation); update(); }
     void setElevationCredit(const QString& credit) {
@@ -115,7 +114,7 @@ private:
     LayerStack* m_layers = nullptr;
     QString m_rasterSignature;
     void applyRasterLayers(bool force);
-    static QString layerIdFor(Overlay overlay);
+    QStringList m_activeRasterIds;
     QLabel* m_placementHint = nullptr;
     QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;

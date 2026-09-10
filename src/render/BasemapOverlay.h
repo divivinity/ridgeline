@@ -64,7 +64,9 @@ private:
     GLuint m_tex = 0;
     int    m_indexCount = 0;
     bool   m_hasTexture = false;
-    float  m_opacity = 0.82f;
+    // Per-layer opacity is applied when compositing the raster layers into
+    // the texture, so the shader must not dim it a second time.
+    float  m_opacity = 1.0f;
     QString m_attribution;
     QStringList m_attributions;
     std::vector<RasterRequest> m_rasterLayers;

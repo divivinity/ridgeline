@@ -28,7 +28,10 @@ MapLayer* LayerStack::mutableFind(const QString& id) {
 }
 
 void LayerStack::notify() {
-    if (m_onChanged) m_onChanged();
+    // Copy first: a listener may register another while reacting.
+    const auto listeners = m_listeners;
+    for (const auto& listener : listeners)
+        if (listener) listener();
 }
 
 void LayerStack::setVisible(const QString& id, bool visible) {

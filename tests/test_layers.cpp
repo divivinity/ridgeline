@@ -33,7 +33,7 @@ void testDefaults() {
 void testVisibilityAndOpacity() {
     LayerStack stack;
     int changes = 0;
-    stack.setOnChanged([&changes] { ++changes; });
+    stack.addListener([&changes] { ++changes; });
 
     stack.setVisible("hillshade", true);
     check(stack.find("hillshade")->visible, "setVisible turns a layer on");
