@@ -1,5 +1,6 @@
 #include "ViewportWidget.h"
 #include "TerrainPresentation.h"
+#include "map/Hillshade.h"
 #include "render/TerrainRaycast.h"
 #include <QApplication>
 #include <QMouseEvent>
@@ -151,14 +152,35 @@ void ViewportWidget::paintGL() {
     m_lastMVP = m_camera.mvp(aspect) * vertScale;
 
     m_terrain.draw(m_lastMVP);
-    if (m_basemap.visible)      m_basemap.draw(m_lastMVP);
-    if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
-    if (m_comparisonHeatmap.visible)
-        m_comparisonHeatmap.draw(m_lastMVP);
-    m_losRay.draw(m_lastMVP);
-    if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
-    if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
-    if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
+    // Base rasters and relief are composited into the basemap texture, so they
+    // draw once here rather than as separate coplanar passes.
+    if (m_basemap.visible) m_basemap.draw(m_lastMVP);
+
+    if (m_layers) {
+        // Analysis layers draw in stack order, so reordering the panel
+        // reorders what covers what.
+        for (std::size_t i = 0; i < m_layers->size(); ++i) {
+            const MapLayer& layer = m_layers->at(i);
+            if (layer.kind != LayerKind::Analysis || !layer.visible) continue;
+            if (layer.id == QLatin1String("coverage"))        m_heatmap.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("comparison")) m_comparisonHeatmap.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("los"))        m_losRay.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("pattern"))    m_antennaLobe.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("jamming"))    m_jammerBubble.draw(m_lastMVP);
+            else if (layer.id == QLatin1String("fresnel"))    m_fresnel.draw(m_lastMVP);
+        }
+    } else {
+        if (m_heatmap.visible)      m_heatmap.draw(m_lastMVP);
+        if (m_comparisonHeatmap.visible) m_comparisonHeatmap.draw(m_lastMVP);
+        if (m_losRay.visible)       m_losRay.draw(m_lastMVP);
+        if (m_antennaLobe.visible)  m_antennaLobe.draw(m_lastMVP);
+        if (m_jammerBubble.visible) m_jammerBubble.draw(m_lastMVP);
+        if (m_fresnel.visible)      m_fresnel.draw(m_lastMVP);
+    }
+
+    // The inspected-point path belongs to the result inspector, not the LOS
+    // layer, so it survives that layer being hidden.
+    m_losRay.drawProbe(m_lastMVP);
     drawAntennaMarkers();
 }
 
@@ -267,6 +289,10 @@ void ViewportWidget::reloadTerrain() {
     m_defaultCamera    = m_camera;   // save for R key
     updateMapHud();
     doneCurrent();
+    // New terrain means new tiles and a new hillshade, so the cached signature
+    // no longer describes what is on screen.
+    m_rasterSignature.clear();
+    applyRasterLayers(true);
     update();
 }
 
@@ -471,7 +497,88 @@ void ViewportWidget::wheelEvent(QWheelEvent* e) {
     update();
 }
 
+QString ViewportWidget::layerIdFor(Overlay overlay) {
+    switch (overlay) {
+        case Basemap: return QStringLiteral("satellite");
+        case Heatmap: return QStringLiteral("coverage");
+        case LOS:     return QStringLiteral("los");
+        case Lobe:    return QStringLiteral("pattern");
+        case Jammer:  return QStringLiteral("jamming");
+        case Fresnel: return QStringLiteral("fresnel");
+    }
+    return {};
+}
+
+void ViewportWidget::setLayerStack(LayerStack* layers) {
+    m_layers = layers;
+    if (!m_layers) return;
+    m_layers->setOnChanged([this] { refreshLayers(); });
+    refreshLayers();
+}
+
+// A compact description of everything that affects the composited basemap
+// texture. Comparing it means an analysis-layer toggle never triggers a tile
+// fetch, while a raster or relief change always does.
+void ViewportWidget::applyRasterLayers(bool force) {
+    if (!m_layers) return;
+
+    std::vector<BasemapOverlay::RasterRequest> rasters;
+    QString signature;
+    for (const MapLayer& layer : m_layers->visibleOfKind(LayerKind::BaseRaster)) {
+        rasters.push_back({layer.id, layer.opacity});
+        signature += layer.id + QString::number(layer.opacity, 'f', 3) + ";";
+    }
+
+    const MapLayer* relief = m_layers->find(QStringLiteral("hillshade"));
+    const bool reliefOn = relief && relief->visible;
+    if (reliefOn)
+        signature += "hillshade" + QString::number(relief->opacity, 'f', 3) + ";";
+
+    const bool anyRaster = !rasters.empty() || reliefOn;
+    m_basemap.visible = anyRaster;
+    if (!force && signature == m_rasterSignature) return;
+    m_rasterSignature = signature;
+    if (!anyRaster) return;
+
+    m_basemap.setRasterLayers(std::move(rasters));
+    if (reliefOn) {
+        // Computed from the real elevation grid, never the vertically
+        // exaggerated display mesh.
+        m_basemap.setHillshade(Hillshade::render(m_engine->terrain(), 315.0, 45.0),
+                               relief->opacity);
+    } else {
+        m_basemap.setHillshade(QImage(), 0.0f);
+    }
+
+    makeCurrent();
+    m_basemap.destroy();
+    m_basemap.build(m_engine->terrain());
+    doneCurrent();
+    updateMapHud();
+}
+
+void ViewportWidget::refreshLayers() {
+    if (!m_layers) return;
+    const auto on = [this](const char* id) {
+        const MapLayer* layer = m_layers->find(QLatin1String(id));
+        return layer && layer->visible;
+    };
+    m_heatmap.visible          = on("coverage");
+    m_comparisonHeatmap.visible = on("comparison") && !m_serviceTransition.empty();
+    m_losRay.visible           = on("los");
+    m_antennaLobe.visible      = on("pattern");
+    m_jammerBubble.visible     = on("jamming");
+    m_fresnel.visible          = on("fresnel");
+    m_heatmapLegend->setVisible(m_heatmap.visible && m_engine->fieldGrid().valid());
+    applyRasterLayers(false);
+    update();
+}
+
 void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
+    if (m_layers) {
+        m_layers->setVisible(layerIdFor(overlay), visible);
+        return;   // the stack's change callback applies it
+    }
     switch (overlay) {
         case Basemap: m_basemap.visible      = visible; break;
         case Heatmap: m_heatmap.visible      = visible;
@@ -485,6 +592,10 @@ void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
 }
 
 bool ViewportWidget::isOverlayVisible(Overlay overlay) const {
+    if (m_layers) {
+        const MapLayer* layer = m_layers->find(layerIdFor(overlay));
+        return layer && layer->visible;
+    }
     switch (overlay) {
         case Basemap: return m_basemap.visible;
         case Heatmap: return m_heatmap.visible;
