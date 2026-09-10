@@ -43,6 +43,7 @@
 #include <QBuffer>
 #include <QElapsedTimer>
 #include "data/TileBatchDownloader.h"
+#include "data/RecoveryStore.h"
 
 #include <cmath>
 #include <iostream>
@@ -1235,6 +1236,132 @@ void testExportsThroughApplicationDialogs() {
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
 
+
+// Unsaved work is only as durable as the process holding it. This drives the
+// real cycle: edit, autosave on its own timer, then a fresh window offering the
+// copy back.
+void testAutosaveAndRecovery() {
+    QTemporaryDir stateDir;
+    check(stateDir.isValid(), "recovery fixture directory");
+    if (!stateDir.isValid()) return;
+    const QByteArray previousState = qgetenv("RIDGELINE_STATE_DIR");
+    const auto stateGuard = qScopeGuard([&] { qputenv("RIDGELINE_STATE_DIR", previousState); });
+    qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+    RecoveryStore::clear();
+
+    {
+        MainWindow window;
+        window.show();
+        settle(200);
+        check(!RecoveryStore::exists(), "a clean workspace writes nothing to recover");
+
+        // Autosave must not fire on a workspace with nothing to protect.
+        auto* timer = window.findChild<QTimer*>("AutosaveTimer");
+        check(timer != nullptr, "the workspace autosaves on a timer");
+        if (!timer) return;
+        timer->setInterval(60);
+        settle(300);
+        check(!RecoveryStore::exists(), "a clean workspace still writes nothing");
+
+        // Make a real edit, then let the timer run on its own.
+        auto* list = window.findChild<QListWidget*>("SourceList");
+        auto* remove = findButton(window, "Remove");
+        check(list && remove && list->count() > 0, "recovery fixture has a source to remove");
+        if (!list || !remove || list->count() == 0) return;
+        list->setCurrentRow(0);
+        remove->click();
+        check(window.isWindowModified(), "the edit marks the workspace unsaved");
+        settle(400);
+        check(RecoveryStore::exists(), "unsaved work is autosaved without being asked");
+        check(RecoveryStore::savedAt().isValid(), "the recovery copy is timestamped");
+
+        // Discarding on close is a decision, so the copy must not outlive it.
+        withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+        check(!RecoveryStore::exists(), "closing with Discard removes the recovery copy");
+    }
+
+    // Now the crash case: a copy is present and no one cleared it.
+    {
+        MainWindow seed;
+        seed.show();
+        settle(200);
+        auto* list = seed.findChild<QListWidget*>("SourceList");
+        auto* remove = findButton(seed, "Remove");
+        if (!list || !remove || list->count() == 0) { check(false, "seed fixture"); return; }
+        const int before = list->count();
+        list->setCurrentRow(0);
+        remove->click();
+        auto* timer = seed.findChild<QTimer*>("AutosaveTimer");
+        if (timer) timer->setInterval(60);
+        settle(400);
+        check(RecoveryStore::exists(), "the crash fixture leaves a recovery copy");
+        check(before > 0, "the seed workspace had sources to lose");
+        // Leave without closing cleanly, as a crash would.
+        seed.hide();
+    }
+
+    {
+        // A fresh window must offer the copy back and restore it on Restore.
+        bool sawPrompt = false;
+        QTimer answering;
+        QObject::connect(&answering, &QTimer::timeout, [&] {
+            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            if (!box || box->objectName() != "RecoveryPrompt") return;
+            sawPrompt = true;
+            for (QAbstractButton* button : box->buttons()) {
+                if (button->text().contains("Restore")) { button->click(); return; }
+            }
+            box->reject();
+        });
+        answering.start(80);
+        MainWindow recovered;
+        recovered.show();
+        settle(1500);
+        answering.stop();
+
+        check(sawPrompt, "a recovery copy is offered on the next start");
+        check(recovered.isWindowModified(),
+              "recovered work stays unsaved, since it has no file behind it");
+        withModalAnswer(QMessageBox::Discard, [&] { recovered.close(); });
+    }
+
+    // Declining must not leave the copy to be offered again forever.
+    {
+        MainWindow seed;
+        seed.show();
+        settle(200);
+        auto* remove = findButton(seed, "Remove");
+        auto* list = seed.findChild<QListWidget*>("SourceList");
+        if (list && remove && list->count() > 0) {
+            list->setCurrentRow(0);
+            remove->click();
+            if (auto* timer = seed.findChild<QTimer*>("AutosaveTimer")) timer->setInterval(60);
+            settle(400);
+        }
+        seed.hide();
+    }
+    check(RecoveryStore::exists(), "a second crash fixture is waiting");
+    {
+        QTimer answering;
+        QObject::connect(&answering, &QTimer::timeout, [] {
+            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            if (!box || box->objectName() != "RecoveryPrompt") return;
+            for (QAbstractButton* button : box->buttons()) {
+                if (button->text().contains("Discard")) { button->click(); return; }
+            }
+            box->reject();
+        });
+        answering.start(80);
+        MainWindow declined;
+        declined.show();
+        settle(1200);
+        answering.stop();
+        check(!RecoveryStore::exists(),
+              "declining the offer removes the copy rather than asking every start");
+        withModalAnswer(QMessageBox::Discard, [&] { declined.close(); });
+    }
+}
+
 int main(int argc, char** argv) {
     QSurfaceFormat format;
     format.setVersion(3, 3);
@@ -1248,6 +1375,12 @@ int main(int argc, char** argv) {
     QCoreApplication::setOrganizationName("RidgelineTests");
     QCoreApplication::setApplicationName("RidgelineMainWindowTests");
 
+    // MainWindow now offers to restore a recovery copy on startup. Point the
+    // state directory at a throwaway location so the suite can never find a
+    // real one, hang on its modal, or inherit another run's leftovers.
+    QTemporaryDir stateDir;
+    if (stateDir.isValid()) qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+
     testCleanScenarioClosesWithoutPrompting();
     testSourceEditPromptsViaUndoStack();
     testSavingUpdatesModifiedIndicator();
@@ -1257,6 +1390,7 @@ int main(int argc, char** argv) {
     testTerrainFailureAndCancellationPreserveWorkspace();
     testScenarioOpeningProgressAndRecovery();
     testExportsThroughApplicationDialogs();
+    testAutosaveAndRecovery();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";

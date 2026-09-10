@@ -932,6 +932,8 @@ int main(int argc, char** argv) {
     CHECK(application.palette().color(QPalette::Disabled, QPalette::Text) == QColor("#8998aa"));
     QCoreApplication::setOrganizationName("RidgelineTests");
     QCoreApplication::setApplicationName("RidgelineUiTests");
+    QTemporaryDir uiStateDir;
+    if (uiStateDir.isValid()) qputenv("RIDGELINE_STATE_DIR", uiStateDir.path().toUtf8());
     application.setStyleSheet(WorkspaceTheme::styleSheet());
 
     testCompactMapControls();

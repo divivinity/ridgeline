@@ -1,4 +1,5 @@
 #include "data/ScenarioIO.h"
+#include "data/RecoveryStore.h"
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
@@ -81,6 +82,52 @@ int main() {
             legacy.close();
             require(ScenarioIO::load(layerPath.toStdString()).layers.empty(),
                     "a scenario without a layers key loads with no layer state");
+        }
+        {
+            // Recovery store: a crash-safe copy of unsaved work, kept outside
+            // the process holding it.
+            QTemporaryDir stateDir;
+            require(stateDir.isValid(), "recovery state directory");
+            qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+
+            require(!RecoveryStore::exists(), "a fresh profile has nothing to recover");
+
+            ScenarioDoc unsaved;
+            unsaved.calibrationSourceName = "unsaved work";
+            unsaved.layers = {{"hillshade", true, 0.5f}};
+            require(RecoveryStore::write(unsaved), "autosave writes a recovery copy");
+            require(RecoveryStore::exists(), "the recovery copy is found afterwards");
+            require(RecoveryStore::savedAt().isValid(), "the recovery copy is timestamped");
+
+            const ScenarioDoc recovered = RecoveryStore::read();
+            require(recovered.calibrationSourceName == "unsaved work",
+                    "recovered work round-trips through the same format");
+            require(recovered.layers.size() == 1 && recovered.layers[0].visible,
+                    "recovered work keeps its layer state");
+
+            // Writing again must replace, not accumulate.
+            ScenarioDoc later;
+            later.calibrationSourceName = "later work";
+            require(RecoveryStore::write(later), "autosave overwrites the previous copy");
+            require(RecoveryStore::read().calibrationSourceName == "later work",
+                    "the newest autosave is the one recovered");
+
+            // A stale copy would offer to restore work already dealt with.
+            RecoveryStore::clear();
+            require(!RecoveryStore::exists(), "clearing removes the recovery copy");
+            RecoveryStore::clear();
+            require(!RecoveryStore::exists(), "clearing twice is harmless");
+
+            // Autosave runs on a timer behind the user's work, so an
+            // unwritable location must fail quietly rather than throw.
+            qputenv("RIDGELINE_STATE_DIR", (stateDir.path() + "/blocked").toUtf8());
+            QFile blocker(stateDir.filePath("blocked"));
+            require(blocker.open(QIODevice::WriteOnly), "reserve the recovery path as a file");
+            blocker.write("not a directory");
+            blocker.close();
+            require(!RecoveryStore::write(unsaved),
+                    "an unwritable recovery location reports failure instead of throwing");
+            qunsetenv("RIDGELINE_STATE_DIR");
         }
         std::cout << "Scenario save checks passed\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
