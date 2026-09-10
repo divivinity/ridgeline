@@ -3,7 +3,7 @@
 Priority order agreed September 6, 2026. Specter integration follows a polished
 standalone release. This is a work list, not a claim that these features exist.
 
-## Current handoff — September 9, 18:08 UTC
+## Current handoff — September 9, 18:08 UTC (updated after commit 61c18fa)
 
 - Latest verified application is **build2/isolated-qa**, not the primary build2
   executable. Last full build succeeded and all 14 suites passed in 35.20 seconds.
@@ -13,10 +13,14 @@ standalone release. This is a work list, not a claim that these features exist.
   Unicode scenario/terrain paths, atomic scenario/CSV/PNG writes, locked-target
   preservation, multi-row CSV and exact grid-PNG sample checks. These are not a
   completed standalone release or proof of terrain/RF accuracy.
-- Next focused workflow: export a solved map through the application's dialog,
-  reopen the PNG and CSV, verify selected metric/legend/attribution and coordinate
-  content, and exercise cancel/error/retry without altering the current project.
-  Use isolated synthetic QA data; save outputs only to a fresh test directory.
+- Done since this handoff was written: the export-dialog workflow below
+  (see "Export dialog verification checkpoint"). Exports now go through the
+  application's own dialogs in test, with content, cancel, failure and retry
+  covered on isolated synthetic data.
+- Next focused workflow: map interaction and project protection — navigation
+  and placement checks, recovery/autosave, and reproducible saved-terrain
+  provenance. Camera/zoom preservation across the terrain picker is already
+  named as pending above and is a reasonable entry point.
 - After that, return to map interaction and project-protection items below:
   navigation/placement checks, recovery/autosave and reproducible saved terrain
   provenance. Do not keep repeating already-passing export-helper tests unless
@@ -515,6 +519,43 @@ describe the historical stop, not a continuing prohibition.
 Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
+
+### Export dialog verification checkpoint — September 9
+
+- Completes the handoff's next focused workflow. A solved map is now exported
+  through the application's own File > Export actions, driving the real
+  QFileDialog rather than calling the exporters directly.
+- Fixture is a synthetic 16 x 16 one-arc-second DTED grid at 10E/45N with
+  distinct positive heights, so exported coordinates and elevations cannot
+  pass a range check by accident. The run is hermetic: a temporary cache in
+  offline mode, so no basemap request reaches the network.
+- CSV reopened from a Unicode path and parsed: twelve columns, the
+  georeferenced header naming latitude/longitude/terrain_elevation_m, every
+  row inside the fixture's bounds, and `nan` for the absent jammer metrics.
+  Twelve fields per row also demonstrates the classic numeric locale held; a
+  comma-decimal setting would split each number into extra columns.
+- PNG reopened and decoded from a Unicode path. Legend and attribution are
+  viewport children, so a baseline grabbed with both hidden proves the
+  exported bytes actually contain them rather than only that a file appeared.
+- Legend pixels are compared across two metric selections. Identical output
+  would mean the exported map credits the wrong scale to the displayed field,
+  which is what the previous hardcoded-dBm legend did.
+- Cancelling either picker writes no file. A destination reserved as a
+  directory *after* picker validation fails deterministically, reports the
+  write error, leaves an earlier export byte-identical, and succeeds on retry
+  once the blocker is removed. Reserving it beforehand does not work:
+  QFileDialog navigates into an existing directory instead of returning it.
+- Reviewed build2/qa-export-offline-200329/exported-coverage.png: the legend
+  reads SNR / dB / -20 to 40 for the selected metric, attribution reads
+  "Imagery unavailable - Elevation: imported DTED", and the summary reads
+  328.5 x 463.0 m at a 30.9 m grid, which matches 15 intervals of one
+  arc-second at 45N.
+- Not established: the fixture saturates SNR across the whole area, so the
+  colour ramp's mid-range is unexercised and no contour shape is verified.
+  This uses the test's non-native Qt picker; Windows shell-dialog visual QA
+  remains outstanding, as do disk-full injection and export cancellation
+  midway through a large write.
+- All 14 suites pass in 22.15 seconds; git diff --check clean.
 
 ### PNG save protection checkpoint — September 9
 
