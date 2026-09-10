@@ -9,6 +9,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QColor>
 #include <QPainter>
 #include <QOpenGLContext>
 #include <QTimer>
@@ -198,6 +199,7 @@ int fetchProviderMosaic(QNetworkAccessManager& network,
     return loaded;
 }
 
+
 } // namespace
 
 BasemapOverlay::MercatorPixel
@@ -318,12 +320,33 @@ void BasemapOverlay::build(const TerrainModel& terrain) {
 }
 
 bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
+    QOpenGLContext* const expectedContext = QOpenGLContext::currentContext();
+
     if (!terrain.hasGeoReference()) {
-        m_lastError = "Terrain is not georeferenced";
-        return false;
+        // Relief is derived from the elevation grid, so it needs neither tiles
+        // nor a projection. The mesh already falls back to a direct grid
+        // mapping, which is why hillshade works on the procedural demo scene.
+        if (m_hillshade.isNull() || m_hillshadeOpacity <= 0.0f) {
+            m_lastError = "Terrain is not georeferenced";
+            return false;
+        }
+        QImage relief(m_hillshade.size(), QImage::Format_RGBA8888);
+        relief.fill(QColor(150, 150, 150));
+        {
+            QPainter painter(&relief);
+            painter.setCompositionMode(QPainter::CompositionMode_Multiply);
+            painter.setOpacity(std::clamp(m_hillshadeOpacity, 0.0f, 1.0f));
+            painter.drawImage(0, 0, m_hillshade.convertToFormat(QImage::Format_RGBA8888));
+        }
+        // Hillshade::render is north-up; the mesh's v axis starts at the south.
+        if (!uploadTexture(relief.mirrored(false, true), expectedContext)) return false;
+        m_attributions.clear();
+        m_providerName = QStringLiteral("Relief shading");
+        m_attribution.clear();
+        m_lastError.clear();
+        return true;
     }
 
-    QOpenGLContext* const expectedContext = QOpenGLContext::currentContext();
     const double south = terrain.originLatDeg;
     const double north = terrain.originLatDeg
                        + static_cast<double>(terrain.height - 1) * terrain.cellLatDeg;
@@ -451,6 +474,12 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
             }
             continue;
         }
+        if (request.layerId == QLatin1String("usgs-topo") && TileProviders::isFeatureless(layerMosaic)) {
+            // Tiles arrived but carry no map, so compositing them would hide
+            // whatever is underneath behind a flat no-data fill.
+            m_lastError = QStringLiteral("No topographic coverage for this area");
+            continue;
+        }
         if (!layerError.isEmpty() && m_lastError.isEmpty()) m_lastError = layerError;
 
         QPainter painter(&mosaic);
@@ -508,7 +537,13 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
     image = image.mirrored(false, true);
     if (image.isNull()) return false;
 
-    if (m_prepareOpenGL) m_prepareOpenGL();
+    if (!uploadTexture(image, expectedContext)) return false;
+    // Credit every raster that actually contributed pixels, in stack order.
+    m_attribution = m_attributions.join(QStringLiteral("  ·  "));
+    return true;
+}
+
+bool BasemapOverlay::uploadTexture(const QImage& image, QOpenGLContext* expectedContext) {
     if (QOpenGLContext::currentContext() != expectedContext) {
         m_lastError = "Could not make the map's OpenGL context current for imagery upload";
         return false;
@@ -529,8 +564,6 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
             .arg(static_cast<unsigned int>(uploadError), 0, 16);
         return false;
     }
-    // Credit every raster that actually contributed pixels, in stack order.
-    m_attribution = m_attributions.join(QStringLiteral("  ·  "));
     return true;
 }
 

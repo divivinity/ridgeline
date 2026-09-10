@@ -58,6 +58,9 @@ private:
     static int chooseZoom(const TerrainModel& terrain);
 
     bool loadTextureForTerrain(const TerrainModel& terrain);
+    // Uploads the finished image as the basemap texture. Row 0 must be the
+    // southern edge, matching the mesh's v axis.
+    bool uploadTexture(const QImage& image, class QOpenGLContext* expectedContext);
 
     ShaderProgram m_shader;
     GLuint m_vao = 0, m_vbo = 0, m_ebo = 0;
