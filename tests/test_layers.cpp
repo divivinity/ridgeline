@@ -270,6 +270,12 @@ void testScaleBar() {
     check(MapMeasure::formatDistance(250.0) == "250 m", "metres round to whole numbers");
     check(MapMeasure::formatDistance(15000.0) == "15.0 km", "long distances use kilometres");
     check(MapMeasure::formatDistance(-1.0) == "unavailable", "a negative distance is unavailable");
+
+    // A hair below datum must read as zero, not as a signed zero.
+    check(MapMeasure::withoutNegativeZero(-0.004) == 0.0, "a tiny negative rounds to plain zero");
+    check(!std::signbit(MapMeasure::withoutNegativeZero(-0.004)), "the result is not negative zero");
+    check(MapMeasure::withoutNegativeZero(-0.4, 1) == -0.4, "a real negative is preserved");
+    check(MapMeasure::withoutNegativeZero(2.6) == 3.0, "rounding still applies");
 }
 
 } // namespace

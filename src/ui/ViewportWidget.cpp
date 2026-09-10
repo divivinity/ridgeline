@@ -34,6 +34,13 @@ ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
 
     m_scaleBar = new MapScaleBar(this);
     m_northIndicator = new NorthIndicator(this);
+    m_cursorReadout = new QLabel(this);
+    m_cursorReadout->setObjectName("CursorReadout");
+    m_cursorReadout->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_cursorReadout->setStyleSheet(
+        "QLabel { background: rgba(7, 14, 25, 205); border: 1px solid rgba(148,163,184,35);"
+        " border-radius: 7px; color: #dbeafe; padding: 6px 10px; font-size: 12px; }");
+    m_cursorReadout->hide();
     m_mapInfoLabel = new QLabel(this);
     m_mapInfoLabel->setObjectName("MapTerrainSummary");
     m_mapInfoLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -482,7 +489,8 @@ void ViewportWidget::takeMeasurementPoint(float worldX, float worldZ) {
     if (!bearingText.isEmpty())
         m_measurementSummary += QStringLiteral("  ·  ") + bearingText;
     m_measurementSummary += QStringLiteral("  ·  %1 m rise")
-        .arg(static_cast<double>(groundTo - groundFrom), 0, 'f', 1);
+        .arg(MapMeasure::withoutNegativeZero(static_cast<double>(groundTo - groundFrom), 1),
+             0, 'f', 1);
 
     // Reuse the inspector's probe line to draw the measured span.
     m_losRay.setProbeSpan({m_measureFirstX, groundFrom, m_measureFirstZ},
@@ -559,12 +567,16 @@ void ViewportWidget::repositionHud() {
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
     if (!m_dragging) {
-        if (!m_placementActive) {
+        if (!m_placementActive && !m_measureActive) {
             setCursor(antennaAtScreenPosition(e->pos()) >= 0
                 ? Qt::PointingHandCursor : Qt::ArrowCursor);
         }
+        updateCursorReadout(e->pos());
         return;
     }
+    // While the camera is being dragged the readout would chase the cursor
+    // across a moving scene, which reads as noise.
+    hideCursorReadout();
 
     if (m_markerPressIndex >= 0 && (e->buttons() & Qt::LeftButton)) {
         if ((e->pos() - m_pressPos).manhattanLength() >=
@@ -592,8 +604,68 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void ViewportWidget::wheelEvent(QWheelEvent* e) {
-    m_camera.zoom(e->angleDelta().y() / 120.0f);
+    const float steps = e->angleDelta().y() / 120.0f;
+    const float radiusBefore = m_camera.radius;
+
+    // Zoom toward the ground under the cursor rather than the current target,
+    // so closing in on a ridge does not slide it out of frame and force a pan.
+    float wx = 0.0f, wz = 0.0f;
+    const bool overTerrain = raycastTerrain(e->position().toPoint(), wx, wz);
+
+    m_camera.zoom(steps);
+
+    if (overTerrain && radiusBefore > 0.0f) {
+        const float shrink = 1.0f - m_camera.radius / radiusBefore;
+        if (std::isfinite(shrink) && shrink > 0.0f) {
+            const glm::vec3 focus{wx, m_engine->terrain().heightAtWorld(wx, wz) * kVertScale, wz};
+            m_camera.target += (focus - m_camera.target) * shrink;
+        }
+    }
+    updateCursorReadout(e->position().toPoint());
     update();
+}
+
+void ViewportWidget::leaveEvent(QEvent* e) {
+    hideCursorReadout();
+    QOpenGLWidget::leaveEvent(e);
+}
+
+void ViewportWidget::hideCursorReadout() {
+    if (m_cursorReadout && m_cursorReadout->isVisible()) m_cursorReadout->hide();
+}
+
+void ViewportWidget::updateCursorReadout(const QPoint& screenPos) {
+    if (!m_cursorReadout) return;
+    float wx = 0.0f, wz = 0.0f;
+    if (!raycastTerrain(screenPos, wx, wz)) {
+        hideCursorReadout();
+        return;
+    }
+    const TerrainModel& terrain = m_engine->terrain();
+    const float ground = terrain.heightAtWorld(wx, wz);
+    QString text;
+    if (terrain.hasGeoReference()) {
+        const auto p = terrain.worldToLatLon(wx, wz);
+        text = QStringLiteral("%1°, %2°   %3 m")
+                   .arg(p.latDeg, 0, 'f', 5)
+                   .arg(p.lonDeg, 0, 'f', 5)
+                   .arg(MapMeasure::withoutNegativeZero(static_cast<double>(ground)), 0, 'f', 0);
+    } else {
+        text = QStringLiteral("X %1 m · Z %2 m   %3 m")
+                   .arg(static_cast<double>(wx), 0, 'f', 0)
+                   .arg(static_cast<double>(wz), 0, 'f', 0)
+                   .arg(MapMeasure::withoutNegativeZero(static_cast<double>(ground)), 0, 'f', 0);
+    }
+    m_cursorReadout->setText(text);
+    m_cursorReadout->adjustSize();
+    // Sit just below-right of the cursor, flipped back inside near an edge.
+    int x = screenPos.x() + 18;
+    int y = screenPos.y() + 20;
+    if (x + m_cursorReadout->width() > width()) x = screenPos.x() - m_cursorReadout->width() - 12;
+    if (y + m_cursorReadout->height() > height()) y = screenPos.y() - m_cursorReadout->height() - 12;
+    m_cursorReadout->move(std::max(0, x), std::max(0, y));
+    m_cursorReadout->show();
+    m_cursorReadout->raise();
 }
 
 void ViewportWidget::setLayerStack(LayerStack* layers) {

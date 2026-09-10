@@ -96,6 +96,8 @@ protected:
     void resizeGL(int w, int h) override;
     void paintGL() override;
     void mousePressEvent(QMouseEvent*) override;
+    // The readout must not linger over a map the cursor has left.
+    void leaveEvent(QEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void wheelEvent(QWheelEvent*) override;
@@ -137,6 +139,11 @@ private:
     float m_measureFirstX = 0.0f, m_measureFirstZ = 0.0f;
     QString m_measurementSummary;
     void takeMeasurementPoint(float worldX, float worldZ);
+    // Live readout of whatever the cursor is over. Empty when the cursor is
+    // off the terrain, so it never reports a stale position.
+    QLabel* m_cursorReadout = nullptr;
+    void updateCursorReadout(const QPoint& screenPos);
+    void hideCursorReadout();
     bool m_placingJammer = false;
     glm::mat4 m_lastMVP{1.0f};
     bool m_analysisPointActive = false;
