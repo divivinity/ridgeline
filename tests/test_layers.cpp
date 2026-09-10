@@ -2,6 +2,7 @@
 // these run on every platform and in the default (non-GUI) configure.
 #include "map/LayerStack.h"
 #include "map/Hillshade.h"
+#include "map/TileProviders.h"
 #include "data/TerrainLoader.h"
 
 #include <cmath>
@@ -155,6 +156,37 @@ void testHillshade() {
           "a grid smaller than 2x2 returns a null image");
 }
 
+void testProviders() {
+    const MapTileProvider topo = TileProviders::usgsTopo();
+    check(topo.id == "usgs-topo", "usgs provider carries the layer id");
+    check(topo.usOnly, "usgs topo is flagged US-only");
+    check(topo.attribution.contains("USGS"), "usgs provider credits the USGS");
+    check(topo.maxZoom == 16, "usgs topo declares its zoom ceiling");
+
+    // ArcGIS addresses tiles row before column. Pin the produced URL so a
+    // transposed template, which would silently mirror a whole basemap, fails
+    // here instead of on screen.
+    check(TileProviders::tileUrl(topo, 5, 7, 22).endsWith("/5/22/7"),
+          "usgs url puts row before column");
+    const MapTileProvider esri = TileProviders::esriImagery();
+    check(TileProviders::tileUrl(esri, 5, 7, 22).endsWith("/5/22/7"),
+          "esri url puts row before column");
+    check(!esri.usOnly, "esri imagery is not US-only");
+
+    check(TileProviders::cachePath(topo, 5, 7, 22) == "imagery/usgs-topo/5/7/22.tile",
+          "cache path uses the provider namespace and logical x/y");
+    check(TileProviders::cachePath(esri, 5, 7, 22) != TileProviders::cachePath(topo, 5, 7, 22),
+          "two providers never share a cache path");
+
+    MapTileProvider found;
+    check(TileProviders::forLayer("usgs-topo", found) && found.id == "usgs-topo",
+          "forLayer resolves a raster layer");
+    check(!TileProviders::forLayer("hillshade", found),
+          "a terrain-derived layer has no tile provider");
+    check(!TileProviders::forLayer("coverage", found),
+          "an analysis layer has no tile provider");
+}
+
 } // namespace
 
 int main() {
@@ -164,6 +196,7 @@ int main() {
     testVisibleOfKind();
     testScenarioRoundTrip();
     testHillshade();
+    testProviders();
     if (failures == 0) std::cout << "Layer tests passed.\n";
     return failures == 0 ? 0 : 1;
 }
