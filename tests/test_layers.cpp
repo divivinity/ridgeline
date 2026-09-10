@@ -1,6 +1,8 @@
 // Headless tests for the map layer model. No widgets and no GL context, so
 // these run on every platform and in the default (non-GUI) configure.
 #include "map/LayerStack.h"
+#include "map/Hillshade.h"
+#include "data/TerrainLoader.h"
 
 #include <cmath>
 #include <iostream>
@@ -111,6 +113,48 @@ void testScenarioRoundTrip() {
     check(empty.at(0).id == "satellite", "empty state leaves order alone");
 }
 
+TerrainModel rampNorth(int samples, float cellSize) {
+    TerrainModel t = TerrainLoader::makeFlat(samples, samples, cellSize, 0.0f);
+    for (int z = 0; z < t.height; ++z)
+        for (int x = 0; x < t.width; ++x)
+            t.heights[z * t.width + x] = static_cast<float>(z) * 10.0f;
+    return t;
+}
+
+void testHillshade() {
+    const TerrainModel ramp = rampNorth(16, 30.0f);
+    const QImage shaded = Hillshade::render(ramp, 315.0, 45.0);
+    check(!shaded.isNull(), "hillshade produces an image");
+    check(shaded.width() == ramp.width && shaded.height() == ramp.height,
+          "hillshade matches the terrain grid size");
+
+    const TerrainModel flat = TerrainLoader::makeFlat(16, 16, 30.0f, 0.0f);
+    const QImage flatShaded = Hillshade::render(flat, 315.0, 45.0);
+    check(qGray(shaded.pixel(8, 8)) != qGray(flatShaded.pixel(8, 8)),
+          "a slope shades differently from flat ground");
+
+    // Flat ground has zero slope everywhere, so every sample takes the same
+    // value: cos(zenith). At 45 degrees altitude that is ~0.707 -> 180.
+    check(std::abs(qGray(flatShaded.pixel(2, 2)) - 180) <= 1,
+          "flat ground shades to cos(zenith)");
+    check(qGray(flatShaded.pixel(2, 2)) == qGray(flatShaded.pixel(13, 13)),
+          "flat ground shades uniformly");
+
+    // Shading must come from true elevations and real spacing: widening the
+    // samples makes the same height change a gentler real slope.
+    const QImage wide = Hillshade::render(rampNorth(16, 60.0f), 315.0, 45.0);
+    check(qGray(wide.pixel(8, 8)) != qGray(shaded.pixel(8, 8)),
+          "sample spacing changes the computed slope");
+
+    // Moving the light to the opposite bearing must change a sloped sample.
+    const QImage fromSoutheast = Hillshade::render(ramp, 135.0, 45.0);
+    check(qGray(fromSoutheast.pixel(8, 8)) != qGray(shaded.pixel(8, 8)),
+          "illumination azimuth changes the result");
+
+    check(Hillshade::render(TerrainLoader::makeFlat(1, 1, 30.0f, 0.0f), 315.0, 45.0).isNull(),
+          "a grid smaller than 2x2 returns a null image");
+}
+
 } // namespace
 
 int main() {
@@ -119,6 +163,7 @@ int main() {
     testReorder();
     testVisibleOfKind();
     testScenarioRoundTrip();
+    testHillshade();
     if (failures == 0) std::cout << "Layer tests passed.\n";
     return failures == 0 ? 0 : 1;
 }
