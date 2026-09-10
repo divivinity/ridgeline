@@ -25,6 +25,15 @@ struct TerrainSource {
     float amplitude   = 40.0f;
 };
 
+// Map layer visibility, opacity and order, in stack order (bottom first).
+// Absent from scenarios written before layers existed; the stack falls back to
+// its defaults in that case.
+struct ScenarioLayerState {
+    std::string id;
+    bool visible = false;
+    float opacity = 1.0f;
+};
+
 struct ScenarioDoc {
     TerrainSource        terrain;
     SimEngine::Mode      mode = SimEngine::Mode::Fast;
@@ -37,6 +46,7 @@ struct ScenarioDoc {
     float                calibrationRmseAfterDb =
         std::numeric_limits<float>::quiet_NaN();
     std::vector<Antenna> antennas;
+    std::vector<ScenarioLayerState> layers;
 };
 
 class ScenarioIO {

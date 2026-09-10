@@ -2,6 +2,7 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #ifdef Q_OS_WIN
@@ -60,6 +61,27 @@ int main() {
         require(QFile::exists(unicodePath), "save uses the exact Unicode path");
         require(ScenarioIO::load(unicodePath.toStdString()).calibrationSourceName == "replacement",
                 "Unicode directory and filename round trip");
+        {
+            ScenarioDoc layered;
+            layered.layers = {{"hillshade", true, 0.4f}, {"satellite", false, 1.0f}};
+            const QString layerPath = dir.filePath("layers.json");
+            ScenarioIO::save(layered, layerPath.toStdString());
+            const ScenarioDoc back = ScenarioIO::load(layerPath.toStdString());
+            require(back.layers.size() == 2, "layer state round-trips");
+            require(back.layers[0].id == "hillshade" && back.layers[0].visible &&
+                        std::abs(back.layers[0].opacity - 0.4f) < 1e-6f,
+                    "layer fields round-trip in stack order");
+            require(!back.layers[1].visible, "a hidden layer stays hidden");
+
+            // Scenarios written before layers existed must still load.
+            QFile legacy(layerPath);
+            require(legacy.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                    "rewrite scenario without a layers key");
+            legacy.write("{\"mode\":\"planner\"}");
+            legacy.close();
+            require(ScenarioIO::load(layerPath.toStdString()).layers.empty(),
+                    "a scenario without a layers key loads with no layer state");
+        }
         std::cout << "Scenario save checks passed\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
