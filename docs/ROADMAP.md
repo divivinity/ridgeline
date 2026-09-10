@@ -520,6 +520,42 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Project protection: autosave, recovery, history and layout — September 10
+
+- Roadmap item 4, started after the five requested slices landed.
+- Autosave and crash recovery: a scenario that has never been saved has no file
+  to fall back on, so unsaved work was only as durable as the process holding
+  it. RecoveryStore keeps a copy outside that process, written through
+  ScenarioIO so it inherits the same atomic replacement, on a two-minute timer
+  and only when there is unsaved work and the workspace is idle. The copy is
+  cleared on a save, a deliberate discard, or declining the offer, so it can
+  never resurrect work already dealt with. Recovered work stays marked unsaved.
+- Recent scenarios and recent locations, capped and de-duplicated, recorded only
+  on success so a failed open or cancelled load never enters the history.
+  Locations within about a hundred metres count as the same place, so nudging
+  the map and reloading does not fill the list with near-duplicates.
+- Window geometry and dock arrangement persist between runs. The shipped
+  arrangement is captured before any stored layout is applied, so Reset
+  workspace layout still returns to it rather than to what was restored.
+- The stale-result indicator listed under this item was built and then removed.
+  It could never appear: every path that changes an input already discards the
+  field outright, so Ridgeline does not permit a stale result to exist. Shipping
+  it would have meant dead UI and a vacuously passing test. What survives is
+  SolveSignature, tested directly, and a regression pinning the real invariant -
+  after a solve, editing a source or changing propagation mode must discard the
+  result. Worth revisiting as a product decision: discarding means a long solve
+  is lost to a nudged spinbox, and the signature needed to mark-instead-of-discard
+  now exists.
+- Environment hazard, hit twice: OneDrive syncs this working tree and silently
+  rolled MainWindow.cpp back to an older version while leaving the newer one in
+  a "(# Edit conflict #)" copy, which the source glob then compiled alongside it
+  into duplicate symbols. The conflict copy was the correct file. Build output
+  under build2/ still contains dozens of such copies. Excluding this tree from
+  sync would remove a real risk of silent work loss.
+- Not established: no autosave interval setting, no multi-slot recovery history,
+  and no test of recovery across an actual process kill - the crash case is
+  simulated by leaving a window without closing it cleanly.
+
 ### LiDAR: derived elevation supported, point clouds deferred — September 10
 
 - Roadmap item 12, the last of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.

@@ -24,6 +24,7 @@
 #include <QProgressDialog>
 #include <QEventLoop>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
@@ -45,6 +46,7 @@
 #include <QElapsedTimer>
 #include "data/TileBatchDownloader.h"
 #include "data/RecoveryStore.h"
+#include "data/WorkspaceSettings.h"
 
 #include <cmath>
 #include <iostream>
@@ -1417,6 +1419,98 @@ void testDisplayedResultsAlwaysMatchTheirInputs() {
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
 
+
+// Where you have been and how you had the panels arranged, remembered between
+// runs. Uses its own state directory so it cannot inherit or leak history.
+void testRecentHistoryAndLayoutPersist() {
+    QTemporaryDir stateDir;
+    check(stateDir.isValid(), "history fixture directory");
+    if (!stateDir.isValid()) return;
+    const QByteArray previousState = qgetenv("RIDGELINE_STATE_DIR");
+    const auto stateGuard = qScopeGuard([&] { qputenv("RIDGELINE_STATE_DIR", previousState); });
+    qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+    WorkspaceSettings::clear();
+    RecoveryStore::clear();
+
+    QTemporaryDir docs;
+    check(docs.isValid(), "history scenario directory");
+    if (!docs.isValid()) return;
+    const QString saved = docs.filePath("history.json");
+
+    {
+        MainWindow window;
+        window.show();
+        settle(200);
+
+        auto* scenarios = window.findChild<QMenu*>("RecentScenariosMenu");
+        auto* locations = window.findChild<QMenu*>("RecentLocationsMenu");
+        check(scenarios && locations, "the File menu offers both histories");
+        if (!scenarios || !locations) return;
+        // An empty history must not present an empty submenu to click into.
+        check(!scenarios->isEnabled(), "an empty scenario history is disabled");
+        check(!locations->isEnabled(), "an empty location history is disabled");
+
+        // Saving is somewhere you have been, so it enters the history.
+        bool sawPicker = false;
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            if (auto* dialog = window.findChild<QFileDialog*>(); dialog && dialog->isVisible()) {
+                sawPicker = true;
+                if (auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit")) {
+                    edit->setText(saved);
+                    QMetaObject::invokeMethod(dialog, "accept");
+                }
+            }
+        });
+        driver.start(25);
+        check(QMetaObject::invokeMethod(&window, "onSaveScenario"), "save is reachable");
+        driver.stop();
+        check(sawPicker, "the save picker was driven");
+        settle(120);
+
+        check(scenarios->isEnabled(), "saving enables the scenario history");
+        check(scenarios->actions().size() == 1, "the saved scenario is listed once");
+        if (!scenarios->actions().isEmpty()) {
+            check(scenarios->actions().first()->text() == "history.json",
+                  "the history lists the file by name");
+            check(scenarios->actions().first()->toolTip() == saved,
+                  "the full path is available, since names collide");
+        }
+
+        // Arrange the panels differently, then close so it is remembered.
+        if (auto* layersDock = window.findChild<QDockWidget*>("LayersDock"))
+            layersDock->hide();
+        settle(120);
+        withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+    }
+
+    check(!WorkspaceSettings::layoutState().isEmpty(), "closing remembers the arrangement");
+    check(WorkspaceSettings::recentScenarios().size() == 1, "history survives the window");
+
+    {
+        // A new window restores both.
+        MainWindow reopened;
+        reopened.show();
+        settle(400);
+        auto* scenarios = reopened.findChild<QMenu*>("RecentScenariosMenu");
+        check(scenarios && scenarios->isEnabled() && scenarios->actions().size() == 1,
+              "a new window shows the remembered scenario history");
+        auto* layersDock = reopened.findChild<QDockWidget*>("LayersDock");
+        check(layersDock && layersDock->isHidden(),
+              "a new window restores the arrangement it was left in");
+
+        // Reset must still return to the shipped arrangement, not the stored one.
+        if (auto* reset = reopened.findChild<QAction*>("ResetLayoutAction")) {
+            reset->trigger();
+            settle(150);
+            check(layersDock && !layersDock->isHidden(),
+                  "resetting the layout overrides what was restored");
+        }
+        withModalAnswer(QMessageBox::Discard, [&] { reopened.close(); });
+    }
+    WorkspaceSettings::clear();
+}
+
 int main(int argc, char** argv) {
     QSurfaceFormat format;
     format.setVersion(3, 3);
@@ -1447,6 +1541,7 @@ int main(int argc, char** argv) {
     testExportsThroughApplicationDialogs();
     testAutosaveAndRecovery();
     testDisplayedResultsAlwaysMatchTheirInputs();
+    testRecentHistoryAndLayoutPersist();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";
