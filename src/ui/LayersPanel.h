@@ -21,6 +21,10 @@ public:
 
 private:
     void rebuildRows();
+    // Updates existing rows in place. Safe to call from a row's own signal,
+    // unlike rebuildRows(), which deletes the widget that is emitting.
+    void syncRows();
+    bool orderMatchesStack() const;
     void applyRowOrder();
 
     LayerStack* m_stack = nullptr;

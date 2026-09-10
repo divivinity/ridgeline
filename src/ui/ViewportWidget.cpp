@@ -133,6 +133,8 @@ void ViewportWidget::initializeGL() {
     m_camera.radius  = terrain.worldSize().x * 0.8f;
     m_camera.elevation = 35.0f;
     m_defaultCamera = m_camera;   // save for R key
+    // The stack may have been bound before this context existed.
+    applyRasterLayers(true);
     updateMapHud();
 }
 
@@ -388,10 +390,6 @@ int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
     return bestIndex;
 }
 
-void ViewportWidget::setBasemapOpacity(float opacity) {
-    m_basemap.setOpacity(opacity);
-    update();
-}
 
 void ViewportWidget::setPlacementMode(bool active, bool jammer) {
     m_placementActive = active;
@@ -497,22 +495,10 @@ void ViewportWidget::wheelEvent(QWheelEvent* e) {
     update();
 }
 
-QString ViewportWidget::layerIdFor(Overlay overlay) {
-    switch (overlay) {
-        case Basemap: return QStringLiteral("satellite");
-        case Heatmap: return QStringLiteral("coverage");
-        case LOS:     return QStringLiteral("los");
-        case Lobe:    return QStringLiteral("pattern");
-        case Jammer:  return QStringLiteral("jamming");
-        case Fresnel: return QStringLiteral("fresnel");
-    }
-    return {};
-}
-
 void ViewportWidget::setLayerStack(LayerStack* layers) {
     m_layers = layers;
     if (!m_layers) return;
-    m_layers->setOnChanged([this] { refreshLayers(); });
+    m_layers->addListener([this] { refreshLayers(); });
     refreshLayers();
 }
 
@@ -536,6 +522,18 @@ void ViewportWidget::applyRasterLayers(bool force) {
 
     const bool anyRaster = !rasters.empty() || reliefOn;
     m_basemap.visible = anyRaster;
+    m_activeRasterIds.clear();
+    for (const BasemapOverlay::RasterRequest& raster : rasters)
+        m_activeRasterIds << raster.layerId;
+    if (reliefOn) m_activeRasterIds << QStringLiteral("hillshade");
+
+    // MainWindow binds the stack during construction, before this widget has a
+    // GL context. makeCurrent() and the texture build below both require one,
+    // so defer to initializeGL and leave the signature empty to force it.
+    if (!isValid()) {
+        m_rasterSignature.clear();
+        return;
+    }
     if (!force && signature == m_rasterSignature) return;
     m_rasterSignature = signature;
     if (!anyRaster) return;
@@ -574,37 +572,16 @@ void ViewportWidget::refreshLayers() {
     update();
 }
 
-void ViewportWidget::setOverlayVisible(Overlay overlay, bool visible) {
-    if (m_layers) {
-        m_layers->setVisible(layerIdFor(overlay), visible);
-        return;   // the stack's change callback applies it
-    }
-    switch (overlay) {
-        case Basemap: m_basemap.visible      = visible; break;
-        case Heatmap: m_heatmap.visible      = visible;
-                      m_heatmapLegend->setVisible(visible && m_engine->fieldGrid().valid()); break;
-        case LOS:     m_losRay.visible       = visible; break;
-        case Lobe:    m_antennaLobe.visible  = visible; break;
-        case Jammer:  m_jammerBubble.visible = visible; break;
-        case Fresnel: m_fresnel.visible      = visible; break;
-    }
-    update();
-}
-
-bool ViewportWidget::isOverlayVisible(Overlay overlay) const {
-    if (m_layers) {
-        const MapLayer* layer = m_layers->find(layerIdFor(overlay));
-        return layer && layer->visible;
-    }
-    switch (overlay) {
-        case Basemap: return m_basemap.visible;
-        case Heatmap: return m_heatmap.visible;
-        case LOS:     return m_losRay.visible;
-        case Lobe:    return m_antennaLobe.visible;
-        case Jammer:  return m_jammerBubble.visible;
-        case Fresnel: return m_fresnel.visible;
-    }
-    return false;
+bool ViewportWidget::isLayerVisible(const QString& id) const {
+    if (id == QLatin1String("coverage"))   return m_heatmap.visible;
+    if (id == QLatin1String("comparison")) return m_comparisonHeatmap.visible;
+    if (id == QLatin1String("los"))        return m_losRay.visible;
+    if (id == QLatin1String("pattern"))    return m_antennaLobe.visible;
+    if (id == QLatin1String("jamming"))    return m_jammerBubble.visible;
+    if (id == QLatin1String("fresnel"))    return m_fresnel.visible;
+    // Rasters and relief are composited into one texture, so "drawn" means the
+    // basemap is being drawn and this layer contributed to it.
+    return m_basemap.visible && m_activeRasterIds.contains(id);
 }
 
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {

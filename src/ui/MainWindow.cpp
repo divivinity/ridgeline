@@ -374,10 +374,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     overlayTb->setObjectName("OverlayToolbar");
     overlayTb->setMovable(false);
     overlayTb->addWidget(m_overlayBar);
-    connect(m_overlayBar, &OverlayToolbar::overlayToggled,
-            m_viewport, &ViewportWidget::setOverlayVisible);
-    connect(m_overlayBar, &OverlayToolbar::basemapOpacityChanged,
-            m_viewport, &ViewportWidget::setBasemapOpacity);
     connect(m_overlayBar, &OverlayToolbar::heatmapMetricChanged,
             m_viewport, &ViewportWidget::setHeatmapMetric);
     connect(m_overlayBar, &OverlayToolbar::resetViewRequested,

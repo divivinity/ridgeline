@@ -6,6 +6,8 @@
 #include "ui/ScenarioComparisonPanel.h"
 #include "ui/CalibrationPanel.h"
 #include "ui/OverlayToolbar.h"
+#include "ui/LayersPanel.h"
+#include "map/LayerStack.h"
 #include "ui/ScenarioTree.h"
 #include "ui/WorkspaceTheme.h"
 #include "ui/TerrainPresentation.h"
@@ -138,13 +140,10 @@ void testCompactMapControls() {
     toolbar.show();
     QApplication::processEvents();
     auto* metric = toolbar.findChild<QComboBox*>("CoverageMetricCombo");
-    auto* opacity = toolbar.findChild<QSlider*>("ImageryOpacitySlider");
-    auto* opacityValue = toolbar.findChild<QLabel*>("ImageryOpacityValue");
-    auto* layers = toolbar.findChild<QToolButton*>("AnalysisLayersButton");
     auto* reset = toolbar.findChild<QToolButton*>("ResetMapViewButton");
-    auto* imagery = toolbar.findChild<QCheckBox*>("OverlayToggle0");
-    CHECK(metric && opacity && opacityValue && layers && reset && imagery);
-    if (!metric || !opacity || !opacityValue || !layers || !reset || !imagery) return;
+    auto* top = toolbar.findChild<QToolButton*>("TopMapViewButton");
+    CHECK(metric && reset && top);
+    if (!metric || !reset || !top) return;
     CHECK(metric->count() == 7);
     CHECK(!metric->accessibleName().isEmpty());
     HeatmapOverlay::Metric selected = HeatmapOverlay::Metric::DesiredPower;
@@ -154,52 +153,19 @@ void testCompactMapControls() {
         metric->setCurrentIndex(i);
         CHECK(static_cast<int>(selected) == metric->itemData(i).toInt());
     }
-    float alpha = 0.0f;
-    QObject::connect(&toolbar, &OverlayToolbar::basemapOpacityChanged,
-                     [&](float value) { alpha = value; });
-    opacity->setValue(50);
-    CHECK(std::abs(alpha - 0.5f) < 0.001f);
-    CHECK(opacityValue->text() == "50%");
-    CHECK(opacity->toolTip().contains("50%"));
-    CHECK(layers->menu() && layers->menu()->actions().size() == 4);
-    int lastLayer = -1;
-    bool visible = false;
-    QObject::connect(&toolbar, &OverlayToolbar::overlayToggled,
-                     [&](ViewportWidget::Overlay id, bool enabled) {
-        lastLayer = static_cast<int>(id); visible = enabled;
-    });
-    if (layers->menu()) {
-        int expected = static_cast<int>(ViewportWidget::LOS);
-        const QSize before = toolbar.sizeHint();
-        for (QAction* action : layers->menu()->actions()) {
-            CHECK(action->isCheckable() && !action->isChecked());
-            action->trigger();
-            CHECK(lastLayer == expected++ && visible);
-            action->trigger();
-            CHECK(!visible);
-        }
-        CHECK(toolbar.sizeHint() == before);
-    }
-    imagery->setChecked(false);
-    CHECK(lastLayer == static_cast<int>(ViewportWidget::Basemap) && !visible);
-    CHECK(!opacity->isEnabled() && !opacityValue->isEnabled());
-    CHECK(opacity->value() == 50 && opacityValue->text() == "50%");
-    capturePanel(toolbar, "imagery-hidden-toolbar");
-    imagery->setChecked(true);
-    CHECK(opacity->isEnabled() && opacityValue->isEnabled());
-    CHECK(opacity->value() == 50 && std::abs(alpha - 0.5f) < 0.001f);
-    CHECK(lastLayer == static_cast<int>(ViewportWidget::Basemap) && visible);
+    // Layer visibility, opacity and order moved to the Layers dock, which owns
+    // them alone so the two controls cannot disagree. The dock is covered by
+    // testLayersPanelDrivesTheStack below.
+    capturePanel(toolbar, "map-controls-toolbar");
     int resets = 0;
     QObject::connect(&toolbar, &OverlayToolbar::resetViewRequested, [&]() { ++resets; });
     reset->click();
     CHECK(resets == 1);
     CHECK(toolbar.rect().contains(reset->geometry()));
     CHECK(toolbar.sizeHint().width() <= 900);
-    auto* top = toolbar.findChild<QToolButton*>("TopMapViewButton");
-    CHECK(top);
     int topViews = 0;
     QObject::connect(&toolbar, &OverlayToolbar::topViewRequested, [&]() { ++topViews; });
-    if (top) top->click();
+    top->click();
     CHECK(topViews == 1);
 }
 
@@ -883,6 +849,56 @@ void testRuntimeAssetsIgnoreLaunchDirectory() {
 
 } // namespace
 
+void testLayersPanelDrivesTheStack() {
+    LayerStack stack;
+    LayersPanel panel;
+    panel.setStyleSheet(WorkspaceTheme::styleSheet());
+    panel.setStack(&stack);
+    panel.resize(320, 420);
+    panel.show();
+    QApplication::processEvents();
+
+    auto* list = panel.findChild<QListWidget*>("LayerList");
+    CHECK(list && list->count() == static_cast<int>(stack.size()));
+
+    // Rows read top-down while the stack is bottom-first, so the topmost row
+    // must be the last layer. Getting this backwards would silently invert
+    // which layer draws over which.
+    CHECK(list && list->item(0)->data(Qt::UserRole).toString() == "fresnel");
+    CHECK(list && list->item(list->count() - 1)->data(Qt::UserRole).toString() == "satellite");
+
+    auto* hillshade = panel.findChild<QCheckBox*>("LayerVisiblehillshade");
+    CHECK(hillshade && !hillshade->isChecked());
+    if (hillshade) {
+        hillshade->setChecked(true);
+        QApplication::processEvents();
+        CHECK(stack.find("hillshade")->visible);
+    }
+
+    auto* opacity = panel.findChild<QSlider*>("LayerOpacitysatellite");
+    CHECK(opacity && opacity->value() == 86);
+    if (opacity) {
+        opacity->setValue(30);
+        QApplication::processEvents();
+        CHECK(std::abs(stack.find("satellite")->opacity - 0.30f) < 0.01f);
+        CHECK(opacity->toolTip().contains("30%"));
+    }
+
+    // A change made anywhere else must reach the panel, so the two can never
+    // disagree about what is on screen.
+    stack.setVisible("los", true);
+    QApplication::processEvents();
+    auto* los = panel.findChild<QCheckBox*>("LayerVisiblelos");
+    CHECK(los && los->isChecked());
+
+    for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
+                           "comparison", "los", "pattern", "jamming", "fresnel"}) {
+        CHECK(panel.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id)) != nullptr);
+        CHECK(panel.findChild<QSlider*>(QString("LayerOpacity%1").arg(id)) != nullptr);
+    }
+    capturePanel(panel, "layers-panel");
+}
+
 int main(int argc, char** argv) {
     // Permit headless QA on Windows without changing normal native test runs.
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
@@ -912,6 +928,7 @@ int main(int argc, char** argv) {
     application.setStyleSheet(WorkspaceTheme::styleSheet());
 
     testCompactMapControls();
+    testLayersPanelDrivesTheStack();
     testSourceCardsPreserveSelection();
     testAdvancedPanelRemainsEditableAndCollapsible();
     testPreciseSourcePositionDialog();

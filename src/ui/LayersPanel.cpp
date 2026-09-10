@@ -7,6 +7,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QSlider>
+#include <QSignalBlocker>
+#include <QTimer>
 #include <QVBoxLayout>
 
 LayersPanel::LayersPanel(QWidget* parent) : QWidget(parent) {
@@ -47,15 +49,54 @@ LayersPanel::LayersPanel(QWidget* parent) : QWidget(parent) {
 void LayersPanel::setStack(LayerStack* stack) {
     m_stack = stack;
     if (m_stack) {
-        m_stack->setOnChanged([this] {
-            if (!m_updating) refresh();
+        m_stack->addListener([this] {
+            // A change made elsewhere can arrive while one of this panel's own
+            // rows is mid-signal, and rebuilding would delete the widget that
+            // is emitting. Updating in place is safe; only a reorder needs new
+            // rows, and that is deferred out of the signal.
+            if (m_updating) return;
+            if (orderMatchesStack()) syncRows();
+            else QTimer::singleShot(0, this, [this] { rebuildRows(); });
         });
     }
     rebuildRows();
 }
 
 void LayersPanel::refresh() {
-    rebuildRows();
+    if (orderMatchesStack()) syncRows();
+    else rebuildRows();
+}
+
+bool LayersPanel::orderMatchesStack() const {
+    if (!m_stack || !m_list) return false;
+    if (static_cast<std::size_t>(m_list->count()) != m_stack->size()) return false;
+    // The list is top-down, the stack bottom-first.
+    for (int row = 0; row < m_list->count(); ++row) {
+        const std::size_t index = m_stack->size() - 1 - static_cast<std::size_t>(row);
+        if (m_list->item(row)->data(Qt::UserRole).toString() != m_stack->at(index).id)
+            return false;
+    }
+    return true;
+}
+
+void LayersPanel::syncRows() {
+    if (!m_stack || !m_list) return;
+    m_updating = true;
+    for (int row = 0; row < m_list->count(); ++row) {
+        const QString id = m_list->item(row)->data(Qt::UserRole).toString();
+        const MapLayer* layer = m_stack->find(id);
+        if (!layer) continue;
+        if (auto* box = findChild<QCheckBox*>("LayerVisible" + id)) {
+            const QSignalBlocker blocker(box);
+            box->setChecked(layer->visible);
+        }
+        if (auto* slider = findChild<QSlider*>("LayerOpacity" + id)) {
+            const QSignalBlocker blocker(slider);
+            slider->setValue(static_cast<int>(layer->opacity * 100.0f + 0.5f));
+            slider->setEnabled(layer->visible);
+        }
+    }
+    m_updating = false;
 }
 
 void LayersPanel::rebuildRows() {
@@ -83,12 +124,15 @@ void LayersPanel::rebuildRows() {
         visible->setAccessibleName(layer.displayName + " visible");
         visible->setChecked(layer.visible);
         visible->setToolTip("Show or hide " + layer.displayName);
-        connect(visible, &QCheckBox::toggled, this, [this, id](bool on) {
+        connect(visible, &QCheckBox::toggled, this, [this, id, opacityFor = row](bool on) {
             if (!m_stack) return;
             m_updating = true;
             m_stack->setVisible(id, on);
             m_updating = false;
-            refresh();
+            // Only this row's opacity control is affected, so update it in
+            // place rather than rebuilding the list from inside this signal.
+            if (auto* slider = opacityFor->findChild<QSlider*>("LayerOpacity" + id))
+                slider->setEnabled(on);
         });
         rowLayout->addWidget(visible, 1);
 
@@ -132,5 +176,5 @@ void LayersPanel::applyRowOrder() {
         m_stack->move(id, static_cast<std::size_t>(target));
     }
     m_updating = false;
-    refresh();
+    QTimer::singleShot(0, this, [this] { rebuildRows(); });
 }

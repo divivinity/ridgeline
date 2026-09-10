@@ -223,6 +223,8 @@ add_test(NAME location_picking_tests COMMAND ridgeline_location_picking_tests
 add_executable(ridgeline_ui_interaction_tests
     tests/test_ui_interactions.cpp
     src/ui/OverlayToolbar.cpp
+    src/ui/LayersPanel.cpp
+    src/map/LayerStack.cpp
     src/ui/ScenarioTree.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/LocationDialog.cpp

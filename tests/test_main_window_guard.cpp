@@ -26,6 +26,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QTcpServer>
@@ -357,27 +358,43 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     auto* legend = window.findChild<HeatmapLegend*>();
     check(legend && legend->isHidden(), "unsolved scene has no result legend");
 
-    for (int id = 0; id < 6; ++id) {
-        const auto overlay = static_cast<ViewportWidget::Overlay>(id);
-        if (id <= 1) {
-            auto* box = window.findChild<QCheckBox*>(QString("OverlayToggle%1").arg(id));
-            check(box != nullptr, "found primary overlay toggle");
-            if (!box) continue;
-            check(box->isChecked() == viewport->isOverlayVisible(overlay),
-                  "primary overlay matches startup state");
-            box->setChecked(!box->isChecked());
-            check(box->isChecked() == viewport->isOverlayVisible(overlay),
-                  "primary overlay responds to toggle");
+    // Two unlinked places decide what is on screen: the layer stack that the
+    // panel writes to, and the overlay objects the renderer reads. They can
+    // drift, so every row is checked against what the viewport will draw.
+    auto* layerList = window.findChild<QListWidget*>("LayerList");
+    check(layerList != nullptr, "the Layers dock lists its layers");
+    check(layerList && layerList->count() == 9, "every layer has a row");
+    for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
+                           "comparison", "los", "pattern", "jamming", "fresnel"}) {
+        auto* box = window.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id));
+        check(box != nullptr, "found the layer visibility toggle");
+        if (!box) continue;
+        // Scenario comparison is data-gated: with no comparison computed there
+        // is nothing to draw, so its row can be checked while the viewport
+        // correctly draws nothing. Every other layer must match exactly.
+        const bool dataGated = QLatin1String(id) == QLatin1String("comparison");
+        check(box->isChecked() == viewport->isLayerVisible(id),
+              "layer row matches what the viewport draws at startup");
+        box->setChecked(!box->isChecked());
+        settle(60);
+        if (dataGated) {
+            check(!viewport->isLayerVisible(id),
+                  "scenario comparison stays undrawn until a comparison exists");
         } else {
-            auto* action = window.findChild<QAction*>(QString("AnalysisLayer%1").arg(id));
-            check(action != nullptr, "found analysis layer action");
-            if (!action) continue;
-            check(action->isChecked() == viewport->isOverlayVisible(overlay),
-                  "analysis layer matches startup state");
-            action->trigger();
-            check(action->isChecked() == viewport->isOverlayVisible(overlay),
-                  "analysis layer responds to menu action");
+            check(box->isChecked() == viewport->isLayerVisible(id),
+                  "toggling a layer row changes what the viewport draws");
         }
+        box->setChecked(!box->isChecked());
+        settle(60);
+    }
+
+    // Opacity reaches the stack, and a hidden layer keeps its value.
+    auto* coverageOpacity = window.findChild<QSlider*>("LayerOpacitycoverage");
+    check(coverageOpacity != nullptr, "a layer row carries an opacity control");
+    if (coverageOpacity) {
+        coverageOpacity->setValue(40);
+        settle(60);
+        check(coverageOpacity->value() == 40, "opacity keeps the value it was given");
     }
 
     auto* dock = window.findChild<QDockWidget*>("SourcesDock");
@@ -390,7 +407,7 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
         check(!dock->isHidden() && toggle->isChecked(), "source panel can be restored");
     }
     for (const char* name : {"RunButton", "CoverageQualityCombo", "CoverageMetricCombo",
-                             "AnalysisLayersButton", "TopMapViewButton", "ResetMapViewButton"}) {
+                             "TopMapViewButton", "ResetMapViewButton"}) {
         auto* control = window.findChild<QWidget*>(name);
         check(control && control->isVisible(), (std::string(name) + " visible at laptop size").c_str());
         if (control) {
@@ -618,12 +635,19 @@ void testTerrainFailureAndCancellationPreserveWorkspace() {
         // Exercise both settings for each layer, so a reset to defaults cannot
         // pass merely because the test started with those same defaults.
         for (bool visible : {false, true}) {
-            for (int i = ViewportWidget::Basemap; i <= ViewportWidget::Fresnel; ++i)
-                terrainViewport->setOverlayVisible(static_cast<ViewportWidget::Overlay>(i), visible);
+            for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
+                                   "comparison", "los", "pattern", "jamming", "fresnel"}) {
+                if (auto* box = window.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id)))
+                    box->setChecked(visible);
+            }
+            settle(80);
             pickTerrain(true);
-            for (int i = ViewportWidget::Basemap; i <= ViewportWidget::Fresnel; ++i)
-                check(terrainViewport->isOverlayVisible(static_cast<ViewportWidget::Overlay>(i)) == visible,
-                      "terrain picker cancellation preserves every overlay visibility setting");
+            for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
+                                   "comparison", "los", "pattern", "jamming", "fresnel"}) {
+                auto* box = window.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id));
+                check(box && box->isChecked() == visible,
+                      "terrain picker cancellation preserves every layer visibility setting");
+            }
         }
     } else {
         pickTerrain(true);

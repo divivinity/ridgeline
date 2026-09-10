@@ -42,8 +42,11 @@ public:
     // inserted, so a scenario written by a later version stays loadable.
     void applyState(const std::vector<State>& state);
 
-    void setOnChanged(std::function<void()> callback) {
-        m_onChanged = std::move(callback);
+    // Several places watch the stack at once - the renderer and the Layers
+    // panel at minimum - so listeners accumulate. A single settable callback
+    // silently dropped whichever observer registered first.
+    void addListener(std::function<void()> callback) {
+        if (callback) m_listeners.push_back(std::move(callback));
     }
 
 private:
@@ -51,5 +54,5 @@ private:
     void notify();
 
     std::vector<MapLayer> m_layers;
-    std::function<void()> m_onChanged;
+    std::vector<std::function<void()>> m_listeners;
 };
