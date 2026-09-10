@@ -109,6 +109,49 @@ Worldwide streamed maps use Web Mercator coverage (approximately 85°S to 85°N)
 Rotated/sheared GeoTIFFs are rejected rather than silently misregistered; warp
 such rasters to a north-up grid before loading them.
 
+## Map layers
+
+The **Layers** dock holds an ordered stack. Each row has its own visibility
+toggle and opacity, and rows can be dragged to reorder — layers higher in the
+list draw on top. Nothing else in the UI owns layer state, so the map cannot
+disagree with the controls.
+
+| Layer | Source |
+| --- | --- |
+| Satellite | Streamed imagery (Esri by default) |
+| USGS topographic | USGS National Map, public domain, United States only |
+| Hillshade | Computed from the loaded elevation grid |
+| Coverage, Scenario compare, LOS, Antenna pattern, Jamming range, Fresnel zone | Analysis results |
+
+Because it is a stack rather than a set of exclusive choices, Satellite and
+USGS topographic can both be visible with opacity between them, and hillshade
+multiplies over whatever is beneath it. Topographic plus relief is the
+combination worth having: contours give the height, shading gives the shape.
+
+Visible raster layers are composited into a single terrain texture rather than
+drawn as separate passes, which is what stops two maps on the same surface from
+z-fighting.
+
+**Hillshade** is Lambertian relief shading from the northwest at 45°, computed
+from true elevations and the grid's real east–west and north–south sample
+spacing — never from the vertically exaggerated display mesh, which would
+overstate every slope. It needs no network, so it works offline, inside
+portable packages, and on the procedural demo scene.
+
+**USGS topographic** covers the United States only. Outside that footprint the
+service answers with a uniform no-data fill rather than an error, so Ridgeline
+checks whether a tile carries any cartography and reports *No topographic
+coverage for this area* instead of showing a blank blue map. An area that is
+entirely water reads the same way, which is accurate enough — there is no
+topographic detail to show there either.
+
+OpenStreetMap and OpenTopoMap are deliberately not offered. Ridgeline
+batch-downloads every tile for an analysis area and bakes it into a
+redistributable package, which those projects' tile policies prohibit.
+
+Layer visibility, opacity and order are saved in the scenario file. Scenarios
+written before layers existed load with the defaults above.
+
 ## Portable offline terrain and imagery packages
 
 Successful terrain and imagery tile responses are saved as raw portable files.
