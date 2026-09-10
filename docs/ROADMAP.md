@@ -520,6 +520,29 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Workspace: menus, shortcuts and layout recovery — September 10
+
+- Roadmap item 2, the third of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.
+  The Layers dock from slice 6 already took a large piece of this item.
+- Running coverage is the point of the application and lived only on a toolbar
+  button, with no menu entry and no shortcut. It is now Analysis > Run Coverage
+  on F5. Measuring joins it on M, kept in step with the toolbar toggle so
+  either can be used first.
+- The camera keys T and R already worked but appeared nowhere in the interface,
+  so the only way to discover them was to read the README. They are now View
+  menu entries carrying their shortcuts.
+- Help > Keyboard Shortcuts (F1) lists everything bound anywhere, grouped by
+  project, analysis and map. A regression asserts each documented action is
+  reachable from a menu and carries the shortcut the dialog claims, so the list
+  cannot drift from the bindings.
+- View > Reset workspace layout restores the dock arrangement captured at
+  startup. Panels could previously be dragged into a state with no way back
+  short of restarting.
+- Not established: no work on first-run guidance beyond the existing demo-terrain
+  prompt, no recent-locations or recent-scenarios list, and no persistence of
+  window or dock layout between runs - that last one belongs to item 4, which is
+  not in the requested order and was deliberately not started.
+
 ### Map interaction: scale, north and a ruler — September 10
 
 - Roadmap item 3, the second of five slices in the order 6 -> 3 -> 2 -> 7 -> 12.

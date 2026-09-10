@@ -83,6 +83,9 @@ private:
     LayerStack       m_layerStack;
     LayersPanel*     m_layersPanel = nullptr;
     QDockWidget*     m_layersDock = nullptr;
+    // The dock arrangement as built, so a workspace dragged into a mess can be
+    // put back without restarting.
+    QByteArray       m_defaultLayout;
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;

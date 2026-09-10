@@ -2,6 +2,7 @@
 #include "CompactLocationLabel.h"
 #include "WorkspaceTheme.h"
 #include "LayersPanel.h"
+#include "ShortcutsDialog.h"
 #include "TerrainPresentation.h"
 #include <QToolButton>
 #include "RuntimePaths.h"
@@ -161,6 +162,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     editMenu->addAction(redoAction);
 
     QMenu* analysisMenu = menuBar()->addMenu("&Analysis");
+    // Running coverage is the point of the application, and until now it lived
+    // only on a toolbar button with no shortcut and no menu entry.
+    QAction* runAct = analysisMenu->addAction("&Run Coverage");
+    runAct->setShortcut(QKeySequence("F5"));
+    connect(runAct, &QAction::triggered, this, &MainWindow::onSolve);
+    QAction* measureAct = analysisMenu->addAction("&Measure Distance");
+    measureAct->setShortcut(QKeySequence("M"));
+    measureAct->setCheckable(true);
+    analysisMenu->addSeparator();
     QAction* receiverAct = analysisMenu->addAction("&Receiver / Service Criteria…");
     connect(receiverAct, &QAction::triggered, this, &MainWindow::onReceiverSettings);
     QAction* comparisonAct = analysisMenu->addAction("Scenario &Comparison…");
@@ -378,6 +388,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             m_viewport, &ViewportWidget::setHeatmapMetric);
     connect(m_overlayBar, &OverlayToolbar::measureModeToggled,
             m_viewport, &ViewportWidget::setMeasureMode);
+    connect(measureAct, &QAction::toggled, m_viewport, &ViewportWidget::setMeasureMode);
+    connect(m_viewport, &ViewportWidget::measureModeChanged, measureAct,
+            [measureAct](bool active) {
+        if (measureAct->isChecked() == active) return;
+        const QSignalBlocker blocker(measureAct);
+        measureAct->setChecked(active);
+    });
     connect(m_viewport, &ViewportWidget::measureModeChanged,
             m_overlayBar, &OverlayToolbar::setMeasureChecked);
     connect(m_viewport, &ViewportWidget::measureModeChanged, this, [this](bool active) {
@@ -432,13 +449,42 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     viewMenu->addAction(m_calibrationDock->toggleViewAction());
     viewMenu->addAction(m_layersDock->toggleViewAction());
     viewMenu->addSeparator();
+    // These camera keys already worked but appeared nowhere in the UI, so the
+    // only way to find them was to read the README.
+    auto* topViewAction = viewMenu->addAction("Top-down view");
+    topViewAction->setShortcut(QKeySequence("T"));
+    connect(topViewAction, &QAction::triggered, m_viewport, &ViewportWidget::topView);
     auto* resetViewAction = viewMenu->addAction("Reset map view");
+    resetViewAction->setShortcut(QKeySequence("R"));
     connect(resetViewAction, &QAction::triggered, m_viewport, &ViewportWidget::resetView);
+
+    viewMenu->addSeparator();
+    auto* resetLayoutAction = viewMenu->addAction("Reset workspace layout");
+    resetLayoutAction->setObjectName("ResetLayoutAction");
+    resetLayoutAction->setToolTip(
+        "Put the panels back where they started, without restarting");
+    connect(resetLayoutAction, &QAction::triggered, this, [this] {
+        if (m_defaultLayout.isEmpty()) return;
+        restoreState(m_defaultLayout);
+        m_statusLabel->setText("  Workspace layout reset");
+    });
+
+    QMenu* helpMenu = menuBar()->addMenu("&Help");
+    auto* shortcutsAction = helpMenu->addAction("&Keyboard Shortcuts…");
+    shortcutsAction->setObjectName("ShortcutsAction");
+    shortcutsAction->setShortcut(QKeySequence("F1"));
+    connect(shortcutsAction, &QAction::triggered, this, [this] {
+        ShortcutsDialog(this).exec();
+    });
 
     // Bind the stack last, so the viewport and panel are both live before it
     // pushes its first state to them.
     m_viewport->setLayerStack(&m_layerStack);
     m_layersPanel->setStack(&m_layerStack);
+
+    // Queued after the deferred dock re-add above, so what is captured is the
+    // arrangement the user actually starts with.
+    QTimer::singleShot(0, this, [this] { m_defaultLayout = saveState(); });
 
     refreshTree();
 

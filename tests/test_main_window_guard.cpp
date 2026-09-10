@@ -478,6 +478,58 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     check(readout && readout->isHidden(),
           "the cursor readout stays hidden until the cursor is over terrain");
 
+    // Every action a user is expected to find must be reachable from a menu
+    // with a visible shortcut, not only from a toolbar button.
+    const QList<QAction*> actions = window.findChildren<QAction*>();
+    const auto actionWithText = [&actions](const QString& text) -> QAction* {
+        for (QAction* action : actions)
+            if (action->text().contains(text)) return action;
+        return nullptr;
+    };
+    for (const auto& expected : QList<QPair<QString, QString>>{
+             {"Run Coverage", "F5"}, {"Measure Distance", "M"},
+             {"Top-down view", "T"}, {"Reset map view", "R"},
+             {"Keyboard Shortcuts", "F1"}}) {
+        QAction* action = actionWithText(expected.first);
+        check(action != nullptr,
+              qPrintable(QStringLiteral("%1 is reachable from a menu").arg(expected.first)));
+        if (action)
+            check(action->shortcut() == QKeySequence(expected.second),
+                  qPrintable(QStringLiteral("%1 carries its documented shortcut")
+                                 .arg(expected.first)));
+    }
+
+    // The menu entry and the toolbar toggle must agree, since both drive the
+    // same mode and either can be used first.
+    if (auto* measureAction = actionWithText("Measure Distance")) {
+        auto* measureButton = window.findChild<QToolButton*>("MeasureButton");
+        measureAction->setChecked(true);
+        settle(60);
+        check(viewport && viewport->measureMode(), "the menu entry turns the ruler on");
+        check(measureButton && measureButton->isChecked(),
+              "the toolbar toggle follows the menu entry");
+        measureAction->setChecked(false);
+        settle(60);
+        check(viewport && !viewport->measureMode(), "the menu entry turns the ruler off");
+    }
+
+    // A workspace dragged into a mess must be recoverable without a restart.
+    auto* resetLayout = window.findChild<QAction*>("ResetLayoutAction");
+    check(resetLayout != nullptr, "the workspace layout can be reset from a menu");
+    if (resetLayout) {
+        auto* layersDock = window.findChild<QDockWidget*>("LayersDock");
+        check(layersDock != nullptr, "the layers dock exists to be disarranged");
+        if (layersDock) {
+            const bool wasVisible = !layersDock->isHidden();
+            layersDock->hide();
+            settle(60);
+            resetLayout->trigger();
+            settle(120);
+            check(!layersDock->isHidden() == wasVisible,
+                  "resetting the layout restores a closed dock");
+        }
+    }
+
     auto* dock = window.findChild<QDockWidget*>("SourcesDock");
     auto* toggle = window.findChild<QToolButton*>("SourcesPanelButton");
     check(dock && toggle, "source dock and toolbar toggle exist");
