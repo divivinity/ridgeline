@@ -520,6 +520,49 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Map layer stack, hillshade and USGS topographic — September 10
+
+- Roadmap item 6, the first of five slices in the agreed order 6 -> 3 -> 2 -> 7
+  -> 12. Design in `docs/superpowers/specs/2026-09-10-map-layers-design.md`.
+- An ordered LayerStack replaces the fixed overlay checkboxes and the Layers
+  menu: nine layers with per-layer visibility, opacity and drag reordering, in
+  a Layers dock. The stack is Qt-Widget-free and tested headlessly.
+- Hillshade is computed from true elevations and the grid's real sample
+  spacing, never the vertically exaggerated display mesh. USGS topographic
+  tiles are public domain; OpenStreetMap and OpenTopoMap were rejected because
+  Ridgeline's batch-download-and-repackage pattern violates their tile policies.
+- Visible rasters composite into one terrain texture. Coplanar passes would
+  z-fight, and the mosaic was already a QImage uploaded as a single texture, so
+  blending happens before upload.
+- Layer state is saved in the scenario file under a new `layers` key. Older
+  scenarios load with defaults; unknown ids are ignored rather than rejected.
+- Five defects were found during implementation, all by building and running
+  rather than by reading the design:
+  1. LayerStack had one settable callback, so the panel's registration silently
+     replaced the renderer's and panel toggles never reached the viewport.
+  2. The panel rebuilt its rows from inside a row's own signal, deleting the
+     widget that was emitting.
+  3. Binding the stack in MainWindow's constructor ran GL work before the
+     viewport had a context, which segfaulted. This was hidden because
+     main_window_tests depends on the app target, which could not relink while
+     the app was running, so ctest kept passing a stale binary.
+  4. Hillshade did not render on the procedural demo scene - the scene the app
+     opens with - because the basemap bailed out without a georeference.
+  5. USGS answers out-of-coverage requests with HTTP 200 and a uniform fill,
+     not a 404, so the planned no-coverage check never fired. Confirmed against
+     the live service: an Atlantic tile is a flat pale blue at 2421 bytes.
+- The spec was corrected once during implementation: it claimed a per-provider
+  tile axis-order flag was needed. It is not - placeholders substitute by name
+  and the existing Esri template already spells the ArcGIS row-first order - so
+  the flag was dropped and a URL regression pins the ordering instead.
+- Verified: all 15 suites pass in a clean tree built outside the synced folder.
+  The Layers dock, its defaults and hillshade on the demo scene were reviewed on
+  screen. A live USGS tile over Haywood County NC was fetched and inspected.
+- Not established: USGS topographic was not exercised end to end inside the
+  application against a loaded US location, only at the tile and unit level.
+  Non-US users still get satellite only. No contours, slope, elevation tint,
+  street map, bring-your-own-provider UI or presets. Nothing LiDAR.
+
 ### Reference-test wiring, GDAL CI and build docs — September 9
 
 - The GDAL reference checks were never running. `add_test` registered
