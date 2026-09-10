@@ -78,19 +78,39 @@ void LOSRayOverlay::updateProbe(const std::vector<Antenna>& antennas,
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
 }
 
+
+void LOSRayOverlay::setProbeSpan(const glm::vec3& from, const glm::vec3& to) {
+    // The ruler draws a plain span rather than a line-of-sight verdict, so it
+    // uses a neutral colour instead of the clear/diffracted/blocked palette.
+    const glm::vec3 color{0.37f, 0.92f, 0.83f};
+    m_hasProbe = true;
+    glBindBuffer(GL_ARRAY_BUFFER, m_probeVbo);
+    const LOSVert vertices[2]{
+        {from.x, from.y, from.z, color.r, color.g, color.b},
+        {to.x, to.y, to.z, color.r, color.g, color.b}
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+}
+
 void LOSRayOverlay::draw(const glm::mat4& mvp) {
-    if ((!visible || m_vertexCount == 0) && !m_hasProbe) return;
+    if (!visible || m_vertexCount == 0) return;
     glLineWidth(2.0f);
     m_shader.bind();
     m_shader.setMat4("uMVP", mvp);
-    if (visible && m_vertexCount > 0) {
-        glBindVertexArray(m_vao);
-        glDrawArrays(GL_LINES, 0, m_vertexCount);
-    }
-    if (m_hasProbe) {
-        glBindVertexArray(m_probeVao);
-        glDrawArrays(GL_LINES, 0, 2);
-    }
+    glBindVertexArray(m_vao);
+    glDrawArrays(GL_LINES, 0, m_vertexCount);
+    glBindVertexArray(0);
+    m_shader.release();
+    glLineWidth(1.0f);
+}
+
+void LOSRayOverlay::drawProbe(const glm::mat4& mvp) {
+    if (!m_hasProbe) return;
+    glLineWidth(2.0f);
+    m_shader.bind();
+    m_shader.setMat4("uMVP", mvp);
+    glBindVertexArray(m_probeVao);
+    glDrawArrays(GL_LINES, 0, 2);
     glBindVertexArray(0);
     m_shader.release();
     glLineWidth(1.0f);

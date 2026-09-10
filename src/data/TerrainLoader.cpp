@@ -22,17 +22,16 @@
 // UHL record layout (80 bytes, 0-based offsets):
 //   0- 3  "UHL1"
 //   4-11  Origin longitude  DDDMMSSH  (e.g. "0101230E")
-//  12-19  Origin latitude   DDMMSSH_  (e.g. "45123N  ")  -- 7 sig chars + pad
-//  20-23  Longitude interval, tenths of arc-seconds ("0100" = 10.0 → 1 arc-sec)
+//  12-19  Origin latitude   DDDMMSSH  (e.g. "0450000N")
+//  20-23  Longitude interval, tenths of arc-seconds ("0010" = 1 arc-sec)
 //  24-27  Latitude  interval, tenths of arc-seconds
 //  28-31  Absolute vertical accuracy
 //  32-34  Security code (3 chars)
 //  35-46  Unique reference (12 chars)
-//  47-50  Reserved
-//  51-54  Number of longitude lines   (columns, west→east)
-//  55-58  Number of latitude  points  (rows, south→north)
-//  59     Multiple accuracy flag
-//  60-79  Reserved
+//  47-50  Number of longitude lines   (columns, west→east)
+//  51-54  Number of latitude  points  (rows, south→north)
+//  55     Multiple accuracy flag
+//  56-79  Reserved
 // Then: DSI 648 bytes, ACC 2700 bytes  → data starts at byte 3428.
 //
 // Data records (one per longitude column):
@@ -40,49 +39,45 @@
 //   bytes 1-3 : block count (24-bit big-endian)
 //   bytes 4-5 : longitude count (16-bit big-endian, 0-based column index)
 //   bytes 6-7 : latitude  count (16-bit big-endian, always 0)
-//   bytes 8.. : numLat × signed int16 big-endian elevations (south→north)
-//   last 4    : checksum (not validated here)
-// Void elevation = 0x8000 (-32768 signed) → replaced with 0 m.
+//   bytes 8.. : numLat × signed-magnitude big-endian elevations (south→north)
+//   last 4    : unsigned byte-sum checksum, big-endian
+// Void elevation = 0xFFFF (-32767). Reject rather than invent a height.
+// Standard UHL-first, complete sequential profiles only; no variant repair.
 
-static int parseInt4(const char* p) {
-    char buf[5] = {};
-    std::memcpy(buf, p, 4);
-    return std::stoi(buf);
+static int parseDigits(const char* p, int count) {
+    int value = 0;
+    for (int i = 0; i < count; ++i) {
+        if (p[i] < '0' || p[i] > '9')
+            throw std::runtime_error("DTED UHL: invalid numeric field");
+        value = value * 10 + p[i] - '0';
+    }
+    return value;
 }
 
-// Parse DDDMMSSH or DDMMSSH_ into total arc-seconds (signed: W/S = negative).
-static int parseOriginArcSec(const char* p, int len) {
-    // Find hemisphere: last non-space character
-    char hemi = ' ';
-    int sigLen = 0;
-    for (int i = len - 1; i >= 0; --i) {
-        if (p[i] == 'N' || p[i] == 'S' || p[i] == 'E' || p[i] == 'W') {
-            hemi  = p[i];
-            sigLen = i;   // digits occupy [0, sigLen)
-            break;
-        }
-    }
-    if (hemi == ' ' || sigLen < 6)
+// Parse standard DDDMMSSH into total arc-seconds (W/S negative).
+static int parseOriginArcSec(const char* p, bool latitude) {
+    const char hemi = p[7];
+    if (latitude ? (hemi != 'N' && hemi != 'S') : (hemi != 'E' && hemi != 'W'))
         throw std::runtime_error("DTED UHL: cannot parse origin coordinate");
 
-    // sigLen-2 .. sigLen-1 = seconds, sigLen-4 .. sigLen-3 = minutes, rest = degrees
-    char buf[8] = {};
-    std::memcpy(buf, p + sigLen - 2, 2);  int sec = std::stoi(buf);
-    std::memcpy(buf, p + sigLen - 4, 2);  int min = std::stoi(buf);
-    std::memset(buf, 0, sizeof(buf));
-    std::memcpy(buf, p, sigLen - 4);      int deg = std::stoi(buf);
+    const int deg = parseDigits(p, 3);
+    const int min = parseDigits(p + 3, 2);
+    const int sec = parseDigits(p + 5, 2);
+    const int limit = latitude ? 90 : 180;
+    if (min >= 60 || sec >= 60 || deg > limit || (deg == limit && (min || sec)))
+        throw std::runtime_error("DTED UHL: origin outside coordinate bounds");
 
     int total = deg * 3600 + min * 60 + sec;
     return (hemi == 'W' || hemi == 'S') ? -total : total;
 }
 
-static int16_t readBE16(const char* p) {
-    return static_cast<int16_t>(
+static uint16_t readBE16(const char* p) {
+    return static_cast<uint16_t>(
         (static_cast<uint8_t>(p[0]) << 8) | static_cast<uint8_t>(p[1]));
 }
 
 TerrainModel TerrainLoader::fromDTED(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(std::filesystem::u8path(path), std::ios::binary);
     if (!f)
         throw std::runtime_error("Cannot open DTED file: " + path);
 
@@ -92,29 +87,44 @@ TerrainModel TerrainLoader::fromDTED(const std::string& path) {
     if (!f || std::strncmp(uhl, "UHL1", 4) != 0)
         throw std::runtime_error("Not a valid DTED file (missing UHL1): " + path);
 
-    const int lonIntervalTenths = parseInt4(uhl + 20);  // tenths of arc-sec
-    const int latIntervalTenths = parseInt4(uhl + 24);  // tenths of arc-sec
-    const int numLon             = parseInt4(uhl + 51);  // columns
-    const int numLat             = parseInt4(uhl + 55);  // rows per column
+    const int lonIntervalTenths = parseDigits(uhl + 20, 4);
+    const int latIntervalTenths = parseDigits(uhl + 24, 4);
+    const int numLon = parseDigits(uhl + 47, 4);
+    const int numLat = parseDigits(uhl + 51, 4);
 
     if (numLon < 2 || numLat < 2 || lonIntervalTenths <= 0 || latIntervalTenths <= 0)
         throw std::runtime_error("DTED UHL contains invalid grid dimensions");
 
     // Latitude of SW corner — used to compute cell size in metres.
-    const int originLonSec = parseOriginArcSec(uhl + 4, 8);
-    const int originLatSec = parseOriginArcSec(uhl + 12, 8);
+    const int originLonSec = parseOriginArcSec(uhl + 4, false);
+    const int originLatSec = parseOriginArcSec(uhl + 12, true);
     const double centerLatDeg =
-        originLatSec / 3600.0 + (numLat * latIntervalTenths) / (2.0 * 36000.0);
+        originLatSec / 3600.0 + ((numLat - 1) * latIntervalTenths) / (2.0 * 36000.0);
 
     const double cellLatDeg = latIntervalTenths / 36000.0;
     const double cellLonDeg = lonIntervalTenths / 36000.0;
+    if (originLatSec / 3600.0 + (numLat - 1) * cellLatDeg > 90.0 ||
+        originLonSec / 3600.0 + (numLon - 1) * cellLonDeg > 180.0)
+        throw std::runtime_error("DTED UHL: grid extent outside coordinate bounds");
     const float  cellSizeZM =
         static_cast<float>(TerrainModel::metersPerDegreeLat(centerLatDeg) * cellLatDeg);
     const float  cellSizeXM =
         static_cast<float>(TerrainModel::metersPerDegreeLon(centerLatDeg) * cellLonDeg);
 
-    // Skip DSI (648) + ACC (2700); data starts at byte 3428.
-    f.seekg(80 + 648 + 2700, std::ios::beg);
+    char metadata[648 + 2700];
+    f.read(metadata, sizeof(metadata));
+    if (!f || std::memcmp(metadata, "DSI", 3) || std::memcmp(metadata + 648, "ACC", 3))
+        throw std::runtime_error("DTED: missing DSI or ACC record");
+    // DSI bytes 145-149 (one-based) declare the horizontal datum. This
+    // decoder does not reproject, so never label another/unknown CRS WGS84.
+    if (std::memcmp(metadata + 144, "WGS84", 5) != 0)
+        throw std::runtime_error("DTED: unsupported or missing horizontal datum; WGS84 is required");
+    const int recordSize = 8 + numLat * 2 + 4;
+    const std::streamoff requiredSize = 3428 + static_cast<std::streamoff>(numLon) * recordSize;
+    f.seekg(0, std::ios::end);
+    if (!f || f.tellg() < requiredSize)
+        throw std::runtime_error("DTED: truncated elevation records");
+    f.seekg(3428, std::ios::beg);
 
     TerrainModel t;
     t.width    = numLon;
@@ -124,7 +134,6 @@ TerrainModel TerrainLoader::fromDTED(const std::string& path) {
                       cellLatDeg, cellLonDeg);
     t.heights.assign(numLon * numLat, 0.0f);
 
-    const int recordSize = 8 + numLat * 2 + 4;
     std::vector<char> rec(recordSize);
 
     for (int col = 0; col < numLon; ++col) {
@@ -137,15 +146,30 @@ TerrainModel TerrainLoader::fromDTED(const std::string& path) {
             throw std::runtime_error(
                 "Invalid DTED data record sentinel at column " + std::to_string(col));
 
+        if (readBE16(rec.data() + 4) != col || readBE16(rec.data() + 6) != 0)
+            throw std::runtime_error("DTED: invalid profile index at column " + std::to_string(col));
+        uint32_t sum = 0, storedSum = 0;
+        for (int i = 0; i < recordSize - 4; ++i) sum += static_cast<uint8_t>(rec[i]);
+        for (int i = recordSize - 4; i < recordSize; ++i)
+            storedSum = (storedSum << 8) | static_cast<uint8_t>(rec[i]);
+        if (sum != storedSum)
+            throw std::runtime_error("DTED: checksum mismatch at column " + std::to_string(col));
+
         for (int row = 0; row < numLat; ++row) {
-            const int16_t raw = readBE16(rec.data() + 8 + row * 2);
-            // 0x8000 (-32768) is the DTED void/unknown elevation indicator.
-            const float h = (raw == -32768) ? 0.0f : static_cast<float>(raw);
+            const uint16_t raw = readBE16(rec.data() + 8 + row * 2);
+            if (raw == 0xffff)
+                throw std::runtime_error("DTED: missing elevation at column " + std::to_string(col)
+                    + ", row " + std::to_string(row));
+            const int magnitude = raw & 0x7fff;
+            const float h = static_cast<float>((raw & 0x8000) ? -magnitude : magnitude);
             // DTED: col = west→east (x), row = south→north (z).
             t.heights[row * numLon + col] = h;
         }
     }
 
+    // DTED posts are the source samples, so the grid spacing is the resolution.
+    t.sourceResolutionM = std::min(cellSizeXM, cellSizeZM);
+    t.validate();
     return t;
 }
 
@@ -155,7 +179,7 @@ TerrainModel TerrainLoader::fromDTED(const std::string& path) {
 // Format: raw signed big-endian int16, row-major, north→south.
 // SRTM1: 3601×3601 samples (25 934 402 bytes), ~30.87 m/cell at 35°N.
 // SRTM3: 1201×1201 samples ( 2 884 802 bytes), ~92.6  m/cell at 35°N.
-// Void value: -32768 → replaced with 0 m.
+// Void value: -32768. Reject missing samples within the selected analysis area.
 // Tile SW corner encoded in filename: N35W079.hgt → lat=35, lon=-79.
 
 // Parse tile SW corner from HGT filename (e.g. "N35W079.hgt").
@@ -189,7 +213,7 @@ struct HgtData {
 };
 
 static HgtData readHGTData(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(std::filesystem::u8path(path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open HGT file: " + path);
 
     f.seekg(0, std::ios::end);
@@ -297,11 +321,17 @@ TerrainModel TerrainLoader::fromHGT(const std::string& path,
         const int terrainRow = cropSize - 1 - hgtRow;   // flip N↔S
         for (int col = 0; col < cropSize; ++col) {
             const int16_t v = source.values[(r0 + hgtRow) * samples + (c0 + col)];
-            t.heights[terrainRow * cropSize + col] = (v == -32768) ? 0.0f
-                                                                   : static_cast<float>(v);
+            if (v == -32768)
+                throw std::runtime_error(
+                    "HGT contains missing elevation in the selected area. "
+                    "Choose a smaller area or a void-filled elevation dataset: " + path);
+            t.heights[terrainRow * cropSize + col] = static_cast<float>(v);
         }
     }
 
+    // A single-tile HGT crop takes the posts as they are, so the grid spacing
+    // is the source resolution.
+    t.sourceResolutionM = std::min(t.metersPerCellX(), t.metersPerCellZ());
     return t;
 }
 
@@ -350,14 +380,14 @@ TerrainModel TerrainLoader::fromHGTDirectory(const std::string& directory,
                                               double extentKm,
                                               int maxSamplesPerAxis) {
     namespace fs = std::filesystem;
-    if (!fs::is_directory(fs::path(directory)))
+    if (!fs::is_directory(fs::u8path(directory)))
         throw std::runtime_error("HGT terrain directory does not exist: " + directory);
     maxSamplesPerAxis = std::clamp(maxSamplesPerAxis, 64, 4096);
 
     const auto required = requiredHGTTiles(centerLat, centerLon, extentKm);
     std::vector<std::string> missing;
     for (const auto& name : required) {
-        if (!fs::is_regular_file(fs::path(directory) / name)) missing.push_back(name);
+        if (!fs::is_regular_file(fs::u8path(directory) / name)) missing.push_back(name);
     }
     if (!missing.empty()) {
         std::ostringstream msg;
@@ -375,7 +405,7 @@ TerrainModel TerrainLoader::fromHGTDirectory(const std::string& directory,
         const std::string name = hgtTileName(swLat, swLon);
         auto it = tiles.find(name);
         if (it == tiles.end()) {
-            HgtData data = readHGTData((fs::path(directory) / name).string());
+            HgtData data = readHGTData((fs::u8path(directory) / name).u8string());
             if (!tiles.empty() && data.samples != tiles.begin()->second.samples)
                 throw std::runtime_error("HGT mosaic contains mixed tile resolutions");
             it = tiles.emplace(name, std::move(data)).first;
@@ -430,9 +460,20 @@ TerrainModel TerrainLoader::fromHGTDirectory(const std::string& directory,
                 (lon - static_cast<double>(swLon)) * intervals)),
                 0, intervals);
             const int16_t raw = tile.values[row * tile.samples + col];
-            terrain.heights[z * outW + x] = raw == -32768
-                ? 0.0f : static_cast<float>(raw);
+            if (raw == -32768)
+                throw std::runtime_error(
+                    "HGT contains missing elevation in the selected area. "
+                    "Choose a smaller area or a void-filled elevation dataset: "
+                    + hgtTileName(swLat, swLon));
+            terrain.heights[z * outW + x] = static_cast<float>(raw);
         }
+    }
+    // A mosaic resamples onto its own grid, so the source resolution is the
+    // tiles' native post spacing, which the output grid may be coarser than.
+    if (!tiles.empty() && tiles.begin()->second.samples > 1) {
+        terrain.sourceResolutionM = static_cast<float>(
+            TerrainModel::metersPerDegreeLat(centerLat) /
+            (tiles.begin()->second.samples - 1));
     }
     return terrain;
 }
@@ -571,6 +612,10 @@ TerrainModel TerrainLoader::fromGeoTIFF(const std::string& path,
         }
     }
 
+    // A GeoTIFF's pixels are its samples, so the post spacing is the source
+    // resolution. This is how a USGS 3DEP LiDAR-derived DEM reports its 1 m
+    // detail once loaded.
+    t.sourceResolutionM = std::min(t.metersPerCellX(), t.metersPerCellZ());
     return t;
 }
 #endif // HAVE_GDAL / !HAVE_GDAL

@@ -19,21 +19,23 @@ QLabel* valueLabel(const char* objectName, const QString& initial = QStringLiter
     auto* label = new QLabel(initial);
     label->setObjectName(objectName);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    label->setWordWrap(true);
     label->setStyleSheet(
-        "color: #e2e8f0; font-family: monospace; font-size: 12px; font-weight: 650;");
+        "color: #e2e8f0; font-family: Consolas, monospace; font-size: 14px; font-weight: 650;");
     return label;
 }
 
 QLabel* captionLabel(const QString& text) {
     auto* label = new QLabel(text);
-    label->setStyleSheet("color: #64748b; font-size: 9px;");
+    label->setWordWrap(true);
+    label->setStyleSheet("color: #a9b9cd; font-size: 12px;");
     return label;
 }
 
 QLabel* sectionLabel(const QString& text) {
     auto* label = new QLabel(text);
     label->setStyleSheet(
-        "color: #94a3b8; font-size: 9px; font-weight: 700; letter-spacing: 0.7px;");
+        "color: #a9b9cd; font-size: 12px; font-weight: 700;");
     return label;
 }
 
@@ -75,26 +77,28 @@ CalibrationPanel::CalibrationPanel(QWidget* parent) : QWidget(parent) {
     outer->setContentsMargins(14, 14, 14, 14);
     outer->setSpacing(10);
 
-    auto* title = new QLabel(QStringLiteral("MEASUREMENT CALIBRATION"));
+    auto* title = new QLabel(QStringLiteral("Measurement calibration"));
+    title->setWordWrap(true);
     title->setStyleSheet(
-        "color: #5eead4; font-size: 10px; font-weight: 700; letter-spacing: 1px;");
+        "color: #e8f1fa; font-size: 16px; font-weight: 700;");
     outer->addWidget(title);
 
     auto* help = new QLabel(QStringLiteral(
         "Compare field measurements with the current coverage result, then apply a recommended model correction."));
     help->setWordWrap(true);
-    help->setStyleSheet("color: #64748b; font-size: 10px;");
+    help->setStyleSheet("color: #a9b9cd; font-size: 13px;");
     outer->addWidget(help);
 
     m_statusBadge = new QLabel();
     m_statusBadge->setObjectName("CalibrationStatus");
     m_statusBadge->setAlignment(Qt::AlignCenter);
+    m_statusBadge->setWordWrap(true);
     outer->addWidget(m_statusBadge);
 
     m_statusDetail = new QLabel();
     m_statusDetail->setObjectName("CalibrationDetail");
     m_statusDetail->setWordWrap(true);
-    m_statusDetail->setStyleSheet("color: #94a3b8; font-size: 10px;");
+    m_statusDetail->setStyleSheet("color: #a9b9cd; font-size: 13px;");
     outer->addWidget(m_statusDetail);
 
     outer->addWidget(sectionLabel(QStringLiteral("MEASUREMENT MATCHING")));
@@ -142,7 +146,7 @@ CalibrationPanel::CalibrationPanel(QWidget* parent) : QWidget(parent) {
     auto* residualHelp = new QLabel(QStringLiteral(
         "Residual is measured minus predicted signal. Positive values mean the model predicts too little signal."));
     residualHelp->setWordWrap(true);
-    residualHelp->setStyleSheet("color: #52637a; font-size: 8px;");
+    residualHelp->setStyleSheet("color: #a9b9cd; font-size: 12px;");
     outer->addWidget(residualHelp);
 
     outer->addWidget(divider());
@@ -155,7 +159,7 @@ CalibrationPanel::CalibrationPanel(QWidget* parent) : QWidget(parent) {
     m_rmseAfter = valueLabel("CalibrationRmseAfter");
     m_recommendedCorrection = valueLabel("CalibrationRecommendedCorrection");
     m_recommendedCorrection->setStyleSheet(
-        "color: #6ee7b7; font-family: monospace; font-size: 12px; font-weight: 700;");
+        "color: #6ee7b7; font-family: Consolas, monospace; font-size: 14px; font-weight: 700;");
     qualityGrid->addWidget(captionLabel(QStringLiteral("RMSE before")), 0, 0);
     qualityGrid->addWidget(captionLabel(QStringLiteral("RMSE after")), 0, 1);
     qualityGrid->addWidget(captionLabel(QStringLiteral("Recommended")), 0, 2);
@@ -179,9 +183,10 @@ CalibrationPanel::CalibrationPanel(QWidget* parent) : QWidget(parent) {
     m_warnings->setObjectName("CalibrationWarnings");
     m_warnings->setTextFormat(Qt::PlainText);
     m_warnings->setWordWrap(true);
+    m_warnings->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_warnings->setStyleSheet(
         "background: #2b2111; border: 1px solid #854d0e; border-radius: 6px; "
-        "color: #fde68a; padding: 8px; font-size: 9px;");
+        "color: #fde68a; padding: 8px; font-size: 12px;");
     outer->addWidget(m_warnings);
 
     m_importMeasurements = new QPushButton(QStringLiteral("Import measurements\u2026"));
@@ -190,7 +195,7 @@ CalibrationPanel::CalibrationPanel(QWidget* parent) : QWidget(parent) {
         "Import measurement locations and observed signal levels from a CSV file."));
     outer->addWidget(m_importMeasurements);
 
-    m_applyCorrection = new QPushButton(QStringLiteral("Apply recommended correction"));
+    m_applyCorrection = new QPushButton(QStringLiteral("Apply recommendation"));
     m_applyCorrection->setObjectName("CalibrationApplyCorrectionButton");
     m_applyCorrection->setToolTip(QStringLiteral(
         "Apply the recommended signal correction to future coverage calculations."));
@@ -226,7 +231,7 @@ CalibrationPanel::CalibrationPanel(QWidget* parent) : QWidget(parent) {
         "QScrollBar:vertical { background: #0b1422; width: 8px; }"
         "QScrollBar::handle:vertical { background: #334155; border-radius: 4px; min-height: 24px; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-        "QPushButton { background: #132237; border: 1px solid #334a65; border-radius: 6px; color: #cbd5e1; padding: 7px 9px; font-size: 10px; }"
+        "QPushButton { background: #132237; border: 1px solid #334a65; border-radius: 6px; color: #cbd5e1; padding: 9px; font-size: 13px; }"
         "QPushButton:hover { background: #1a2c45; border-color: #4f6987; }"
         "QPushButton:pressed { background: #0d1929; }"
         "QPushButton:disabled { background: #0e1928; border-color: #243449; color: #52637a; }"
@@ -368,7 +373,7 @@ void CalibrationPanel::setStatus(const QString& title, const QString& detail,
                                  const QString& foreground) {
     m_statusBadge->setText(title);
     m_statusBadge->setStyleSheet(QStringLiteral(
-        "background: %1; border: 1px solid %2; border-radius: 8px; color: %3; padding: 7px; font-weight: 750;")
+        "background: %1; border: 1px solid %2; border-radius: 8px; color: %3; padding: 7px; font-size: 12px; font-weight: 750;")
         .arg(background, border, foreground));
     m_statusDetail->setText(detail);
 }

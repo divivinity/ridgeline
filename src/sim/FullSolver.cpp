@@ -41,6 +41,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                              const MaterialLibrary& materials,
                              const std::function<void(int, int)>& progress,
                              const std::function<bool()>& cancelled) const {
+    RFModels::validateSolveInputs(terrain, antennas, receiver, gridResolution);
     FieldGrid grid;
     grid.cellSize = gridResolution;
     const glm::vec3 world = terrain.worldSize();

@@ -51,6 +51,9 @@ target_compile_features(ntia_itm PUBLIC cxx_std_17)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 add_executable(ridgeline ${SOURCES})
+if(WIN32)
+    set_target_properties(ridgeline PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 target_include_directories(ridgeline PRIVATE src)
 target_compile_definitions(ridgeline PRIVATE HAVE_NTIA_ITM)
@@ -103,11 +106,35 @@ set(RIDGELINE_PHYSICS_TEST_SOURCES
 add_executable(ridgeline_tests tests/test_main.cpp ${RIDGELINE_PHYSICS_TEST_SOURCES})
 target_include_directories(ridgeline_tests PRIVATE src)
 target_compile_definitions(ridgeline_tests PRIVATE HAVE_NTIA_ITM)
-target_link_libraries(ridgeline_tests glm::glm nlohmann_json::nlohmann_json ntia_itm)
+target_link_libraries(ridgeline_tests glm::glm nlohmann_json::nlohmann_json ntia_itm Qt6::Core)
 add_test(NAME physics_tests
     COMMAND ridgeline_tests
         "${CMAKE_SOURCE_DIR}/assets/materials.json"
         "${CMAKE_SOURCE_DIR}/assets/antennas.json"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(ridgeline_dted_decoding_tests
+    tests/test_dted_decoding.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
+target_include_directories(ridgeline_dted_decoding_tests PRIVATE src)
+target_link_libraries(ridgeline_dted_decoding_tests glm::glm nlohmann_json::nlohmann_json)
+# The published GDAL reference fixtures are committed under tests/data/dted, so
+# the checksum and datum-rejection checks run on every build rather than only
+# when a developer remembers to pass them. Both paths are always supplied: the
+# decoder throws on a missing file, so a dropped fixture fails the suite instead
+# of silently reducing it to the synthetic cases.
+add_test(NAME dted_decoding_tests COMMAND ridgeline_dted_decoding_tests
+        "${CMAKE_SOURCE_DIR}/tests/data/dted/n43.dt0"
+        "${CMAKE_SOURCE_DIR}/tests/data/dted/n43_wgs72.dt0"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(ridgeline_layer_tests tests/test_layers.cpp
+    src/map/LayerStack.cpp src/map/Hillshade.cpp src/map/TileProviders.cpp
+    src/map/MapMeasure.cpp
+    src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp src/data/ScenarioIO.cpp)
+target_include_directories(ridgeline_layer_tests PRIVATE src)
+target_link_libraries(ridgeline_layer_tests
+    Qt6::Core Qt6::Gui glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME layer_tests COMMAND ridgeline_layer_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_hgt_georef_tests
@@ -129,7 +156,7 @@ add_executable(ridgeline_geospatial_antenna_tests
 target_include_directories(ridgeline_geospatial_antenna_tests PRIVATE src)
 target_compile_definitions(ridgeline_geospatial_antenna_tests PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline_geospatial_antenna_tests
-    glm::glm nlohmann_json::nlohmann_json ntia_itm)
+    glm::glm nlohmann_json::nlohmann_json ntia_itm Qt6::Core)
 add_test(NAME geospatial_antenna_tests COMMAND ridgeline_geospatial_antenna_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -140,7 +167,12 @@ add_executable(ridgeline_rf_model_tests
 target_include_directories(ridgeline_rf_model_tests PRIVATE src)
 target_compile_definitions(ridgeline_rf_model_tests PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline_rf_model_tests
-    glm::glm nlohmann_json::nlohmann_json ntia_itm)
+    glm::glm nlohmann_json::nlohmann_json ntia_itm Qt6::Core)
+
+add_executable(ridgeline_scenario_save_tests tests/test_scenario_save.cpp src/data/ScenarioIO.cpp)
+target_include_directories(ridgeline_scenario_save_tests PRIVATE src)
+target_link_libraries(ridgeline_scenario_save_tests Qt6::Core glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME scenario_save_tests COMMAND ridgeline_scenario_save_tests)
 add_test(NAME rf_model_tests COMMAND ridgeline_rf_model_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -171,6 +203,14 @@ target_link_libraries(ridgeline_tile_cache_tests Qt6::Network)
 add_test(NAME tile_cache_tests COMMAND ridgeline_tile_cache_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_executable(ridgeline_global_terrain_tests
+    tests/test_global_terrain.cpp src/data/GlobalTerrainLoader.cpp
+    src/data/TileBatchDownloader.cpp src/sim/TerrainModel.cpp)
+target_include_directories(ridgeline_global_terrain_tests PRIVATE src)
+target_link_libraries(ridgeline_global_terrain_tests Qt6::Gui Qt6::Network glm::glm)
+add_test(NAME global_terrain_tests COMMAND ridgeline_global_terrain_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_executable(ridgeline_location_picking_tests
     tests/test_location_and_picking.cpp
     src/geo/Mgrs.cpp
@@ -183,6 +223,12 @@ add_test(NAME location_picking_tests COMMAND ridgeline_location_picking_tests
 
 add_executable(ridgeline_ui_interaction_tests
     tests/test_ui_interactions.cpp
+    src/ui/OverlayToolbar.cpp
+    src/ui/LayersPanel.cpp
+    src/ui/MapFurniture.cpp
+    src/map/LayerStack.cpp
+    src/map/MapMeasure.cpp
+    src/ui/ScenarioTree.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/LocationDialog.cpp
     src/ui/SourcePositionDialog.cpp
@@ -196,9 +242,16 @@ add_executable(ridgeline_ui_interaction_tests
     src/data/Exporter.cpp)
 target_include_directories(ridgeline_ui_interaction_tests PRIVATE src)
 target_link_libraries(ridgeline_ui_interaction_tests
-    Qt6::Widgets Qt6::Network glm::glm nlohmann_json::nlohmann_json)
+    Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network glm::glm nlohmann_json::nlohmann_json)
 add_test(NAME ui_interaction_tests COMMAND ridgeline_ui_interaction_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+if(TARGET Qt6::QOffscreenIntegrationPlugin)
+    # windeployqt deploys only the native platform by default. Let this
+    # development test find the matching SDK plugin when offscreen is selected;
+    # do not change the application's deployment or force a headless backend.
+    set_tests_properties(ui_interaction_tests PROPERTIES ENVIRONMENT
+        "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>")
+endif()
 
 if(GDAL_FOUND)
     add_executable(ridgeline_geotiff_tests

@@ -16,7 +16,17 @@ public:
                      const TerrainModel& terrain,
                      int probeSourceIndex,
                      const glm::vec3* probeReceiver);
+    // Draws the line-of-sight rays. Honours `visible` and nothing else.
     void draw(const glm::mat4& mvp);
+    // Draws the inspected-point path. This belongs to the result inspector, not
+    // to the LOS layer, so it stays on when that layer is hidden. Keeping it
+    // inside draw() previously meant one overlay served two concerns and the
+    // caller had to draw unconditionally to keep the probe alive.
+    void drawProbe(const glm::mat4& mvp);
+    // Draws an arbitrary span, used by the ruler. Same geometry as the
+    // inspected-point probe, so it needs no second overlay.
+    void setProbeSpan(const glm::vec3& from, const glm::vec3& to);
+    void clearProbe() { m_hasProbe = false; }
     void destroy();
 
 private:

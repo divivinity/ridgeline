@@ -1,4 +1,10 @@
 #include "MainWindow.h"
+#include "CompactLocationLabel.h"
+#include "WorkspaceTheme.h"
+#include "LayersPanel.h"
+#include "ShortcutsDialog.h"
+#include "TerrainPresentation.h"
+#include <QToolButton>
 #include "RuntimePaths.h"
 #include "data/TerrainLoader.h"
 #include "data/GlobalTerrainLoader.h"
@@ -97,7 +103,7 @@ private:
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("Ridgeline");
+    setWindowTitle("Ridgeline[*]");
     applyTheme();
     setupScene();
 
@@ -109,6 +115,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
 
     m_undoStack = new QUndoStack(this);
+    connect(m_undoStack, &QUndoStack::cleanChanged, this, [this] {
+        setWindowModified(isScenarioDirty());
+    });
 
     QMenu* fileMenu = menuBar()->addMenu("&File");
     QAction* locationAct = fileMenu->addAction("&Choose Location…");
@@ -153,6 +162,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     editMenu->addAction(redoAction);
 
     QMenu* analysisMenu = menuBar()->addMenu("&Analysis");
+    // Running coverage is the point of the application, and until now it lived
+    // only on a toolbar button with no shortcut and no menu entry.
+    QAction* runAct = analysisMenu->addAction("&Run Coverage");
+    runAct->setShortcut(QKeySequence("F5"));
+    connect(runAct, &QAction::triggered, this, &MainWindow::onSolve);
+    QAction* measureAct = analysisMenu->addAction("&Measure Distance");
+    measureAct->setShortcut(QKeySequence("M"));
+    measureAct->setCheckable(true);
+    analysisMenu->addSeparator();
     QAction* receiverAct = analysisMenu->addAction("&Receiver / Service Criteria…");
     connect(receiverAct, &QAction::triggered, this, &MainWindow::onReceiverSettings);
     QAction* comparisonAct = analysisMenu->addAction("Scenario &Comparison…");
@@ -166,31 +184,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_scenarioTree = new ScenarioTree(this);
     m_propsPanel = new PropertiesPanel(this);
     m_propsPanel->setAntennaLibrary(&m_antennaLib);
-    m_scenarioTree->setMinimumHeight(285);
-    m_propsPanel->setMinimumHeight(285);
+    m_scenarioTree->setMinimumHeight(195);
+    m_propsPanel->setMinimumHeight(250);
 
     auto* sourceWorkspace = new QSplitter(Qt::Vertical, this);
     sourceWorkspace->setChildrenCollapsible(false);
     sourceWorkspace->addWidget(m_scenarioTree);
     sourceWorkspace->addWidget(m_propsPanel);
-    sourceWorkspace->setStretchFactor(0, 3);
-    sourceWorkspace->setStretchFactor(1, 2);
-    sourceWorkspace->setSizes({350, 290});
-    sourceWorkspace->setStyleSheet(
-        "QSplitter::handle { background: #1f2d42; height: 1px; }"
-        "QSplitter::handle:hover { background: #2dd4bf; }"
-    );
+    sourceWorkspace->setObjectName("SourceWorkspaceSplitter");
+    sourceWorkspace->setHandleWidth(5);
+    sourceWorkspace->setStretchFactor(0, 1);
+    sourceWorkspace->setStretchFactor(1, 3);
+    sourceWorkspace->setSizes({240, 430});
 
     auto* leftDock = new QDockWidget("Sources", this);
-    leftDock->setMinimumWidth(270);
-    leftDock->setMaximumWidth(370);
+    leftDock->setObjectName("SourcesDock");
+    leftDock->setMinimumWidth(310);
+    leftDock->setMaximumWidth(440);
     leftDock->setWidget(sourceWorkspace);
     leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     leftDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
-    leftDock->setStyleSheet(
-        "QDockWidget { color: #94a3b8; font-size: 10px; }"
-        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }"
-    );
     addDockWidget(Qt::LeftDockWidgetArea, leftDock);
 
     m_pointPanel = new PointAnalysisPanel(this);
@@ -201,9 +214,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_pointDock->setFeatures(
         QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     m_pointDock->setMinimumWidth(310);
-    m_pointDock->setStyleSheet(
-        "QDockWidget { color: #94a3b8; font-size: 10px; }"
-        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
     addDockWidget(Qt::RightDockWidgetArea, m_pointDock);
     m_pointDock->hide();
 
@@ -216,9 +226,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_comparisonDock->setFeatures(
         QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     m_comparisonDock->setMinimumWidth(310);
-    m_comparisonDock->setStyleSheet(
-        "QDockWidget { color: #94a3b8; font-size: 10px; }"
-        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
     addDockWidget(Qt::RightDockWidgetArea, m_comparisonDock);
     tabifyDockWidget(m_pointDock, m_comparisonDock);
     m_comparisonDock->hide();
@@ -251,12 +258,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_calibrationDock->setFeatures(
         QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     m_calibrationDock->setMinimumWidth(320);
-    m_calibrationDock->setStyleSheet(
-        "QDockWidget { color: #94a3b8; font-size: 10px; }"
-        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }");
     addDockWidget(Qt::RightDockWidgetArea, m_calibrationDock);
     tabifyDockWidget(m_comparisonDock, m_calibrationDock);
     m_calibrationDock->hide();
+
+    m_layersPanel = new LayersPanel(this);
+    m_layersDock = new QDockWidget("Layers", this);
+    m_layersDock->setObjectName("LayersDock");
+    m_layersDock->setWidget(m_layersPanel);
+    m_layersDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    m_layersDock->setFeatures(
+        QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
+    m_layersDock->setMinimumWidth(300);
+    addDockWidget(Qt::RightDockWidgetArea, m_layersDock);
+    tabifyDockWidget(m_calibrationDock, m_layersDock);
 
     connect(calibrationAct, &QAction::triggered,
             this, &MainWindow::showCalibrationPanel);
@@ -285,19 +300,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             this, &MainWindow::onEditAntennaPosition);
 
     QToolBar* tb = addToolBar("Main");
+    tb->setObjectName("MainToolbar");
     tb->setMovable(false);
 
     auto* brand = new QLabel("  RIDGELINE  ");
     brand->setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 750; letter-spacing: 2px;");
     tb->addWidget(brand);
 
+    auto* sourcesButton = new QToolButton();
+    sourcesButton->setObjectName("SourcesPanelButton");
+    sourcesButton->setDefaultAction(leftDock->toggleViewAction());
+    sourcesButton->setToolTip("Show or hide source planning controls");
+    tb->addWidget(sourcesButton);
+
     auto* locationButton = new QPushButton("⌖  Location");
     locationButton->setObjectName("LocationButton");
     locationButton->setToolTip("Choose any location worldwide (Ctrl+L)");
     connect(locationButton, &QPushButton::clicked, this, &MainWindow::onChooseLocation);
     tb->addWidget(locationButton);
-    m_locationLabel = new QLabel("Procedural terrain · Choose Location for real-world data");
+    m_locationLabel = new CompactLocationLabel("Demo terrain · Choose a location to begin");
     m_locationLabel->setObjectName("LocationSummary");
+    m_locationLabel->setTextFormat(Qt::PlainText);
+    m_locationLabel->setMinimumWidth(140);
+    m_locationLabel->setMaximumWidth(270);
+    m_locationLabel->setWordWrap(false);
+    m_locationLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     tb->addWidget(m_locationLabel);
 
     auto* toolbarSpacer = new QWidget();
@@ -305,21 +332,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tb->addWidget(toolbarSpacer);
 
     auto* qualityLabel = new QLabel("QUALITY");
-    qualityLabel->setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; letter-spacing: 1px;");
+    qualityLabel->setStyleSheet("color: #a8b7ca; font-size: 11px; font-weight: 600;");
     tb->addWidget(qualityLabel);
 
     m_modeCombo = new QComboBox();
+    m_modeCombo->setObjectName("CoverageQualityCombo");
+    m_modeCombo->setAccessibleName("Coverage quality");
     m_modeCombo->addItem("Quick preview");
     m_modeCombo->addItem("Balanced");
     m_modeCombo->addItem("High accuracy · ITM");
     m_modeCombo->setCurrentIndex(1);
-    m_modeCombo->setStyleSheet(
-        "QComboBox { background: #111c2e; border: 1px solid #2a3b52; border-radius: 7px;"
-        " color: #dbe7f5; padding: 5px 12px; min-width: 145px; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #111c2e; color: #dbe7f5;"
-        " selection-background-color: #0f766e; }"
-    );
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int idx) {
                 if (idx == 0) {
@@ -350,12 +372,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     m_solveBtn = new QPushButton("Run coverage");
     m_solveBtn->setObjectName("RunButton");
-    m_solveBtn->setStyleSheet(
-        "QPushButton { background: #0f766e; border: 1px solid #2dd4bf; border-radius: 8px;"
-        " color: white; padding: 7px 18px; font-weight: 700; }"
-        "QPushButton:hover { background: #0d9488; }"
-        "QPushButton:disabled { background: #1e293b; border-color: #334155; color: #64748b; }"
-    );
     connect(m_solveBtn, &QPushButton::clicked, this, &MainWindow::onSolve);
     tb->addWidget(m_solveBtn);
 
@@ -365,26 +381,49 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // overflow popup, where combo boxes and buttons cannot be used reliably.
     addToolBarBreak(Qt::TopToolBarArea);
     QToolBar* overlayTb = addToolBar("Overlays");
+    overlayTb->setObjectName("OverlayToolbar");
     overlayTb->setMovable(false);
     overlayTb->addWidget(m_overlayBar);
-    connect(m_overlayBar, &OverlayToolbar::overlayToggled,
-            m_viewport, &ViewportWidget::setOverlayVisible);
-    connect(m_overlayBar, &OverlayToolbar::basemapOpacityChanged,
-            m_viewport, &ViewportWidget::setBasemapOpacity);
     connect(m_overlayBar, &OverlayToolbar::heatmapMetricChanged,
             m_viewport, &ViewportWidget::setHeatmapMetric);
+    connect(m_overlayBar, &OverlayToolbar::measureModeToggled,
+            m_viewport, &ViewportWidget::setMeasureMode);
+    connect(measureAct, &QAction::toggled, m_viewport, &ViewportWidget::setMeasureMode);
+    connect(m_viewport, &ViewportWidget::measureModeChanged, measureAct,
+            [measureAct](bool active) {
+        if (measureAct->isChecked() == active) return;
+        const QSignalBlocker blocker(measureAct);
+        measureAct->setChecked(active);
+    });
+    connect(m_viewport, &ViewportWidget::measureModeChanged,
+            m_overlayBar, &OverlayToolbar::setMeasureChecked);
+    connect(m_viewport, &ViewportWidget::measureModeChanged, this, [this](bool active) {
+        if (active)
+            m_statusLabel->setText("  Measuring · click two points on the map · Esc to stop");
+        else
+            m_statusLabel->setText("  Ready");
+    });
+    connect(m_viewport, &ViewportWidget::measurementChanged, this, [this](const QString& text) {
+        if (!text.isEmpty()) m_statusLabel->setText("  " + text);
+    });
+    connect(m_overlayBar, &OverlayToolbar::resetViewRequested,
+            m_viewport, &ViewportWidget::resetView);
+    connect(m_overlayBar, &OverlayToolbar::topViewRequested,
+            m_viewport, &ViewportWidget::topView);
 
     m_statusLabel = new QLabel("  Ready");
-    m_statusLabel->setStyleSheet("color: #94a3b8; font-size: 11px;");
+    m_statusLabel->setObjectName("WorkspaceStatus");
+    m_statusLabel->setStyleSheet("color: #b8c8da; font-size: 12px; padding: 4px 8px;");
     statusBar()->addWidget(m_statusLabel);
     statusBar()->setStyleSheet("background: #0a1220; border-top: 1px solid #1e2d42;");
     connect(m_viewport, &ViewportWidget::basemapInfoChanged, this,
             [this](const QString& provider, const QString& attribution, const QString& error) {
         if (m_locationLabel) {
-            m_locationLabel->setToolTip(
+            m_locationLabel->setProperty("basemapInfo",
                 QString("Basemap: %1\n%2%3")
                     .arg(provider, attribution,
                          error.isEmpty() ? QString{} : QString("\n%1").arg(error)));
+            updateLocationSummary();
         }
     });
 
@@ -393,17 +432,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     bottomDock->setWidget(m_bottomBar);
     bottomDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
     bottomDock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
-    bottomDock->setStyleSheet(
-        "QDockWidget { color: #94a3b8; font-size: 10px; }"
-        "QDockWidget::title { background: #0b1422; padding: 7px 10px; border-bottom: 1px solid #1f2d42; }"
-    );
     addDockWidget(Qt::BottomDockWidgetArea, bottomDock);
     bottomDock->hide();
 
     QTimer::singleShot(0, this, [this, leftDock]() {
         addDockWidget(Qt::LeftDockWidgetArea, leftDock);
         leftDock->show();
-        resizeDocks({leftDock}, {320}, Qt::Horizontal);
+        resizeDocks({leftDock}, {350}, Qt::Horizontal);
     });
 
     QMenu* viewMenu = menuBar()->addMenu("&View");
@@ -412,6 +447,44 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     viewMenu->addAction(m_pointDock->toggleViewAction());
     viewMenu->addAction(m_comparisonDock->toggleViewAction());
     viewMenu->addAction(m_calibrationDock->toggleViewAction());
+    viewMenu->addAction(m_layersDock->toggleViewAction());
+    viewMenu->addSeparator();
+    // These camera keys already worked but appeared nowhere in the UI, so the
+    // only way to find them was to read the README.
+    auto* topViewAction = viewMenu->addAction("Top-down view");
+    topViewAction->setShortcut(QKeySequence("T"));
+    connect(topViewAction, &QAction::triggered, m_viewport, &ViewportWidget::topView);
+    auto* resetViewAction = viewMenu->addAction("Reset map view");
+    resetViewAction->setShortcut(QKeySequence("R"));
+    connect(resetViewAction, &QAction::triggered, m_viewport, &ViewportWidget::resetView);
+
+    viewMenu->addSeparator();
+    auto* resetLayoutAction = viewMenu->addAction("Reset workspace layout");
+    resetLayoutAction->setObjectName("ResetLayoutAction");
+    resetLayoutAction->setToolTip(
+        "Put the panels back where they started, without restarting");
+    connect(resetLayoutAction, &QAction::triggered, this, [this] {
+        if (m_defaultLayout.isEmpty()) return;
+        restoreState(m_defaultLayout);
+        m_statusLabel->setText("  Workspace layout reset");
+    });
+
+    QMenu* helpMenu = menuBar()->addMenu("&Help");
+    auto* shortcutsAction = helpMenu->addAction("&Keyboard Shortcuts…");
+    shortcutsAction->setObjectName("ShortcutsAction");
+    shortcutsAction->setShortcut(QKeySequence("F1"));
+    connect(shortcutsAction, &QAction::triggered, this, [this] {
+        ShortcutsDialog(this).exec();
+    });
+
+    // Bind the stack last, so the viewport and panel are both live before it
+    // pushes its first state to them.
+    m_viewport->setLayerStack(&m_layerStack);
+    m_layersPanel->setStack(&m_layerStack);
+
+    // Queued after the deferred dock re-add above, so what is captured is the
+    // arrangement the user actually starts with.
+    QTimer::singleShot(0, this, [this] { m_defaultLayout = saveState(); });
 
     refreshTree();
 
@@ -719,8 +792,14 @@ void MainWindow::placeDefaultAntennas() {
 
 void MainWindow::loadGlobalLocation(double latitude, double longitude,
                                     double extentKm, const QString& name) {
+    if (m_terrainLoadInProgress || m_solveInProgress) return;
+    m_terrainLoadInProgress = true;
+    const auto loadingGuard = qScopeGuard([this] {
+        m_terrainLoadInProgress = false;
+        if (m_viewport) m_viewport->setBasemapLoadCallbacks({}, {});
+    });
+    bool terrainInstalled = false;
     m_statusLabel->setText("  Loading real-world elevation…");
-    QApplication::setOverrideCursor(Qt::WaitCursor);
 
     QProgressDialog loadProgress("Preparing map data…", "Cancel", 0, 0, this);
     loadProgress.setWindowTitle("Loading analysis area");
@@ -748,11 +827,12 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
         if (loadProgress.wasCanceled()) {
             m_statusLabel->setText("  Location loading cancelled");
             loadProgress.close();
-            QApplication::restoreOverrideCursor();
             return;
         }
 
         m_engine.setTerrain(std::move(terrain));
+        terrainInstalled = true;
+        markScenarioDirty();
         m_engine.setFieldGrid({});
         resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
@@ -785,9 +865,9 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
         refreshBottomBar();
         updateLocationSummary();
         setWindowTitle(m_locationName.isEmpty()
-            ? QString("Ridgeline — %1°, %2°")
+            ? QString("Ridgeline — %1°, %2°[*]")
                 .arg(latitude, 0, 'f', 4).arg(longitude, 0, 'f', 4)
-            : QString("Ridgeline — %1").arg(m_locationName.section(',', 0, 0)));
+            : QString("Ridgeline — %1[*]").arg(m_locationName.section(',', 0, 0)));
 
         const auto world = m_engine.terrain().worldSize();
         const int outside = static_cast<int>(std::count_if(
@@ -796,12 +876,8 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                 return a.position.x < 0.0f || a.position.z < 0.0f ||
                        a.position.x > world.x || a.position.z > world.z;
             }));
-        // Every path reaching here has already installed the elevation and
-        // cleared the undo stack — a cancel during the terrain load returned
-        // above — so the scenario is dirty whether or not the imagery
-        // finished. Marking it only in the success branch let a cancelled
-        // load close without a prompt and be discarded silently.
-        markScenarioDirty();
+        // The elevation commit above marks the scenario dirty even if imagery
+        // was cancelled or could not finish.
         if (loadProgress.wasCanceled()) {
             m_statusLabel->setText("  Elevation loaded · Satellite imagery cancelled");
         } else {
@@ -825,19 +901,26 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
             m_statusLabel->setText(status);
         }
     } catch (const std::runtime_error& e) {
+        loadProgress.hide();
         if (loadProgress.wasCanceled() || std::string(e.what()) == "Terrain load cancelled")
-            m_statusLabel->setText("  Location loading cancelled");
+            m_statusLabel->setText(terrainInstalled
+                ? "  Elevation loaded · Map loading cancelled"
+                : "  Location loading cancelled · Previous terrain preserved");
         else {
-            m_statusLabel->setText("  Location load failed");
+            m_statusLabel->setText(terrainInstalled
+                ? "  Elevation loaded · Map display failed"
+                : "  Location load failed · Previous terrain preserved");
             QMessageBox::critical(this, "Could not load location", e.what());
         }
     } catch (const std::exception& e) {
-        m_statusLabel->setText("  Location load failed");
+        loadProgress.hide();
+        m_statusLabel->setText(terrainInstalled
+            ? "  Elevation loaded · Map display failed"
+            : "  Location load failed · Previous terrain preserved");
         QMessageBox::critical(this, "Could not load location", e.what());
     }
     if (m_viewport) m_viewport->setBasemapLoadCallbacks({}, {});
     loadProgress.close();
-    QApplication::restoreOverrideCursor();
 }
 
 void MainWindow::onChooseLocation() {
@@ -883,14 +966,28 @@ void MainWindow::onReceiverSettings() {
 
 void MainWindow::updateLocationSummary() {
     if (!m_locationLabel) return;
-    const QString area = QString("%1 × %1 km").arg(m_terrainSource.extentKm, 0, 'f', 0);
+    const auto& terrain = m_engine.terrain();
+    const QString tooltip = m_locationName + "\n" + TerrainPresentation::gridDetails(terrain) + "\n" +
+        TerrainPresentation::elevationReference(m_terrainSource.type) + "\n" +
+        m_locationLabel->property("basemapInfo").toString();
+    m_locationLabel->setToolTip("<qt>" + tooltip.toHtmlEscaped().replace('\n', "<br>") + "</qt>");
+    if (!terrain.hasGeoReference()) {
+        const bool demo = m_terrainSource.type == TerrainSource::Type::Hills ||
+                          m_terrainSource.type == TerrainSource::Type::Flat;
+        m_locationLabel->setText(demo ? "Demo terrain · Choose a location to begin"
+            : QString("Local terrain · %1").arg(m_locationName));
+        return;
+    }
+    const auto world = terrain.worldSize();
+    const auto center = terrain.worldToLatLon(world.x * 0.5f, world.z * 0.5f);
+    const QString area = TerrainPresentation::areaSummary(world.x, world.z);
     if (!m_locationName.isEmpty()) {
-        m_locationLabel->setText(QString("%1  ·  %2")
+        m_locationLabel->setText(QString("%1\n%2")
             .arg(m_locationName.section(',', 0, 0), area));
     } else {
-        m_locationLabel->setText(QString("%1°, %2°  ·  %3")
-            .arg(m_terrainSource.centerLat, 0, 'f', 4)
-            .arg(m_terrainSource.centerLon, 0, 'f', 4)
+        m_locationLabel->setText(QString("%1°, %2°\n%3")
+            .arg(center.latDeg, 0, 'f', 4)
+            .arg(center.lonDeg, 0, 'f', 4)
             .arg(area));
     }
 }
@@ -910,14 +1007,17 @@ bool MainWindow::isScenarioDirty() const {
 
 void MainWindow::markScenarioDirty() {
     m_scenarioDirty = true;
+    setWindowModified(true);
 }
 
 void MainWindow::markScenarioClean() {
     m_scenarioDirty = false;
     if (m_undoStack) m_undoStack->setClean();
+    setWindowModified(false);
 }
 
 bool MainWindow::confirmDiscardChanges() {
+    if (m_terrainLoadInProgress || m_solveInProgress) return false;
     if (!isScenarioDirty()) return true;
 
     const auto answer = QMessageBox::warning(
@@ -936,6 +1036,11 @@ bool MainWindow::confirmDiscardChanges() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if (m_terrainLoadInProgress) {
+        m_statusLabel->setText("  Cancel the terrain load before closing");
+        event->ignore();
+        return;
+    }
     // A coverage run already owns the interaction through its own modal
     // progress dialog. Raising the unsaved-changes prompt on top of it stacks
     // a second modal — and a third if the user picks Save and gets a file
@@ -952,6 +1057,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::loadTerrain(const QString& path) {
+    if (m_terrainLoadInProgress || m_solveInProgress) return;
+    m_terrainLoadInProgress = true;
+    const auto loadingGuard = qScopeGuard([this] { m_terrainLoadInProgress = false; });
+    bool terrainInstalled = false;
     try {
         m_statusLabel->setText("  Loading terrain…");
         QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -962,6 +1071,8 @@ void MainWindow::loadTerrain(const QString& path) {
                           ? TerrainLoader::fromGeoTIFF(path.toStdString())
                           : TerrainLoader::fromDTED(path.toStdString()));
         m_engine.setTerrain(std::move(t));
+        terrainInstalled = true;
+        markScenarioDirty();
         m_engine.setFieldGrid({});
         resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
@@ -997,15 +1108,18 @@ void MainWindow::loadTerrain(const QString& path) {
         refreshPropsPanel();
         refreshBottomBar();
         markScenarioDirty();
-        setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
+        setWindowTitle(QString("Ridgeline — %1[*]").arg(QFileInfo(path).fileName()));
         m_statusLabel->setText("  Terrain loaded · Existing georeferenced sources preserved");
     } catch (const std::exception& e) {
-        m_statusLabel->setText("  Ready");
+        m_statusLabel->setText(terrainInstalled
+            ? "  Terrain loaded · Map display failed"
+            : "  Terrain load failed · Previous terrain preserved");
         QMessageBox::critical(this, "Load failed", e.what());
     }
 }
 
 void MainWindow::onSolve() {
+    if (m_terrainLoadInProgress || m_solveInProgress) return;
     if (m_engine.antennas().empty()) {
         QMessageBox::information(this, "Place an emitter",
             "Place at least one emitter before running coverage.");
@@ -1225,7 +1339,12 @@ void MainWindow::onAntennaMoved(int index, float worldX, float worldZ) {
     m_statusLabel->setText("  Source moved · Undo is available from Edit or Ctrl+Z");
 }
 
-void MainWindow::refreshTree() { m_scenarioTree->refresh(m_engine.antennas()); }
+void MainWindow::refreshTree() {
+    updateLocationSummary();
+    m_scenarioTree->refresh(m_engine.antennas());
+    m_viewport->setElevationCredit(TerrainPresentation::elevationCredit(
+        m_terrainSource.type, m_engine.terrain().elevationProvider));
+}
 
 void MainWindow::refreshPropsPanel() {
     if (m_selectedIndex >= 0 &&
@@ -1295,12 +1414,13 @@ QString MainWindow::sourcePositionSummary(const Antenna& antenna) const {
     const float ground = terrain.heightAtWorld(
         antenna.position.x, antenna.position.z);
     const float agl = std::max(0.0f, antenna.position.y - ground);
-    QString summary = QString("X %1 m · Z %2 m\nGround %3 m MSL · source %4 m MSL · %5 m AGL")
+    QString summary = QString("X %1 m · Z %2 m\nGround %3 m · source %4 m\n%5 m AGL\n%6")
         .arg(antenna.position.x, 0, 'f', 1)
         .arg(antenna.position.z, 0, 'f', 1)
         .arg(ground, 0, 'f', 1)
         .arg(antenna.position.y, 0, 'f', 1)
-        .arg(agl, 0, 'f', 1);
+        .arg(agl, 0, 'f', 1)
+        .arg(TerrainPresentation::elevationReference(m_terrainSource.type));
     if (!terrain.hasGeoReference()) return summary;
 
     const auto coordinate = terrain.worldToLatLon(
@@ -1418,6 +1538,9 @@ void MainWindow::onSaveScenario() {
     doc.calibrationRmseBeforeDb = m_appliedCalibrationRmseBeforeDb;
     doc.calibrationRmseAfterDb = m_appliedCalibrationRmseAfterDb;
     doc.antennas = m_engine.antennas();
+    doc.layers.clear();
+    for (const LayerStack::State& layer : m_layerStack.state())
+        doc.layers.push_back({layer.id.toStdString(), layer.visible, layer.opacity});
 
     try {
         ScenarioIO::save(doc, path.toStdString());
@@ -1434,21 +1557,64 @@ void MainWindow::onOpenScenario() {
         this, "Open Scenario", {},
         "Ridgeline scenario (*.json);;All files (*)");
     if (path.isEmpty()) return;
+    m_terrainLoadInProgress = true;
+    const auto loadingGuard = qScopeGuard([this] {
+        m_terrainLoadInProgress = false;
+        if (m_viewport) m_viewport->setBasemapLoadCallbacks({}, {});
+    });
+    QProgressDialog progress("Reading scenario…", "Cancel", 0, 0, this);
+    progress.setWindowTitle("Opening scenario");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setMinimumWidth(460);
+    progress.show();
+    bool terrainInstalled = false;
     try {
         m_statusLabel->setText("  Loading scenario…");
-        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        QApplication::processEvents();
+        if (progress.wasCanceled()) throw std::runtime_error("Scenario load cancelled");
         ScenarioDoc doc = ScenarioIO::load(path.toStdString());
-        applyScenarioDoc(doc);
+        applyScenarioDoc(doc, progress, terrainInstalled);
         markScenarioClean();
-        setWindowTitle(QString("Ridgeline — %1").arg(QFileInfo(path).fileName()));
-        m_statusLabel->setText("  Scenario loaded");
+        setWindowTitle(QString("Ridgeline — %1[*]").arg(QFileInfo(path).fileName()));
+        if (progress.wasCanceled())
+            m_statusLabel->setText("  Scenario loaded · Satellite imagery cancelled");
+        else if (m_engine.terrain().hasGeoReference() && m_viewport && !m_viewport->basemapReady())
+            m_statusLabel->setText("  Scenario loaded · Satellite imagery unavailable — "
+                                  + m_viewport->basemapError());
+        else if (m_viewport && !m_viewport->basemapError().isEmpty())
+            m_statusLabel->setText("  Scenario loaded · Imagery warning — " + m_viewport->basemapError());
+        else
+            m_statusLabel->setText("  Scenario loaded");
     } catch (const std::exception& e) {
-        m_statusLabel->setText("  Ready");
-        QMessageBox::critical(this, "Open failed", e.what());
+        progress.hide();
+        if (progress.wasCanceled()) {
+            m_statusLabel->setText(terrainInstalled
+                ? "  Scenario terrain installed · Map loading cancelled"
+                : "  Scenario loading cancelled · Previous scenario preserved");
+        } else {
+            m_statusLabel->setText(terrainInstalled
+                ? "  Scenario partially loaded · Review before saving"
+                : "  Scenario load failed · Previous scenario preserved");
+            QMessageBox::critical(this, "Open failed", e.what());
+        }
     }
 }
 
-void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
+void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progress,
+                                  bool& terrainInstalled) {
+    auto cancelLoad = [&progress] { return progress.wasCanceled(); };
+    auto elevationProgress = [&progress](int completed, int total) {
+        if (progress.wasCanceled()) return;
+        progress.setLabelText(QString("Elevation tiles · %1 / %2").arg(completed).arg(total));
+        progress.setRange(0, std::max(total, 1));
+        progress.setValue(completed);
+    };
+    progress.setLabelText("Loading scenario elevation…");
+    QApplication::processEvents();
+    if (cancelLoad()) throw std::runtime_error("Scenario load cancelled");
     TerrainModel t;
     const auto& ts = doc.terrain;
     switch (ts.type) {
@@ -1462,7 +1628,8 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
         case TerrainSource::Type::GeoTiff:
             t = TerrainLoader::fromGeoTIFF(ts.hgtPath); break;
         case TerrainSource::Type::Global:
-            t = GlobalTerrainLoader::load(ts.centerLat, ts.centerLon, ts.extentKm, 513); break;
+            t = GlobalTerrainLoader::load(ts.centerLat, ts.centerLon, ts.extentKm, 513,
+                                          elevationProgress, cancelLoad); break;
         case TerrainSource::Type::Flat:
             t = TerrainLoader::makeFlat(ts.widthCells, ts.heightCells, ts.cellSize); break;
         case TerrainSource::Type::Hills:
@@ -1470,7 +1637,15 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
             t = TerrainLoader::makeHills(ts.widthCells, ts.heightCells,
                                           ts.cellSize, ts.amplitude); break;
     }
+    // Local decoders are synchronous; honor pending cancellation at the
+    // boundary before any existing scenario or results are replaced.
+    QApplication::processEvents();
+    if (cancelLoad()) throw std::runtime_error("Scenario load cancelled");
     m_engine.setTerrain(std::move(t));
+    terrainInstalled = true;
+    m_placementActive = false;
+    if (m_viewport) m_viewport->setPlacementMode(false);
+    markScenarioDirty();
     m_engine.setFieldGrid({});
     resetScenarioComparisonForTerrain();
     clearCalibrationMeasurements();
@@ -1479,7 +1654,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     if (m_pointDock) m_pointDock->hide();
     m_terrainSource = doc.terrain;
     m_locationName.clear();
-    if (m_terrainSource.type == TerrainSource::Type::Global) updateLocationSummary();
+    updateLocationSummary();
 
     m_engine.mode = doc.mode;
     m_engine.receiver = doc.receiver;
@@ -1501,9 +1676,27 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc) {
     else if (doc.mode == SimEngine::Mode::Engineering) m_modeCombo->setCurrentIndex(2);
     else m_modeCombo->setCurrentIndex(1);
     m_engine.setAntennas(doc.antennas);
+    if (!doc.layers.empty()) {
+        std::vector<LayerStack::State> layers;
+        layers.reserve(doc.layers.size());
+        for (const ScenarioLayerState& layer : doc.layers)
+            layers.push_back({QString::fromStdString(layer.id), layer.visible, layer.opacity});
+        m_layerStack.applyState(layers);
+    }
 
     m_selectedIndex = -1;
-    if (m_viewport) m_viewport->reloadTerrain();
+    if (m_viewport) {
+        progress.setLabelText("Loading satellite imagery · Scenario settings loaded");
+        progress.setRange(0, 0);
+        m_viewport->setBasemapLoadCallbacks([&progress](int completed, int total) {
+            if (progress.wasCanceled()) return;
+            progress.setLabelText(QString("Satellite imagery · %1 / %2").arg(completed).arg(total));
+            progress.setRange(0, std::max(total, 1));
+            progress.setValue(completed);
+        }, cancelLoad);
+        m_viewport->reloadTerrain();
+        m_viewport->setBasemapLoadCallbacks({}, {});
+    }
     refreshTree();
     refreshPropsPanel();
     refreshBottomBar();
@@ -1561,10 +1754,12 @@ void MainWindow::onTerrainInspected(float worldX, float worldZ) {
     const TerrainModel& terrain = m_engine.terrain();
     const float sampledX = analysis.receiverPosition.x;
     const float sampledZ = analysis.receiverPosition.z;
-    QString position = QString("Result cell center · X %1 m · Z %2 m · receiver %3 m MSL")
+    const QString cellPosition = QString("Result cell center\nX %1 m · Z %2 m\nReceiver elevation %3 m\n%4")
         .arg(sampledX, 0, 'f', 1)
         .arg(sampledZ, 0, 'f', 1)
-        .arg(analysis.receiverPosition.y, 0, 'f', 1);
+        .arg(analysis.receiverPosition.y, 0, 'f', 1)
+        .arg(TerrainPresentation::elevationReference(m_terrainSource.type));
+    QString position = cellPosition;
     if (terrain.hasGeoReference()) {
         const auto coordinate = terrain.worldToLatLon(sampledX, sampledZ);
         std::string mgrs;
@@ -1574,10 +1769,7 @@ void MainWindow::onTerrainInspected(float worldX, float worldZ) {
             .arg(coordinate.lonDeg, 0, 'f', 6);
         if (wgs84ToMgrs(coordinate.latDeg, coordinate.lonDeg, 5, mgrs, error))
             position += QString("\nMGRS %1").arg(QString::fromStdString(mgrs));
-        position += QString("\nResult cell center · X %1 m · Z %2 m · receiver %3 m MSL")
-            .arg(sampledX, 0, 'f', 1)
-            .arg(sampledZ, 0, 'f', 1)
-            .arg(analysis.receiverPosition.y, 0, 'f', 1);
+        position += "\n" + cellPosition;
     }
 
     m_pointPanel->setAnalysis(
@@ -1600,8 +1792,11 @@ void MainWindow::onExportPng() {
     const QString path = QFileDialog::getSaveFileName(
         this, "Export Coverage PNG", {}, "PNG image (*.png);;All files (*)");
     if (path.isEmpty()) return;
-    if (Exporter::exportPng(m_engine.fieldGrid(), path.toStdString()))
-        m_statusLabel->setText("  PNG exported");
+    // QWidget::grab includes the OpenGL viewport and its child widgets,
+    // preserving the selected overlays, legend, and provider attribution.
+    const QPixmap map = m_viewport->grab();
+    if (Exporter::savePng(map.toImage(), path.toStdString()))
+        m_statusLabel->setText("  Map PNG exported with current view and overlays");
     else QMessageBox::critical(this, "Export failed", "Could not write PNG file.");
 }
 
@@ -1619,20 +1814,5 @@ void MainWindow::onExportCsv() {
 }
 
 void MainWindow::applyTheme() {
-    setStyleSheet(
-        "QMainWindow { background: #08111f; color: #dbe7f5; }"
-        "QWidget { color: #dbe7f5; font-family: 'Segoe UI'; }"
-        "QToolBar { background: #0b1422; border: none; border-bottom: 1px solid #1e2d42;"
-        " spacing: 10px; padding: 7px 10px; }"
-        "QMenuBar { background: #08111f; color: #94a3b8; padding: 2px; }"
-        "QMenuBar::item:selected { background: #172338; color: #f8fafc; border-radius: 4px; }"
-        "QMenu { background: #101b2d; border: 1px solid #2a3a51; padding: 5px; }"
-        "QMenu::item { padding: 6px 24px; border-radius: 4px; }"
-        "QMenu::item:selected { background: #0f766e; color: white; }"
-        "QDockWidget { background: #0b1422; }"
-        "QPushButton#LocationButton { background: #132238; border: 1px solid #2a3b52;"
-        " border-radius: 7px; color: #ccfbf1; padding: 6px 12px; font-weight: 650; }"
-        "QPushButton#LocationButton:hover { background: #17404a; border-color: #2dd4bf; }"
-        "QLabel#LocationSummary { color: #94a3b8; font-size: 11px; padding-right: 8px; }"
-    );
+    setStyleSheet(WorkspaceTheme::styleSheet());
 }

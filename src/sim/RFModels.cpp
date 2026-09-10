@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace {
 constexpr float kNegInf = -std::numeric_limits<float>::infinity();
@@ -47,6 +48,45 @@ float sampleElevationPattern(const std::vector<float>& pattern, float elevationD
 } // namespace
 
 namespace RFModels {
+
+void validateSolveInputs(const TerrainModel& terrain,
+                         const std::vector<Antenna>& antennas,
+                         const ReceiverSettings& receiver, float resolutionM) {
+    terrain.validate();
+    if (terrain.width < 2 || terrain.height < 2)
+        throw std::invalid_argument("Coverage requires a complete terrain grid of at least 2 x 2 samples.");
+    const glm::vec3 world = terrain.worldSize();
+    if (!std::isfinite(world.x) || !std::isfinite(world.z) ||
+        !std::isfinite(resolutionM) || resolutionM <= 0)
+        throw std::invalid_argument("Coverage extent and grid resolution must be finite and positive.");
+    const double columns = std::max(1.0, std::ceil(world.x / static_cast<double>(resolutionM)));
+    const double rows = std::max(1.0, std::ceil(world.z / static_cast<double>(resolutionM)));
+    if (columns * rows > std::numeric_limits<int>::max())
+        throw std::invalid_argument("Coverage grid is too large. Increase the grid spacing or reduce the area.");
+    if (!std::isfinite(receiver.receiverHeightAglM) || receiver.receiverHeightAglM < 0 ||
+        !std::isfinite(receiver.bandwidthHz) || receiver.bandwidthHz <= 0 ||
+        !std::isfinite(receiver.noiseFigureDb) || !std::isfinite(receiver.sensitivityDbm) ||
+        !std::isfinite(receiver.requiredSnrDb) || !std::isfinite(receiver.fadeMarginTargetDb))
+        throw std::invalid_argument("Receiver settings must be finite, with positive bandwidth and nonnegative height.");
+    for (std::size_t i = 0; i < antennas.size(); ++i) {
+        const auto& a = antennas[i];
+        const std::string prefix = "Source " + std::to_string(i + 1) + ": ";
+        if (!std::isfinite(a.position.x) || !std::isfinite(a.position.y) || !std::isfinite(a.position.z))
+            throw std::invalid_argument(prefix + "position must be finite.");
+        if (a.position.x < 0 || a.position.z < 0 || a.position.x > world.x || a.position.z > world.z)
+            throw std::invalid_argument(prefix + "outside analysis area. Choose terrain containing the source or reposition it.");
+        if (!std::isfinite(a.frequencyMHz) || a.frequencyMHz <= 0 ||
+            !std::isfinite(a.powerW) || a.powerW <= 0 ||
+            !std::isfinite(a.gainDbi) || !std::isfinite(a.cableLossDb) ||
+            !std::isfinite(a.azimuthDeg) || !std::isfinite(a.downtiltDeg) ||
+            !std::isfinite(a.horizontalBeamwidthDeg) || !std::isfinite(a.verticalBeamwidthDeg) ||
+            !std::isfinite(a.frontToBackDb))
+            throw std::invalid_argument(prefix + "RF settings must be finite, with positive frequency and power.");
+        for (const auto* pattern : {&a.azimuthPatternDb, &a.elevationPatternDb})
+            if (std::any_of(pattern->begin(), pattern->end(), [](float v) { return !std::isfinite(v); }))
+                throw std::invalid_argument(prefix + "antenna pattern contains nonfinite values.");
+    }
+}
 
 float dbmToMw(float dbm) {
     if (!std::isfinite(dbm)) return 0.0f;

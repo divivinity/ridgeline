@@ -21,7 +21,11 @@
 #include <cstddef>
 #include <limits>
 
+#include "map/LayerStack.h"
+
 class QUndoStack;
+class LayersPanel;
+class QProgressDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -75,6 +79,13 @@ private:
     Antenna          m_propsAntennaView;
     bool             m_scenarioDirty = false;  // non-undoable unsaved changes
     bool             m_solveInProgress = false;  // a coverage run owns the UI
+    bool             m_terrainLoadInProgress = false;
+    LayerStack       m_layerStack;
+    LayersPanel*     m_layersPanel = nullptr;
+    QDockWidget*     m_layersDock = nullptr;
+    // The dock arrangement as built, so a workspace dragged into a mess can be
+    // put back without restarting.
+    QByteArray       m_defaultLayout;
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;
@@ -117,7 +128,8 @@ private:
     void refreshTree();
     void refreshPropsPanel();
     void refreshBottomBar();
-    void applyScenarioDoc(const ScenarioDoc& doc);
+    void applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progress,
+                          bool& terrainInstalled);
     void applySourceState(const std::vector<Antenna>& antennas, int selectedIndex);
     void pushSourceChange(std::vector<Antenna> after, int selectedAfter,
                           const QString& description, int mergeId = -1);

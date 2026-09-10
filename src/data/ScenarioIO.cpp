@@ -1,8 +1,9 @@
 #include "ScenarioIO.h"
 #include <nlohmann/json.hpp>
-#include <fstream>
+#include <QFile>
 #include <stdexcept>
 #include <cmath>
+#include <QSaveFile>
 
 using json = nlohmann::json;
 
@@ -121,20 +122,53 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     }
     j["antennas"] = std::move(antennas);
 
-    std::ofstream f(path);
-    if (!f) throw std::runtime_error("Cannot write scenario file: " + path);
-    f << j.dump(2);
-    if (!f) throw std::runtime_error("Write failed (disk full?): " + path);
+    json layers = json::array();
+    for (const auto& layer : doc.layers) {
+        layers.push_back({{"id", layer.id},
+                          {"visible", layer.visible},
+                          {"opacity", layer.opacity}});
+    }
+    j["layers"] = std::move(layers);
+
+    // Serialize before opening anything: invalid strings must not truncate an
+    // existing scenario. Commit checks flushing and atomic replacement too.
+    const std::string payload = j.dump(2);
+    QSaveFile f(QString::fromStdString(path));
+    f.setDirectWriteFallback(false);
+    if (!f.open(QIODevice::WriteOnly))
+        throw std::runtime_error("Cannot write scenario file: " + path + ": " + f.errorString().toStdString());
+    if (f.write(payload.data(), static_cast<qint64>(payload.size())) != static_cast<qint64>(payload.size()))
+        throw std::runtime_error("Scenario write failed: " + path + ": " + f.errorString().toStdString());
+    if (!f.commit())
+        throw std::runtime_error("Scenario commit failed: " + path + ": " + f.errorString().toStdString());
 }
 
 ScenarioDoc ScenarioIO::load(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) throw std::runtime_error("Cannot open scenario file: " + path);
+    QFile f(QString::fromStdString(path));
+    if (!f.open(QIODevice::ReadOnly))
+        throw std::runtime_error("Cannot open scenario file: " + path + ": " + f.errorString().toStdString());
+    const QByteArray contents = f.readAll();
+    if (f.error() != QFileDevice::NoError)
+        throw std::runtime_error("Cannot read scenario file: " + path + ": " + f.errorString().toStdString());
 
     ScenarioDoc doc;
     try {
-        json j = json::parse(f);
+        json j = json::parse(contents.constBegin(), contents.constEnd());
         doc.mode = strToMode(j.value("mode", "planner"));
+
+        // Absent in scenarios written before layers existed, so its absence is
+        // not an error. Ids the running build does not know are kept out here
+        // and ignored by the stack, leaving a newer file loadable.
+        if (j.contains("layers") && j["layers"].is_array()) {
+            for (const auto& entry : j["layers"]) {
+                if (!entry.is_object()) continue;
+                ScenarioLayerState layer;
+                layer.id = entry.value("id", std::string{});
+                layer.visible = entry.value("visible", false);
+                layer.opacity = entry.value("opacity", 1.0f);
+                if (!layer.id.empty()) doc.layers.push_back(layer);
+            }
+        }
 
         if (j.contains("receiver")) {
             const auto& jr = j["receiver"];
