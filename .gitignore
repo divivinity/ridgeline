@@ -10,3 +10,4 @@ aqtinstall.log
 .DS_Store
 *.swp
 *.gz
+.superpowers/
