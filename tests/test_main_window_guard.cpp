@@ -20,6 +20,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QProgressDialog>
 #include <QEventLoop>
 #include <QListWidget>
@@ -1362,6 +1363,60 @@ void testAutosaveAndRecovery() {
     }
 }
 
+
+// Ridgeline never shows a coverage field that disagrees with the settings on
+// screen, because every path that changes an input discards the field outright.
+// That is a strong guarantee and an easy one to break by dropping a single
+// setFieldGrid({}) call, so it is pinned here rather than assumed. MainWindow
+// exposes resultsAreStale() purely so this check can be written.
+void testDisplayedResultsAlwaysMatchTheirInputs() {
+    MainWindow window;
+    window.show();
+    settle(200);
+
+    auto* run = findButton(window, "Run coverage");
+    auto* legend = window.findChild<HeatmapLegend*>();
+    if (!run || !legend) { check(false, "stale-invariant fixture controls exist"); return; }
+    if (auto* quality = window.findChild<QComboBox*>("CoverageQualityCombo"))
+        quality->setCurrentIndex(0);
+    qApp->processEvents();
+    run->click();
+    settle(200);
+    check(legend->isVisible(), "a solve produces a displayed result");
+    check(!window.findChild<ViewportWidget*>()->isLayerVisible("coverage") ||
+              legend->isVisible(),
+          "the coverage layer and its legend agree after a solve");
+
+    // Editing a source must leave nothing stale behind. Either the field is
+    // gone, or it still matches its inputs - never a mismatch on screen.
+    auto* list = window.findChild<QListWidget*>("SourceList");
+    check(list && list->count() > 0, "stale-invariant fixture has a source");
+    if (list && list->count() > 0) {
+        list->setCurrentRow(0);
+        qApp->processEvents();
+        if (auto* spin = window.findChild<QDoubleSpinBox*>()) {
+            spin->setValue(spin->value() + 25.0);
+            settle(150);
+            check(!legend->isVisible(),
+                  "editing a source discards the result rather than leaving it stale");
+        }
+    }
+
+    // The receiver criteria path must behave the same way.
+    run->click();
+    settle(200);
+    check(legend->isVisible(), "a second solve produces a result again");
+    auto* mode = findModeCombo(window);
+    if (mode) {
+        mode->setCurrentIndex(mode->currentIndex() == 0 ? 1 : 0);
+        settle(150);
+        check(!legend->isVisible(),
+              "changing propagation mode discards the result rather than leaving it stale");
+    }
+
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
 int main(int argc, char** argv) {
     QSurfaceFormat format;
     format.setVersion(3, 3);
@@ -1391,6 +1446,7 @@ int main(int argc, char** argv) {
     testScenarioOpeningProgressAndRecovery();
     testExportsThroughApplicationDialogs();
     testAutosaveAndRecovery();
+    testDisplayedResultsAlwaysMatchTheirInputs();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";

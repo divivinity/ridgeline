@@ -10,6 +10,7 @@
 #include "data/GlobalTerrainLoader.h"
 #include "data/ScenarioIO.h"
 #include "data/RecoveryStore.h"
+#include "sim/SolveSignature.h"
 #include "data/MeasurementIO.h"
 #include "data/Exporter.h"
 #include "data/AntennaLibrary.h"
@@ -358,6 +359,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 markScenarioDirty();
                 if (m_engine.fieldGrid().valid()) {
                     m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+    m_solvedSignature.clear();
                     invalidateScenarioComparisonCurrent();
                     invalidateCalibrationCurrent();
                     if (m_pointPanel) m_pointPanel->clear();
@@ -699,6 +702,7 @@ void MainWindow::applyCalibrationCorrection() {
         static_cast<float>(m_calibrationReport.rmseAfterBiasDb);
 
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
@@ -725,6 +729,7 @@ void MainWindow::resetCalibrationCorrection() {
         std::numeric_limits<float>::quiet_NaN();
 
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
@@ -846,6 +851,8 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
         terrainInstalled = true;
         markScenarioDirty();
         m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+    m_solvedSignature.clear();
         resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
         if (m_pointPanel) m_pointPanel->clear();
@@ -960,6 +967,7 @@ void MainWindow::onReceiverSettings() {
     m_engine.receiver = dialog.settings();
     markScenarioDirty();
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     invalidateCalibrationCurrent();
     if (m_pointPanel) m_pointPanel->clear();
@@ -1095,6 +1103,8 @@ void MainWindow::loadTerrain(const QString& path) {
         terrainInstalled = true;
         markScenarioDirty();
         m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+    m_solvedSignature.clear();
         resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
         if (m_pointPanel) m_pointPanel->clear();
@@ -1241,6 +1251,11 @@ void MainWindow::onSolve() {
     try {
         if (solveError) std::rethrow_exception(solveError);
         m_engine.setFieldGrid(std::move(solvedField));
+        // Remember exactly what this field was computed from, so any later
+        // change to those inputs is detectable.
+        m_solvedSignature = SolveSignature::of(
+            m_engine.antennas(), m_engine.receiver, m_engine.mode,
+            m_engine.calibration, m_engine.terrain());
         if (m_pointPanel) m_pointPanel->clear();
         if (m_pointDock) m_pointDock->hide();
         if (m_viewport) m_viewport->clearAnalysisPoint();
@@ -1387,6 +1402,7 @@ void MainWindow::applySourceState(const std::vector<Antenna>& antennas,
                                   int selectedIndex) {
     m_engine.setAntennas(antennas);
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     invalidateCalibrationCurrent();
     if (m_pointPanel) m_pointPanel->clear();
@@ -1540,6 +1556,12 @@ void MainWindow::onImportMeasurements() {
         .arg(loaded.rejectedRows > 0
             ? QString(" · %1 row(s) rejected").arg(loaded.rejectedRows)
             : QString{}));
+}
+
+bool MainWindow::resultsAreStale() const {
+    if (!m_engine.fieldGrid().valid() || m_solvedSignature.empty()) return false;
+    return SolveSignature::of(m_engine.antennas(), m_engine.receiver, m_engine.mode,
+                              m_engine.calibration, m_engine.terrain()) != m_solvedSignature;
 }
 
 ScenarioDoc MainWindow::currentScenarioDoc() const {
@@ -1725,6 +1747,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     if (m_viewport) m_viewport->setPlacementMode(false);
     markScenarioDirty();
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     resetScenarioComparisonForTerrain();
     clearCalibrationMeasurements();
     if (m_undoStack) m_undoStack->clear();
