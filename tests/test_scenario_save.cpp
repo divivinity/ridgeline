@@ -1,5 +1,6 @@
 #include "data/ScenarioIO.h"
 #include "data/RecoveryStore.h"
+#include "data/WorkspaceSettings.h"
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
@@ -127,6 +128,62 @@ int main() {
             blocker.close();
             require(!RecoveryStore::write(unsaved),
                     "an unwritable recovery location reports failure instead of throwing");
+            qunsetenv("RIDGELINE_STATE_DIR");
+        }
+        {
+            // Workspace history and layout: per-installation convenience that
+            // must never leak into a saved scenario.
+            QTemporaryDir settingsDir;
+            require(settingsDir.isValid(), "workspace settings directory");
+            qputenv("RIDGELINE_STATE_DIR", settingsDir.path().toUtf8());
+            WorkspaceSettings::clear();
+
+            require(WorkspaceSettings::recentScenarios().isEmpty(),
+                    "a fresh profile has no scenario history");
+
+            WorkspaceSettings::addRecentScenario("/a/first.json");
+            WorkspaceSettings::addRecentScenario("/a/second.json");
+            require(WorkspaceSettings::recentScenarios().first() == "/a/second.json",
+                    "the newest scenario is listed first");
+
+            // Returning to a scenario promotes it rather than duplicating it.
+            WorkspaceSettings::addRecentScenario("/a/first.json");
+            const QStringList promoted = WorkspaceSettings::recentScenarios();
+            require(promoted.size() == 2, "a repeat visit does not duplicate an entry");
+            require(promoted.first() == "/a/first.json", "a repeat visit promotes the entry");
+
+            for (int i = 0; i < 20; ++i)
+                WorkspaceSettings::addRecentScenario(QString("/bulk/%1.json").arg(i));
+            require(WorkspaceSettings::recentScenarios().size() == WorkspaceSettings::maxRecentEntries(),
+                    "scenario history is capped");
+            WorkspaceSettings::addRecentScenario("");
+            require(WorkspaceSettings::recentScenarios().size() == WorkspaceSettings::maxRecentEntries(),
+                    "an empty path is not recorded");
+
+            WorkspaceSettings::addRecentLocation({"Asheville", 35.5951, -82.5515, 15.0});
+            WorkspaceSettings::addRecentLocation({"Charlotte", 35.2271, -80.8431, 10.0});
+            auto places = WorkspaceSettings::recentLocations();
+            require(places.size() == 2 && places[0].name == "Charlotte",
+                    "the newest location is listed first");
+            require(std::abs(places[0].extentKm - 10.0) < 1e-9, "location extent round-trips");
+
+            // Nudging the map and reloading must not fill the list with
+            // near-duplicates of the same place.
+            WorkspaceSettings::addRecentLocation({"Asheville again", 35.5955, -82.5512, 20.0});
+            places = WorkspaceSettings::recentLocations();
+            require(places.size() == 2, "a nearby reload replaces the same place");
+            require(places[0].name == "Asheville again", "the newer visit wins");
+
+            require(WorkspaceSettings::layoutGeometry().isEmpty(), "no layout is stored yet");
+            WorkspaceSettings::saveLayout(QByteArray("geo"), QByteArray("state"));
+            require(WorkspaceSettings::layoutGeometry() == QByteArray("geo"), "layout geometry persists");
+            require(WorkspaceSettings::layoutState() == QByteArray("state"), "layout state persists");
+
+            WorkspaceSettings::clear();
+            require(WorkspaceSettings::recentScenarios().isEmpty() &&
+                        WorkspaceSettings::recentLocations().empty() &&
+                        WorkspaceSettings::layoutGeometry().isEmpty(),
+                    "clearing forgets history and layout together");
             qunsetenv("RIDGELINE_STATE_DIR");
         }
         std::cout << "Scenario save checks passed\n";

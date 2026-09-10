@@ -138,6 +138,11 @@ private:
     // Offers to restore a recovery copy left by a previous session.
     void offerRecovery();
     QTimer* m_autosaveTimer = nullptr;
+    class QMenu* m_recentScenariosMenu = nullptr;
+    class QMenu* m_recentLocationsMenu = nullptr;
+    // Rebuilt whenever the history changes, so the menus never show a stale list.
+    void refreshRecentMenus();
+    void openScenarioPath(const QString& path);
     // Fingerprint of the inputs the displayed field was computed from. Empty
     // when no field is displayed.
     std::string m_solvedSignature;
