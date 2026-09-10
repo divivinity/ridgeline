@@ -18,21 +18,23 @@ void check(bool passed, const char* message) {
 }
 
 // A 1 km area centered on (0,0), sampled at 129 points, uses the four
-// zoom-14 tiles adjoining the equator/prime meridian. Offline fixtures
-// exercise downloading, decoding, mosaic alignment and resampling together.
+// zoom-15 tiles adjoining the equator/prime meridian. Terrarium is served to
+// zoom 15 and 404s above it, which is why the loader caps there. Offline
+// fixtures exercise downloading, decoding, mosaic alignment and resampling
+// together.
 QString tilePath(const QTemporaryDir& dir, int x, int y,
                  const QString& prefix = "terrain") {
-    return dir.filePath(QString("%1/14/%2/%3.png").arg(prefix).arg(x).arg(y));
+    return dir.filePath(QString("%1/15/%2/%3.png").arg(prefix).arg(x).arg(y));
 }
 void fillTiles(const QTemporaryDir& dir, int size = 256, bool opaque = true,
                const QString& prefix = "terrain", int offset = 0) {
-    for (int x : {8191, 8192}) {
-        const QString folder = dir.filePath(QString("%1/14/%2").arg(prefix).arg(x));
+    for (int x : {16383, 16384}) {
+        const QString folder = dir.filePath(QString("%1/15/%2").arg(prefix).arg(x));
         check(QDir().mkpath(folder), "create cache fixture");
-        for (int y : {8191, 8192}) {
+        for (int y : {16383, 16384}) {
             QImage tile(size, size, QImage::Format_ARGB32);
             // Northern tiles are 200 m; southern tiles are 100 m.
-            tile.fill(qRgba(128, (y == 8191 ? 200 : 100) + offset, 0, opaque ? 255 : 0));
+            tile.fill(qRgba(128, (y == 16383 ? 200 : 100) + offset, 0, opaque ? 255 : 0));
             check(tile.save(tilePath(dir, x, y, prefix), "PNG"), "save cache fixture");
         }
     }
@@ -102,10 +104,10 @@ int main(int argc, char** argv) {
     fillTiles(dir, 256, false);
     rejects("missing elevation");
     fillTiles(dir);
-    check(QFile::remove(tilePath(dir, 8191, 8191)), "remove one fixture tile");
+    check(QFile::remove(tilePath(dir, 16383, 16383)), "remove one fixture tile");
     rejects("offline");
     fillTiles(dir);
-    QFile corrupt(tilePath(dir, 8191, 8191));
+    QFile corrupt(tilePath(dir, 16383, 16383));
     check(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate), "open corrupt fixture");
     corrupt.write("not an image");
     corrupt.close();

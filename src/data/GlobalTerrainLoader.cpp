@@ -98,11 +98,16 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     if (east <= west || north <= south)
         throw std::runtime_error("Selected area has invalid geographic bounds");
 
-    const double desiredMpp = std::max(8.0, extentM / (samplesPerAxis - 1));
+    // The floor used to be 8 m, which meant a 2 km analysis area fetched data
+    // no finer than a 15 km one and the extra output samples were pure
+    // interpolation. Terrarium tiles are served to zoom 15, so small areas can
+    // have genuinely finer elevation; the tile budget below still bounds the
+    // number of requests.
+    const double desiredMpp = std::max(2.0, extentM / (samplesPerAxis - 1));
     const double circumference = 40075016.686 * std::cos(centerLat * kPi / 180.0);
     int zoom = static_cast<int>(std::ceil(
         std::log2(circumference / (desiredMpp * kTileSize))));
-    zoom = std::clamp(zoom, 5, 14);
+    zoom = std::clamp(zoom, 5, 15);
 
     PixelPoint nw = mercatorPixel(north, west, zoom);
     PixelPoint se = mercatorPixel(south, east, zoom);
@@ -208,6 +213,11 @@ TerrainModel GlobalTerrainLoader::load(double centerLat,
     TerrainModel terrain;
     terrain.elevationProvider = customProvider
         ? TerrainModel::ElevationProvider::Custom : TerrainModel::ElevationProvider::Mapzen;
+    // Ground sampling distance of the tiles actually fetched. `circumference`
+    // is already scaled by cos(latitude) where it is computed above, so it must
+    // not be scaled again here.
+    terrain.sourceResolutionM = static_cast<float>(
+        circumference / std::ldexp(static_cast<double>(kTileSize), zoom));
     terrain.width = samplesPerAxis;
     terrain.height = samplesPerAxis;
     const double cellLatDeg = (north - south) / (samplesPerAxis - 1);

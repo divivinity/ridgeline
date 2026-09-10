@@ -552,9 +552,12 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     check(summary && summary->width() >= 140, "location summary remains readable");
     check(summary && summary->textFormat() == Qt::PlainText,
           "location names are displayed literally, never interpreted as markup");
+    // The tooltip must separate the grid it draws from the data behind it. The
+    // procedural demo scene has no source resolution, so it has to say so
+    // rather than let the grid spacing be mistaken for the data's resolution.
     check(summary && summary->toolTip().contains("200 × 200 samples") &&
-              summary->toolTip().contains("not a claim of source resolution"),
-          "terrain quality tooltip distinguishes sampling from source accuracy");
+              summary->toolTip().contains("Source resolution is not known"),
+          "terrain quality tooltip distinguishes sampling from source resolution");
     auto* credit = window.findChild<QLabel*>("ElevationAttribution");
     check(credit && credit->text().contains("Synthetic"), "demo elevation has correct credit");
     auto* sources = window.findChild<QListWidget*>("SourceList");
@@ -972,10 +975,10 @@ void testScenarioOpeningProgressAndRecovery() {
 
     // Preload only elevation; imagery remains a stalled network request.
     const QString prefix = "terrain/" + TileBatchDownloader::customProviderCacheKey(terrainUrl);
-    for (int x : {8191, 8192}) {
-        const QString folder = cache.filePath(QString("%1/14/%2").arg(prefix).arg(x));
+    for (int x : {16383, 16384}) {
+        const QString folder = cache.filePath(QString("%1/15/%2").arg(prefix).arg(x));
         check(QDir().mkpath(folder), "create scenario elevation fixture directory");
-        for (int y : {8191, 8192}) {
+        for (int y : {16383, 16384}) {
             QImage tile(256, 256, QImage::Format_ARGB32);
             tile.fill(qRgba(128, 100, 0, 255));
             check(tile.save(folder + QString("/%1.png").arg(y), "PNG"), "save scenario elevation fixture");

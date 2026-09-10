@@ -4,6 +4,7 @@
 #include "map/Hillshade.h"
 #include "map/TileProviders.h"
 #include "map/MapMeasure.h"
+#include "ui/TerrainPresentation.h"
 
 #include <QColor>
 #include "data/TerrainLoader.h"
@@ -159,6 +160,34 @@ void testHillshade() {
           "a grid smaller than 2x2 returns a null image");
 }
 
+void testSourceResolutionReporting() {
+    // Grid spacing and source resolution are different things, and the tooltip
+    // is the only place a user can tell interpolation from real detail.
+    TerrainModel coarseSource = TerrainLoader::makeFlat(64, 64, 5.0f, 0.0f);
+    coarseSource.sourceResolutionM = 30.0f;
+    const QString upsampled = TerrainPresentation::gridDetails(coarseSource);
+    check(upsampled.contains("Source resolution: about 30.0 m"),
+          "the source resolution is reported");
+    check(upsampled.contains("interpolated"),
+          "a grid finer than its source says the extra samples are interpolated");
+
+    TerrainModel fineSource = TerrainLoader::makeFlat(64, 64, 90.0f, 0.0f);
+    fineSource.sourceResolutionM = 30.0f;
+    check(TerrainPresentation::gridDetails(fineSource).contains("some detail is not shown"),
+          "a grid coarser than its source says detail is lost");
+
+    TerrainModel matched = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    matched.sourceResolutionM = 30.0f;
+    const QString even = TerrainPresentation::gridDetails(matched);
+    check(even.contains("Source resolution: about 30.0 m"), "a matched grid still reports it");
+    check(!even.contains("interpolated") && !even.contains("not shown"),
+          "a grid matching its source claims neither loss nor invention");
+
+    TerrainModel unknown = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    check(TerrainPresentation::gridDetails(unknown).contains("not known"),
+          "an unknown source resolution says so rather than guessing");
+}
+
 void testProviders() {
     const MapTileProvider topo = TileProviders::usgsTopo();
     check(topo.id == "usgs-topo", "usgs provider carries the layer id");
@@ -287,6 +316,7 @@ int main() {
     testVisibleOfKind();
     testScenarioRoundTrip();
     testHillshade();
+    testSourceResolutionReporting();
     testProviders();
     testMeasurement();
     testScaleBar();

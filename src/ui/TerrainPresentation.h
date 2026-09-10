@@ -1,6 +1,7 @@
 #pragma once
 #include "data/ScenarioIO.h"
 #include <QString>
+#include <algorithm>
 #include <cmath>
 
 namespace TerrainPresentation {
@@ -19,12 +20,28 @@ inline QString areaSummary(double eastWestM, double northSouthM) {
 }
 
 inline QString gridDetails(const TerrainModel& terrain) {
-    return QString("Terrain grid: %1 × %2 samples\n"
-                   "Sample spacing: %3 m east–west × %4 m north–south\n"
-                   "Grid spacing is not a claim of source resolution or accuracy.")
+    QString details = QString("Terrain grid: %1 × %2 samples\n"
+                              "Sample spacing: %3 m east–west × %4 m north–south")
         .arg(terrain.width).arg(terrain.height)
         .arg(terrain.metersPerCellX(), 0, 'f', 1)
         .arg(terrain.metersPerCellZ(), 0, 'f', 1);
+    if (terrain.sourceResolutionM > 0.0f) {
+        // Resampling to a finer grid does not create detail, and a grid coarser
+        // than its source throws detail away. Saying which is which is the only
+        // honest way to report resolution.
+        const float finestGrid = std::min(terrain.metersPerCellX(), terrain.metersPerCellZ());
+        const char* relation = finestGrid < terrain.sourceResolutionM * 0.95f
+            ? "\nThe grid is finer than the source, so the extra samples are interpolated."
+            : (finestGrid > terrain.sourceResolutionM * 1.05f
+                   ? "\nThe grid is coarser than the source, so some detail is not shown."
+                   : "");
+        details += QString("\nSource resolution: about %1 m%2")
+                       .arg(terrain.sourceResolutionM, 0, 'f', 1)
+                       .arg(relation);
+    } else {
+        details += "\nSource resolution is not known for this terrain.";
+    }
+    return details;
 }
 
 // Horizontal georeferencing and file format do not establish a vertical datum.
