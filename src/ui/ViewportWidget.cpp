@@ -1,6 +1,7 @@
 #include "ViewportWidget.h"
 #include "TerrainPresentation.h"
 #include "map/Hillshade.h"
+#include "map/MapMeasure.h"
 #include "render/TerrainRaycast.h"
 #include <QApplication>
 #include <QMouseEvent>
@@ -355,7 +356,11 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
         }
         if (!m_cameraDragging &&
             delta.manhattanLength() < QApplication::startDragDistance()) {
-            if (m_placementActive) {
+            if (m_measureActive) {
+                float wx = 0.0f, wz = 0.0f;
+                if (raycastTerrain(e->pos(), wx, wz))
+                    takeMeasurementPoint(wx, wz);
+            } else if (m_placementActive) {
                 float wx = 0.0f, wz = 0.0f;
                 if (raycastTerrain(e->pos(), wx, wz))
                     emit terrainClicked(wx, wz);
@@ -416,6 +421,76 @@ int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
     return bestIndex;
 }
 
+
+
+void ViewportWidget::setMeasureMode(bool active) {
+    if (m_measureActive == active) return;
+    m_measureActive = active;
+    // Placement and measuring both consume a terrain click, so one cancels the
+    // other rather than leaving the next click ambiguous.
+    if (active && m_placementActive) setPlacementMode(false);
+    if (!active) clearMeasurement();
+    setCursor(active ? Qt::CrossCursor : Qt::ArrowCursor);
+    emit measureModeChanged(m_measureActive);
+    update();
+}
+
+void ViewportWidget::clearMeasurement() {
+    m_measureHasFirst = false;
+    if (!m_measurementSummary.isEmpty()) {
+        m_measurementSummary.clear();
+        emit measurementChanged(m_measurementSummary);
+    }
+    m_losRay.clearProbe();
+    update();
+}
+
+void ViewportWidget::takeMeasurementPoint(float worldX, float worldZ) {
+    if (!m_measureHasFirst) {
+        m_measureFirstX = worldX;
+        m_measureFirstZ = worldZ;
+        m_measureHasFirst = true;
+        m_measurementSummary = QStringLiteral("Measuring from here - click a second point");
+        emit measurementChanged(m_measurementSummary);
+        update();
+        return;
+    }
+
+    const TerrainModel& terrain = m_engine->terrain();
+    double metres = 0.0;
+    QString bearingText;
+    if (terrain.hasGeoReference()) {
+        // Geodesic distance, so a long path is not shortened by the flat
+        // projection the terrain grid is stored in.
+        const auto from = terrain.worldToLatLon(m_measureFirstX, m_measureFirstZ);
+        const auto to = terrain.worldToLatLon(worldX, worldZ);
+        metres = MapMeasure::haversineMetres(from.latDeg, from.lonDeg, to.latDeg, to.lonDeg);
+        const double bearing = MapMeasure::initialBearingDeg(from.latDeg, from.lonDeg,
+                                                            to.latDeg, to.lonDeg);
+        bearingText = QStringLiteral("%1° %2")
+            .arg(bearing, 0, 'f', 1)
+            .arg(MapMeasure::compassPoint(bearing));
+    } else {
+        // No georeference means no true bearing; report the grid distance and
+        // say nothing about north rather than inventing one.
+        metres = MapMeasure::planarMetres(m_measureFirstX, m_measureFirstZ, worldX, worldZ);
+    }
+
+    const float groundFrom = terrain.heightAtWorld(m_measureFirstX, m_measureFirstZ);
+    const float groundTo = terrain.heightAtWorld(worldX, worldZ);
+    m_measurementSummary = MapMeasure::formatDistance(metres);
+    if (!bearingText.isEmpty())
+        m_measurementSummary += QStringLiteral("  ·  ") + bearingText;
+    m_measurementSummary += QStringLiteral("  ·  %1 m rise")
+        .arg(static_cast<double>(groundTo - groundFrom), 0, 'f', 1);
+
+    // Reuse the inspector's probe line to draw the measured span.
+    m_losRay.setProbeSpan({m_measureFirstX, groundFrom, m_measureFirstZ},
+                          {worldX, groundTo, worldZ});
+    m_measureHasFirst = false;
+    emit measurementChanged(m_measurementSummary);
+    update();
+}
 
 void ViewportWidget::setPlacementMode(bool active, bool jammer) {
     m_placementActive = active;
@@ -613,7 +688,9 @@ bool ViewportWidget::isLayerVisible(const QString& id) const {
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {
     switch (e->key()) {
         case Qt::Key_Escape:
-            if (m_placementActive) {
+            if (m_measureActive) {
+                setMeasureMode(false);
+            } else if (m_placementActive) {
                 setPlacementMode(false);
                 emit placementCancelled();
             }

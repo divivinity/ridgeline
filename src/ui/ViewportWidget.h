@@ -52,6 +52,14 @@ public:
         updateMapHud();
     }
     void setPlacementMode(bool active, bool jammer = false);
+
+    // Ruler mode: two terrain clicks report ground distance and bearing.
+    // Mutually exclusive with placement, since both consume a terrain click.
+    void setMeasureMode(bool active);
+    bool measureMode() const { return m_measureActive; }
+    void clearMeasurement();
+    // Empty until two points have been taken.
+    QString measurementSummary() const { return m_measurementSummary; }
     void setAnalysisPoint(int sourceIndex, const glm::vec3& receiverPosition);
     void clearAnalysisPoint();
     void setScenarioComparison(
@@ -80,6 +88,8 @@ signals:
     void terrainInspected(float worldX, float worldZ);
     void basemapInfoChanged(QString provider, QString attribution, QString error);
     void placementCancelled();
+    void measurementChanged(QString summary);
+    void measureModeChanged(bool active);
 
 protected:
     void initializeGL() override;
@@ -122,6 +132,11 @@ private:
     QLabel* m_placementHint = nullptr;
     QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;
+    bool m_measureActive = false;
+    bool m_measureHasFirst = false;
+    float m_measureFirstX = 0.0f, m_measureFirstZ = 0.0f;
+    QString m_measurementSummary;
+    void takeMeasurementPoint(float worldX, float worldZ);
     bool m_placingJammer = false;
     glm::mat4 m_lastMVP{1.0f};
     bool m_analysisPointActive = false;
