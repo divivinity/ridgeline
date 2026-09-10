@@ -127,9 +127,12 @@ add_test(NAME dted_decoding_tests COMMAND ridgeline_dted_decoding_tests
         "${CMAKE_SOURCE_DIR}/tests/data/dted/n43_wgs72.dt0"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-add_executable(ridgeline_layer_tests tests/test_layers.cpp src/map/LayerStack.cpp)
+add_executable(ridgeline_layer_tests tests/test_layers.cpp
+    src/map/LayerStack.cpp src/map/Hillshade.cpp
+    src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
 target_include_directories(ridgeline_layer_tests PRIVATE src)
-target_link_libraries(ridgeline_layer_tests Qt6::Core glm::glm)
+target_link_libraries(ridgeline_layer_tests
+    Qt6::Core Qt6::Gui glm::glm nlohmann_json::nlohmann_json)
 add_test(NAME layer_tests COMMAND ridgeline_layer_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
