@@ -128,7 +128,7 @@ add_test(NAME dted_decoding_tests COMMAND ridgeline_dted_decoding_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_layer_tests tests/test_layers.cpp
-    src/map/LayerStack.cpp src/map/Hillshade.cpp
+    src/map/LayerStack.cpp src/map/Hillshade.cpp src/map/TileProviders.cpp
     src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
 target_include_directories(ridgeline_layer_tests PRIVATE src)
 target_link_libraries(ridgeline_layer_tests

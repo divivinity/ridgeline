@@ -120,9 +120,13 @@ Tiles from the USGS National Map, public domain:
 https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}
 ```
 
-ArcGIS serves `{z}/{y}/{x}` — row before column — while existing templates
-assume `{z}/{x}/{y}`. The provider registry therefore carries an explicit axis
-ordering per provider rather than a bare URL string.
+ArcGIS addresses tiles row before column. This needs no special handling:
+`BasemapOverlay` substitutes placeholders by name, and the existing Esri
+template already spells `/{z}/{y}/{x}` literally, so USGS's identical pattern
+works through the same path. An earlier draft of this design proposed a
+per-provider axis-order flag; it would have been an abstraction with nothing
+behind it, and is not implemented. A regression pins the produced URL so a
+transposed template cannot slip in later.
 
 Coverage is US-only. Outside it, the service returns no usable tiles, and the
 layer reports **no topographic coverage for this area** rather than showing a
