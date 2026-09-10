@@ -20,9 +20,11 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QProgressDialog>
 #include <QEventLoop>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
@@ -43,6 +45,8 @@
 #include <QBuffer>
 #include <QElapsedTimer>
 #include "data/TileBatchDownloader.h"
+#include "data/RecoveryStore.h"
+#include "data/WorkspaceSettings.h"
 
 #include <cmath>
 #include <iostream>
@@ -1235,6 +1239,278 @@ void testExportsThroughApplicationDialogs() {
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
 
+
+// Unsaved work is only as durable as the process holding it. This drives the
+// real cycle: edit, autosave on its own timer, then a fresh window offering the
+// copy back.
+void testAutosaveAndRecovery() {
+    QTemporaryDir stateDir;
+    check(stateDir.isValid(), "recovery fixture directory");
+    if (!stateDir.isValid()) return;
+    const QByteArray previousState = qgetenv("RIDGELINE_STATE_DIR");
+    const auto stateGuard = qScopeGuard([&] { qputenv("RIDGELINE_STATE_DIR", previousState); });
+    qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+    RecoveryStore::clear();
+
+    {
+        MainWindow window;
+        window.show();
+        settle(200);
+        check(!RecoveryStore::exists(), "a clean workspace writes nothing to recover");
+
+        // Autosave must not fire on a workspace with nothing to protect.
+        auto* timer = window.findChild<QTimer*>("AutosaveTimer");
+        check(timer != nullptr, "the workspace autosaves on a timer");
+        if (!timer) return;
+        timer->setInterval(60);
+        settle(300);
+        check(!RecoveryStore::exists(), "a clean workspace still writes nothing");
+
+        // Make a real edit, then let the timer run on its own.
+        auto* list = window.findChild<QListWidget*>("SourceList");
+        auto* remove = findButton(window, "Remove");
+        check(list && remove && list->count() > 0, "recovery fixture has a source to remove");
+        if (!list || !remove || list->count() == 0) return;
+        list->setCurrentRow(0);
+        remove->click();
+        check(window.isWindowModified(), "the edit marks the workspace unsaved");
+        settle(400);
+        check(RecoveryStore::exists(), "unsaved work is autosaved without being asked");
+        check(RecoveryStore::savedAt().isValid(), "the recovery copy is timestamped");
+
+        // Discarding on close is a decision, so the copy must not outlive it.
+        withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+        check(!RecoveryStore::exists(), "closing with Discard removes the recovery copy");
+    }
+
+    // Now the crash case: a copy is present and no one cleared it.
+    {
+        MainWindow seed;
+        seed.show();
+        settle(200);
+        auto* list = seed.findChild<QListWidget*>("SourceList");
+        auto* remove = findButton(seed, "Remove");
+        if (!list || !remove || list->count() == 0) { check(false, "seed fixture"); return; }
+        const int before = list->count();
+        list->setCurrentRow(0);
+        remove->click();
+        auto* timer = seed.findChild<QTimer*>("AutosaveTimer");
+        if (timer) timer->setInterval(60);
+        settle(400);
+        check(RecoveryStore::exists(), "the crash fixture leaves a recovery copy");
+        check(before > 0, "the seed workspace had sources to lose");
+        // Leave without closing cleanly, as a crash would.
+        seed.hide();
+    }
+
+    {
+        // A fresh window must offer the copy back and restore it on Restore.
+        bool sawPrompt = false;
+        QTimer answering;
+        QObject::connect(&answering, &QTimer::timeout, [&] {
+            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            if (!box || box->objectName() != "RecoveryPrompt") return;
+            sawPrompt = true;
+            for (QAbstractButton* button : box->buttons()) {
+                if (button->text().contains("Restore")) { button->click(); return; }
+            }
+            box->reject();
+        });
+        answering.start(80);
+        MainWindow recovered;
+        recovered.show();
+        settle(1500);
+        answering.stop();
+
+        check(sawPrompt, "a recovery copy is offered on the next start");
+        check(recovered.isWindowModified(),
+              "recovered work stays unsaved, since it has no file behind it");
+        withModalAnswer(QMessageBox::Discard, [&] { recovered.close(); });
+    }
+
+    // Declining must not leave the copy to be offered again forever.
+    {
+        MainWindow seed;
+        seed.show();
+        settle(200);
+        auto* remove = findButton(seed, "Remove");
+        auto* list = seed.findChild<QListWidget*>("SourceList");
+        if (list && remove && list->count() > 0) {
+            list->setCurrentRow(0);
+            remove->click();
+            if (auto* timer = seed.findChild<QTimer*>("AutosaveTimer")) timer->setInterval(60);
+            settle(400);
+        }
+        seed.hide();
+    }
+    check(RecoveryStore::exists(), "a second crash fixture is waiting");
+    {
+        QTimer answering;
+        QObject::connect(&answering, &QTimer::timeout, [] {
+            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            if (!box || box->objectName() != "RecoveryPrompt") return;
+            for (QAbstractButton* button : box->buttons()) {
+                if (button->text().contains("Discard")) { button->click(); return; }
+            }
+            box->reject();
+        });
+        answering.start(80);
+        MainWindow declined;
+        declined.show();
+        settle(1200);
+        answering.stop();
+        check(!RecoveryStore::exists(),
+              "declining the offer removes the copy rather than asking every start");
+        withModalAnswer(QMessageBox::Discard, [&] { declined.close(); });
+    }
+}
+
+
+// Ridgeline never shows a coverage field that disagrees with the settings on
+// screen, because every path that changes an input discards the field outright.
+// That is a strong guarantee and an easy one to break by dropping a single
+// setFieldGrid({}) call, so it is pinned here rather than assumed. MainWindow
+// exposes resultsAreStale() purely so this check can be written.
+void testDisplayedResultsAlwaysMatchTheirInputs() {
+    MainWindow window;
+    window.show();
+    settle(200);
+
+    auto* run = findButton(window, "Run coverage");
+    auto* legend = window.findChild<HeatmapLegend*>();
+    if (!run || !legend) { check(false, "stale-invariant fixture controls exist"); return; }
+    if (auto* quality = window.findChild<QComboBox*>("CoverageQualityCombo"))
+        quality->setCurrentIndex(0);
+    qApp->processEvents();
+    run->click();
+    settle(200);
+    check(legend->isVisible(), "a solve produces a displayed result");
+    check(!window.findChild<ViewportWidget*>()->isLayerVisible("coverage") ||
+              legend->isVisible(),
+          "the coverage layer and its legend agree after a solve");
+
+    // Editing a source must leave nothing stale behind. Either the field is
+    // gone, or it still matches its inputs - never a mismatch on screen.
+    auto* list = window.findChild<QListWidget*>("SourceList");
+    check(list && list->count() > 0, "stale-invariant fixture has a source");
+    if (list && list->count() > 0) {
+        list->setCurrentRow(0);
+        qApp->processEvents();
+        if (auto* spin = window.findChild<QDoubleSpinBox*>()) {
+            spin->setValue(spin->value() + 25.0);
+            settle(150);
+            check(!legend->isVisible(),
+                  "editing a source discards the result rather than leaving it stale");
+        }
+    }
+
+    // The receiver criteria path must behave the same way.
+    run->click();
+    settle(200);
+    check(legend->isVisible(), "a second solve produces a result again");
+    auto* mode = findModeCombo(window);
+    if (mode) {
+        mode->setCurrentIndex(mode->currentIndex() == 0 ? 1 : 0);
+        settle(150);
+        check(!legend->isVisible(),
+              "changing propagation mode discards the result rather than leaving it stale");
+    }
+
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
+
+// Where you have been and how you had the panels arranged, remembered between
+// runs. Uses its own state directory so it cannot inherit or leak history.
+void testRecentHistoryAndLayoutPersist() {
+    QTemporaryDir stateDir;
+    check(stateDir.isValid(), "history fixture directory");
+    if (!stateDir.isValid()) return;
+    const QByteArray previousState = qgetenv("RIDGELINE_STATE_DIR");
+    const auto stateGuard = qScopeGuard([&] { qputenv("RIDGELINE_STATE_DIR", previousState); });
+    qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+    WorkspaceSettings::clear();
+    RecoveryStore::clear();
+
+    QTemporaryDir docs;
+    check(docs.isValid(), "history scenario directory");
+    if (!docs.isValid()) return;
+    const QString saved = docs.filePath("history.json");
+
+    {
+        MainWindow window;
+        window.show();
+        settle(200);
+
+        auto* scenarios = window.findChild<QMenu*>("RecentScenariosMenu");
+        auto* locations = window.findChild<QMenu*>("RecentLocationsMenu");
+        check(scenarios && locations, "the File menu offers both histories");
+        if (!scenarios || !locations) return;
+        // An empty history must not present an empty submenu to click into.
+        check(!scenarios->isEnabled(), "an empty scenario history is disabled");
+        check(!locations->isEnabled(), "an empty location history is disabled");
+
+        // Saving is somewhere you have been, so it enters the history.
+        bool sawPicker = false;
+        QTimer driver;
+        QObject::connect(&driver, &QTimer::timeout, [&] {
+            if (auto* dialog = window.findChild<QFileDialog*>(); dialog && dialog->isVisible()) {
+                sawPicker = true;
+                if (auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit")) {
+                    edit->setText(saved);
+                    QMetaObject::invokeMethod(dialog, "accept");
+                }
+            }
+        });
+        driver.start(25);
+        check(QMetaObject::invokeMethod(&window, "onSaveScenario"), "save is reachable");
+        driver.stop();
+        check(sawPicker, "the save picker was driven");
+        settle(120);
+
+        check(scenarios->isEnabled(), "saving enables the scenario history");
+        check(scenarios->actions().size() == 1, "the saved scenario is listed once");
+        if (!scenarios->actions().isEmpty()) {
+            check(scenarios->actions().first()->text() == "history.json",
+                  "the history lists the file by name");
+            check(scenarios->actions().first()->toolTip() == saved,
+                  "the full path is available, since names collide");
+        }
+
+        // Arrange the panels differently, then close so it is remembered.
+        if (auto* layersDock = window.findChild<QDockWidget*>("LayersDock"))
+            layersDock->hide();
+        settle(120);
+        withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+    }
+
+    check(!WorkspaceSettings::layoutState().isEmpty(), "closing remembers the arrangement");
+    check(WorkspaceSettings::recentScenarios().size() == 1, "history survives the window");
+
+    {
+        // A new window restores both.
+        MainWindow reopened;
+        reopened.show();
+        settle(400);
+        auto* scenarios = reopened.findChild<QMenu*>("RecentScenariosMenu");
+        check(scenarios && scenarios->isEnabled() && scenarios->actions().size() == 1,
+              "a new window shows the remembered scenario history");
+        auto* layersDock = reopened.findChild<QDockWidget*>("LayersDock");
+        check(layersDock && layersDock->isHidden(),
+              "a new window restores the arrangement it was left in");
+
+        // Reset must still return to the shipped arrangement, not the stored one.
+        if (auto* reset = reopened.findChild<QAction*>("ResetLayoutAction")) {
+            reset->trigger();
+            settle(150);
+            check(layersDock && !layersDock->isHidden(),
+                  "resetting the layout overrides what was restored");
+        }
+        withModalAnswer(QMessageBox::Discard, [&] { reopened.close(); });
+    }
+    WorkspaceSettings::clear();
+}
+
 int main(int argc, char** argv) {
     QSurfaceFormat format;
     format.setVersion(3, 3);
@@ -1248,6 +1524,12 @@ int main(int argc, char** argv) {
     QCoreApplication::setOrganizationName("RidgelineTests");
     QCoreApplication::setApplicationName("RidgelineMainWindowTests");
 
+    // MainWindow now offers to restore a recovery copy on startup. Point the
+    // state directory at a throwaway location so the suite can never find a
+    // real one, hang on its modal, or inherit another run's leftovers.
+    QTemporaryDir stateDir;
+    if (stateDir.isValid()) qputenv("RIDGELINE_STATE_DIR", stateDir.path().toUtf8());
+
     testCleanScenarioClosesWithoutPrompting();
     testSourceEditPromptsViaUndoStack();
     testSavingUpdatesModifiedIndicator();
@@ -1257,6 +1539,9 @@ int main(int argc, char** argv) {
     testTerrainFailureAndCancellationPreserveWorkspace();
     testScenarioOpeningProgressAndRecovery();
     testExportsThroughApplicationDialogs();
+    testAutosaveAndRecovery();
+    testDisplayedResultsAlwaysMatchTheirInputs();
+    testRecentHistoryAndLayoutPersist();
 
     if (failures == 0)
         std::cout << "MainWindow guard tests passed.\n";

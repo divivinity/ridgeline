@@ -1,4 +1,6 @@
 #include "sim/RFModels.h"
+#include "sim/SolveSignature.h"
+#include "data/TerrainLoader.h"
 #include "sim/ItmPropagation.h"
 #include "sim/FastSolver.h"
 #include "sim/FullSolver.h"
@@ -585,6 +587,47 @@ void testLegacyScenarioDefaultsReceiverHeight() {
 }
 }
 
+
+// A coverage field is only meaningful for the inputs it came from. This
+// fingerprint is what makes a displayed result detectably out of date.
+void testSolveSignatureTracksEveryInput() {
+    std::vector<Antenna> antennas(1);
+    antennas[0].position = {100.0f, 30.0f, 200.0f};
+    ReceiverSettings receiver;
+    CoverageCalibrationSettings calibration;
+    TerrainModel terrain = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    const auto sig = [&] {
+        return SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast,
+                                  calibration, terrain);
+    };
+    const std::string base = sig();
+    CHECK(!base.empty());
+    CHECK(sig() == base);
+
+    antennas[0].frequencyMHz += 1.0f;   CHECK(sig() != base); antennas[0].frequencyMHz -= 1.0f;
+    antennas[0].powerW += 1.0f;         CHECK(sig() != base); antennas[0].powerW -= 1.0f;
+    antennas[0].position.x += 1.0f;     CHECK(sig() != base); antennas[0].position.x -= 1.0f;
+    antennas[0].azimuthDeg += 5.0f;     CHECK(sig() != base); antennas[0].azimuthDeg -= 5.0f;
+    antennas[0].cableLossDb += 1.0f;    CHECK(sig() != base); antennas[0].cableLossDb -= 1.0f;
+    antennas[0].isJammer = true;        CHECK(sig() != base); antennas[0].isJammer = false;
+    antennas[0].azimuthPatternDb = {1.0f, 2.0f};
+    CHECK(sig() != base);
+    antennas[0].azimuthPatternDb.clear();
+    CHECK(sig() == base);
+
+    receiver.sensitivityDbm -= 1.0f;      CHECK(sig() != base); receiver.sensitivityDbm += 1.0f;
+    receiver.requiredSnrDb += 1.0f;       CHECK(sig() != base); receiver.requiredSnrDb -= 1.0f;
+    receiver.polarization = "horizontal"; CHECK(sig() != base); receiver.polarization = "vertical";
+    calibration.enabled = true;           CHECK(sig() != base); calibration.enabled = false;
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Full, calibration, terrain) != base);
+
+    antennas.push_back(Antenna{});        CHECK(sig() != base); antennas.pop_back();
+    CHECK(sig() == base);
+
+    TerrainModel other = TerrainLoader::makeFlat(64, 64, 45.0f, 0.0f);
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, other) != base);
+}
+
 int main() {
     testFieldGridValidity();
     testInvalidSolveInputs<FastSolver>();
@@ -604,6 +647,7 @@ int main() {
     testItmAdapter();
     testScenarioV5RoundTrip();
     testLegacyScenarioDefaultsReceiverHeight();
+    testSolveSignatureTracksEveryInput();
     if (failures == 0) std::cout << "RF model tests passed.\n";
     return failures ? 1 : 0;
 }

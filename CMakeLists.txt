@@ -98,6 +98,7 @@ set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/sim/FastSolver.cpp
     src/sim/FullSolver.cpp
     src/sim/SimEngine.cpp
+    src/sim/SolveSignature.cpp
     src/data/AntennaLibrary.cpp
     src/data/ScenarioIO.cpp
     src/data/TerrainLoader.cpp
@@ -169,7 +170,8 @@ target_compile_definitions(ridgeline_rf_model_tests PRIVATE HAVE_NTIA_ITM)
 target_link_libraries(ridgeline_rf_model_tests
     glm::glm nlohmann_json::nlohmann_json ntia_itm Qt6::Core)
 
-add_executable(ridgeline_scenario_save_tests tests/test_scenario_save.cpp src/data/ScenarioIO.cpp)
+add_executable(ridgeline_scenario_save_tests tests/test_scenario_save.cpp
+    src/data/ScenarioIO.cpp src/data/RecoveryStore.cpp src/data/WorkspaceSettings.cpp)
 target_include_directories(ridgeline_scenario_save_tests PRIVATE src)
 target_link_libraries(ridgeline_scenario_save_tests Qt6::Core glm::glm nlohmann_json::nlohmann_json)
 add_test(NAME scenario_save_tests COMMAND ridgeline_scenario_save_tests)

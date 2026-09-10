@@ -26,6 +26,7 @@
 class QUndoStack;
 class LayersPanel;
 class QProgressDialog;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -128,6 +129,28 @@ private:
     void refreshTree();
     void refreshPropsPanel();
     void refreshBottomBar();
+    // The current workspace as a document. Shared by Save and by autosave, so
+    // a recovered workspace can never differ in shape from a saved one.
+    ScenarioDoc currentScenarioDoc() const;
+    // Writes a recovery copy when there is unsaved work and the workspace is
+    // idle. Never interrupts: a failed write just waits for the next tick.
+    void autosaveTick();
+    // Offers to restore a recovery copy left by a previous session.
+    void offerRecovery();
+    QTimer* m_autosaveTimer = nullptr;
+    class QMenu* m_recentScenariosMenu = nullptr;
+    class QMenu* m_recentLocationsMenu = nullptr;
+    // Rebuilt whenever the history changes, so the menus never show a stale list.
+    void refreshRecentMenus();
+    void openScenarioPath(const QString& path);
+    // Fingerprint of the inputs the displayed field was computed from. Empty
+    // when no field is displayed.
+    std::string m_solvedSignature;
+    // True when a field is on screen but its inputs have since changed. Every
+    // input path clears the field, so this is an invariant check rather than a
+    // user-facing state; see testDisplayedResultsAlwaysMatchTheirInputs.
+    bool resultsAreStale() const;
+
     void applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progress,
                           bool& terrainInstalled);
     void applySourceState(const std::vector<Antenna>& antennas, int selectedIndex);

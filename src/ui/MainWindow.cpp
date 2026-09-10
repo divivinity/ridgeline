@@ -9,6 +9,9 @@
 #include "data/TerrainLoader.h"
 #include "data/GlobalTerrainLoader.h"
 #include "data/ScenarioIO.h"
+#include "data/RecoveryStore.h"
+#include "data/WorkspaceSettings.h"
+#include "sim/SolveSignature.h"
 #include "data/MeasurementIO.h"
 #include "data/Exporter.h"
 #include "data/AntennaLibrary.h"
@@ -129,6 +132,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     loadAct->setShortcut(QKeySequence::Open);
     connect(loadAct, &QAction::triggered, this, &MainWindow::onLoadTerrain);
 
+    fileMenu->addSeparator();
+    m_recentLocationsMenu = fileMenu->addMenu("Recent &Locations");
+    m_recentLocationsMenu->setObjectName("RecentLocationsMenu");
+    m_recentScenariosMenu = fileMenu->addMenu("Recent &Scenarios");
+    m_recentScenariosMenu->setObjectName("RecentScenariosMenu");
     fileMenu->addSeparator();
     QAction* openScenAct = fileMenu->addAction("&Open Scenario…");
     openScenAct->setShortcut(QKeySequence("Ctrl+Shift+O"));
@@ -357,6 +365,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 markScenarioDirty();
                 if (m_engine.fieldGrid().valid()) {
                     m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+    m_solvedSignature.clear();
                     invalidateScenarioComparisonCurrent();
                     invalidateCalibrationCurrent();
                     if (m_pointPanel) m_pointPanel->clear();
@@ -484,7 +494,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     // Queued after the deferred dock re-add above, so what is captured is the
     // arrangement the user actually starts with.
-    QTimer::singleShot(0, this, [this] { m_defaultLayout = saveState(); });
+    refreshRecentMenus();
+
+    QTimer::singleShot(0, this, [this] {
+        // Captured before any stored layout is applied, so Reset always returns
+        // to the arrangement the application ships with.
+        m_defaultLayout = saveState();
+        const QByteArray geometry = WorkspaceSettings::layoutGeometry();
+        const QByteArray state = WorkspaceSettings::layoutState();
+        if (!geometry.isEmpty()) restoreGeometry(geometry);
+        if (!state.isEmpty()) restoreState(state);
+    });
+
+    // Unsaved work is only as durable as this process, so keep a copy outside
+    // it. Two minutes bounds what a crash can cost without writing constantly.
+    m_autosaveTimer = new QTimer(this);
+    m_autosaveTimer->setObjectName("AutosaveTimer");
+    m_autosaveTimer->setInterval(120000);
+    connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::autosaveTick);
+    m_autosaveTimer->start();
+
+    // Queued so the window is visible before any recovery prompt appears over it.
+    QTimer::singleShot(0, this, [this] { offerRecovery(); });
 
     refreshTree();
 
@@ -687,6 +718,7 @@ void MainWindow::applyCalibrationCorrection() {
         static_cast<float>(m_calibrationReport.rmseAfterBiasDb);
 
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
@@ -713,6 +745,7 @@ void MainWindow::resetCalibrationCorrection() {
         std::numeric_limits<float>::quiet_NaN();
 
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     if (m_pointPanel) m_pointPanel->clear();
     if (m_pointDock) m_pointDock->hide();
@@ -832,8 +865,14 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
 
         m_engine.setTerrain(std::move(terrain));
         terrainInstalled = true;
+        // Recorded on install, not on request, so a cancelled or failed load
+        // never enters the history.
+        WorkspaceSettings::addRecentLocation({name, latitude, longitude, extentKm});
+        refreshRecentMenus();
         markScenarioDirty();
         m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+    m_solvedSignature.clear();
         resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
         if (m_pointPanel) m_pointPanel->clear();
@@ -948,6 +987,7 @@ void MainWindow::onReceiverSettings() {
     m_engine.receiver = dialog.settings();
     markScenarioDirty();
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     invalidateCalibrationCurrent();
     if (m_pointPanel) m_pointPanel->clear();
@@ -1011,6 +1051,9 @@ void MainWindow::markScenarioDirty() {
 }
 
 void MainWindow::markScenarioClean() {
+    // The work now lives in a file the user chose, so a recovery copy would
+    // only offer to restore something already kept.
+    RecoveryStore::clear();
     m_scenarioDirty = false;
     if (m_undoStack) m_undoStack->setClean();
     setWindowModified(false);
@@ -1052,8 +1095,15 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         event->ignore();
         return;
     }
-    if (confirmDiscardChanges()) event->accept();
-    else                         event->ignore();
+    if (!confirmDiscardChanges()) {
+        event->ignore();
+        return;
+    }
+    // The user has decided: saved, or discarded on purpose. Either way a
+    // recovery copy would resurrect work already dealt with.
+    RecoveryStore::clear();
+    WorkspaceSettings::saveLayout(saveGeometry(), saveState());
+    event->accept();
 }
 
 void MainWindow::loadTerrain(const QString& path) {
@@ -1074,6 +1124,8 @@ void MainWindow::loadTerrain(const QString& path) {
         terrainInstalled = true;
         markScenarioDirty();
         m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+    m_solvedSignature.clear();
         resetScenarioComparisonForTerrain();
         if (m_undoStack) m_undoStack->clear();
         if (m_pointPanel) m_pointPanel->clear();
@@ -1220,6 +1272,11 @@ void MainWindow::onSolve() {
     try {
         if (solveError) std::rethrow_exception(solveError);
         m_engine.setFieldGrid(std::move(solvedField));
+        // Remember exactly what this field was computed from, so any later
+        // change to those inputs is detectable.
+        m_solvedSignature = SolveSignature::of(
+            m_engine.antennas(), m_engine.receiver, m_engine.mode,
+            m_engine.calibration, m_engine.terrain());
         if (m_pointPanel) m_pointPanel->clear();
         if (m_pointDock) m_pointDock->hide();
         if (m_viewport) m_viewport->clearAnalysisPoint();
@@ -1366,6 +1423,7 @@ void MainWindow::applySourceState(const std::vector<Antenna>& antennas,
                                   int selectedIndex) {
     m_engine.setAntennas(antennas);
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     invalidateScenarioComparisonCurrent();
     invalidateCalibrationCurrent();
     if (m_pointPanel) m_pointPanel->clear();
@@ -1521,19 +1579,49 @@ void MainWindow::onImportMeasurements() {
             : QString{}));
 }
 
-void MainWindow::onSaveScenario() {
-    const QString path = QFileDialog::getSaveFileName(
-        this, "Save Scenario", {},
-        "Ridgeline scenario (*.json);;All files (*)");
-    if (path.isEmpty()) return;
+bool MainWindow::resultsAreStale() const {
+    if (!m_engine.fieldGrid().valid() || m_solvedSignature.empty()) return false;
+    return SolveSignature::of(m_engine.antennas(), m_engine.receiver, m_engine.mode,
+                              m_engine.calibration, m_engine.terrain()) != m_solvedSignature;
+}
 
+void MainWindow::refreshRecentMenus() {
+    if (m_recentScenariosMenu) {
+        m_recentScenariosMenu->clear();
+        const QStringList paths = WorkspaceSettings::recentScenarios();
+        m_recentScenariosMenu->setEnabled(!paths.isEmpty());
+        for (const QString& path : paths) {
+            // Full path as the tooltip: two scenarios often share a filename.
+            QAction* entry = m_recentScenariosMenu->addAction(QFileInfo(path).fileName());
+            entry->setToolTip(path);
+            connect(entry, &QAction::triggered, this, [this, path] { openScenarioPath(path); });
+        }
+    }
+    if (m_recentLocationsMenu) {
+        m_recentLocationsMenu->clear();
+        const auto places = WorkspaceSettings::recentLocations();
+        m_recentLocationsMenu->setEnabled(!places.empty());
+        for (const auto& place : places) {
+            const QString label = place.name.isEmpty()
+                ? QStringLiteral("%1°, %2°").arg(place.latDeg, 0, 'f', 4).arg(place.lonDeg, 0, 'f', 4)
+                : place.name;
+            QAction* entry = m_recentLocationsMenu->addAction(
+                QStringLiteral("%1  ·  %2 km").arg(label).arg(place.extentKm, 0, 'f', 0));
+            connect(entry, &QAction::triggered, this, [this, place] {
+                if (!confirmDiscardChanges()) return;
+                loadGlobalLocation(place.latDeg, place.lonDeg, place.extentKm, place.name);
+            });
+        }
+    }
+}
+
+ScenarioDoc MainWindow::currentScenarioDoc() const {
     ScenarioDoc doc;
     doc.terrain = m_terrainSource;
     doc.mode = m_engine.mode;
     doc.receiver = m_engine.receiver;
     doc.calibration = m_engine.calibration;
-    doc.calibrationSourceName =
-        m_appliedCalibrationSourceName.toStdString();
+    doc.calibrationSourceName = m_appliedCalibrationSourceName.toStdString();
     doc.calibrationPairedSamples = m_appliedCalibrationPairedSamples;
     doc.calibrationRmseBeforeDb = m_appliedCalibrationRmseBeforeDb;
     doc.calibrationRmseAfterDb = m_appliedCalibrationRmseAfterDb;
@@ -1541,10 +1629,75 @@ void MainWindow::onSaveScenario() {
     doc.layers.clear();
     for (const LayerStack::State& layer : m_layerStack.state())
         doc.layers.push_back({layer.id.toStdString(), layer.visible, layer.opacity});
+    return doc;
+}
+
+void MainWindow::autosaveTick() {
+    // Nothing to protect, or the workspace is mid-operation and its state is
+    // not coherent enough to copy.
+    if (!isScenarioDirty() || m_solveInProgress || m_terrainLoadInProgress) return;
+    RecoveryStore::write(currentScenarioDoc());
+}
+
+void MainWindow::offerRecovery() {
+    if (!RecoveryStore::exists()) return;
+    const QDateTime savedAt = RecoveryStore::savedAt();
+    const QString when = savedAt.isValid()
+        ? savedAt.toString("d MMMM, h:mm ap") : QStringLiteral("an earlier session");
+
+    QMessageBox ask(this);
+    ask.setObjectName("RecoveryPrompt");
+    ask.setIcon(QMessageBox::Question);
+    ask.setWindowTitle("Recover unsaved work");
+    ask.setText(QStringLiteral("Ridgeline closed with unsaved changes.\n\n"
+                               "A copy from %1 can be restored.").arg(when));
+    QPushButton* restore = ask.addButton("Restore", QMessageBox::AcceptRole);
+    ask.addButton("Discard", QMessageBox::DestructiveRole);
+    ask.setDefaultButton(restore);
+    ask.exec();
+
+    if (ask.clickedButton() != restore) {
+        // Declining is a decision, so the copy goes rather than being offered
+        // again on every start.
+        RecoveryStore::clear();
+        return;
+    }
+
+    QProgressDialog progress("Restoring unsaved work…", "Cancel", 0, 0, this);
+    progress.setWindowTitle("Recovering");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    bool terrainInstalled = false;
+    try {
+        applyScenarioDoc(RecoveryStore::read(), progress, terrainInstalled);
+        // Recovered work is unsaved by definition: it has no file behind it,
+        // so it must stay dirty and keep prompting until the user saves it.
+        markScenarioDirty();
+        m_statusLabel->setText("  Unsaved work restored · save it to keep it");
+    } catch (const std::exception& e) {
+        progress.hide();
+        QMessageBox::warning(this, "Could not recover",
+                             QStringLiteral("The recovery copy could not be restored:\n%1")
+                                 .arg(e.what()));
+    }
+    progress.close();
+}
+
+void MainWindow::onSaveScenario() {
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save Scenario", {},
+        "Ridgeline scenario (*.json);;All files (*)");
+    if (path.isEmpty()) return;
+
+    const ScenarioDoc doc = currentScenarioDoc();
 
     try {
         ScenarioIO::save(doc, path.toStdString());
         markScenarioClean();
+        WorkspaceSettings::addRecentScenario(path);
+        refreshRecentMenus();
         m_statusLabel->setText("  Scenario saved");
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "Save failed", e.what());
@@ -1557,6 +1710,12 @@ void MainWindow::onOpenScenario() {
         this, "Open Scenario", {},
         "Ridgeline scenario (*.json);;All files (*)");
     if (path.isEmpty()) return;
+    openScenarioPath(path);
+}
+
+// Shared by the Open dialog and the Recent Scenarios menu, so a scenario
+// reached either way loads through exactly the same path.
+void MainWindow::openScenarioPath(const QString& path) {
     m_terrainLoadInProgress = true;
     const auto loadingGuard = qScopeGuard([this] {
         m_terrainLoadInProgress = false;
@@ -1579,6 +1738,9 @@ void MainWindow::onOpenScenario() {
         applyScenarioDoc(doc, progress, terrainInstalled);
         markScenarioClean();
         setWindowTitle(QString("Ridgeline — %1[*]").arg(QFileInfo(path).fileName()));
+        // Recorded only on success, so a failed open never enters history.
+        WorkspaceSettings::addRecentScenario(path);
+        refreshRecentMenus();
         if (progress.wasCanceled())
             m_statusLabel->setText("  Scenario loaded · Satellite imagery cancelled");
         else if (m_engine.terrain().hasGeoReference() && m_viewport && !m_viewport->basemapReady())
@@ -1647,6 +1809,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     if (m_viewport) m_viewport->setPlacementMode(false);
     markScenarioDirty();
     m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
     resetScenarioComparisonForTerrain();
     clearCalibrationMeasurements();
     if (m_undoStack) m_undoStack->clear();
