@@ -138,6 +138,13 @@ private:
     // Offers to restore a recovery copy left by a previous session.
     void offerRecovery();
     QTimer* m_autosaveTimer = nullptr;
+    // Fingerprint of the inputs the displayed field was computed from. Empty
+    // when no field is displayed.
+    std::string m_solvedSignature;
+    // True when a field is on screen but its inputs have since changed. Every
+    // input path clears the field, so this is an invariant check rather than a
+    // user-facing state; see testDisplayedResultsAlwaysMatchTheirInputs.
+    bool resultsAreStale() const;
 
     void applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progress,
                           bool& terrainInstalled);
