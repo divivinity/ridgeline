@@ -16,6 +16,7 @@
 #include "map/LayerStack.h"
 #include "sim/SimEngine.h"
 #include "HeatmapLegend.h"
+#include "MapFurniture.h"
 #include <glm/glm.hpp>
 #include <functional>
 #include <cstdint>
@@ -115,6 +116,9 @@ private:
     QString m_rasterSignature;
     void applyRasterLayers(bool force);
     QStringList m_activeRasterIds;
+    MapScaleBar* m_scaleBar = nullptr;
+    NorthIndicator* m_northIndicator = nullptr;
+    void updateMapFurniture();
     QLabel* m_placementHint = nullptr;
     QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;

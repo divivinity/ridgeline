@@ -129,6 +129,7 @@ add_test(NAME dted_decoding_tests COMMAND ridgeline_dted_decoding_tests
 
 add_executable(ridgeline_layer_tests tests/test_layers.cpp
     src/map/LayerStack.cpp src/map/Hillshade.cpp src/map/TileProviders.cpp
+    src/map/MapMeasure.cpp
     src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
 target_include_directories(ridgeline_layer_tests PRIVATE src)
 target_link_libraries(ridgeline_layer_tests
@@ -224,7 +225,9 @@ add_executable(ridgeline_ui_interaction_tests
     tests/test_ui_interactions.cpp
     src/ui/OverlayToolbar.cpp
     src/ui/LayersPanel.cpp
+    src/ui/MapFurniture.cpp
     src/map/LayerStack.cpp
+    src/map/MapMeasure.cpp
     src/ui/ScenarioTree.cpp
     src/ui/PropertiesPanel.cpp
     src/ui/LocationDialog.cpp
