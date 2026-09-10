@@ -21,7 +21,10 @@
 #include <cstddef>
 #include <limits>
 
+#include "map/LayerStack.h"
+
 class QUndoStack;
+class LayersPanel;
 class QProgressDialog;
 
 class MainWindow : public QMainWindow {
@@ -77,6 +80,9 @@ private:
     bool             m_scenarioDirty = false;  // non-undoable unsaved changes
     bool             m_solveInProgress = false;  // a coverage run owns the UI
     bool             m_terrainLoadInProgress = false;
+    LayerStack       m_layerStack;
+    LayersPanel*     m_layersPanel = nullptr;
+    QDockWidget*     m_layersDock = nullptr;
     bool             m_placementActive = false;
     bool             m_placingJammer = false;
     QString          m_locationName;
