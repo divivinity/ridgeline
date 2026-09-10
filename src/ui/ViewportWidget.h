@@ -12,6 +12,7 @@
 #include "render/overlays/JammerBubbleOverlay.h"
 #include "render/overlays/FresnelOverlay.h"
 #include "render/BasemapOverlay.h"
+#include "map/LayerStack.h"
 #include "sim/SimEngine.h"
 #include "HeatmapLegend.h"
 #include <glm/glm.hpp>
@@ -31,6 +32,16 @@ public:
     explicit ViewportWidget(SimEngine* engine, QWidget* parent = nullptr);
     void refreshOverlays();
     void reloadTerrain();
+
+    // The stack is owned by MainWindow and outlives the viewport.
+    void setLayerStack(LayerStack* layers);
+    // Re-read the stack and apply it. Rebuilds the basemap texture only when
+    // the raster or relief state actually changed, so toggling an analysis
+    // layer never re-fetches tiles.
+    void refreshLayers();
+
+    // Retained while the overlay regressions are rewritten against the stack;
+    // both delegate to it rather than owning any state of their own.
     void setOverlayVisible(Overlay overlay, bool visible);
     bool isOverlayVisible(Overlay overlay) const;
     void setBasemapOpacity(float opacity);
@@ -101,6 +112,10 @@ private:
     QLabel* m_mapInfoLabel = nullptr;
     QLabel* m_attributionLabel = nullptr;
     QString m_elevationCredit = QStringLiteral("Synthetic elevation · Demo only");
+    LayerStack* m_layers = nullptr;
+    QString m_rasterSignature;
+    void applyRasterLayers(bool force);
+    static QString layerIdFor(Overlay overlay);
     QLabel* m_placementHint = nullptr;
     QLabel* m_comparisonLegend = nullptr;
     bool m_placementActive = false;

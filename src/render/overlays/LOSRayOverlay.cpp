@@ -79,18 +79,24 @@ void LOSRayOverlay::updateProbe(const std::vector<Antenna>& antennas,
 }
 
 void LOSRayOverlay::draw(const glm::mat4& mvp) {
-    if ((!visible || m_vertexCount == 0) && !m_hasProbe) return;
+    if (!visible || m_vertexCount == 0) return;
     glLineWidth(2.0f);
     m_shader.bind();
     m_shader.setMat4("uMVP", mvp);
-    if (visible && m_vertexCount > 0) {
-        glBindVertexArray(m_vao);
-        glDrawArrays(GL_LINES, 0, m_vertexCount);
-    }
-    if (m_hasProbe) {
-        glBindVertexArray(m_probeVao);
-        glDrawArrays(GL_LINES, 0, 2);
-    }
+    glBindVertexArray(m_vao);
+    glDrawArrays(GL_LINES, 0, m_vertexCount);
+    glBindVertexArray(0);
+    m_shader.release();
+    glLineWidth(1.0f);
+}
+
+void LOSRayOverlay::drawProbe(const glm::mat4& mvp) {
+    if (!m_hasProbe) return;
+    glLineWidth(2.0f);
+    m_shader.bind();
+    m_shader.setMat4("uMVP", mvp);
+    glBindVertexArray(m_probeVao);
+    glDrawArrays(GL_LINES, 0, 2);
     glBindVertexArray(0);
     m_shader.release();
     glLineWidth(1.0f);
