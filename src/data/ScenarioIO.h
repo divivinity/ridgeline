@@ -5,6 +5,7 @@
 #include <limits>
 #include "sim/Types.h"
 #include "sim/SimEngine.h"
+#include "sim/VegetationAreas.h"
 
 struct TerrainSource {
     enum class Type { Hills, Flat, Hgt, Dted, GeoTiff, Global };
@@ -47,6 +48,10 @@ struct ScenarioDoc {
         std::numeric_limits<float>::quiet_NaN();
     std::vector<Antenna> antennas;
     std::vector<ScenarioLayerState> layers;
+    // Hand-drawn vegetation, stored as areas rather than the raster they
+    // produce: a megabyte of canopy grid would not survive a terrain change and
+    // could not be edited afterwards.
+    std::vector<VegetationArea> vegetation;
 };
 
 class ScenarioIO {

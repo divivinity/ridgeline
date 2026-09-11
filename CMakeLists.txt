@@ -99,6 +99,7 @@ set(RIDGELINE_PHYSICS_TEST_SOURCES
     src/sim/FullSolver.cpp
     src/sim/SimEngine.cpp
     src/sim/SolveSignature.cpp
+    src/sim/VegetationAreas.cpp
     src/data/AntennaLibrary.cpp
     src/data/ScenarioIO.cpp
     src/data/TerrainLoader.cpp
