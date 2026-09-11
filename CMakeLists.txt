@@ -130,13 +130,49 @@ add_test(NAME dted_decoding_tests COMMAND ridgeline_dted_decoding_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_layer_tests tests/test_layers.cpp
-    src/map/LayerStack.cpp src/map/Hillshade.cpp src/map/TileProviders.cpp
-    src/map/MapMeasure.cpp
-    src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp src/data/ScenarioIO.cpp)
+    src/map/LayerStack.cpp src/map/Hillshade.cpp src/map/CanopyShade.cpp
+    src/map/TileProviders.cpp src/map/MapMeasure.cpp
+    src/sim/TerrainModel.cpp src/sim/VegetationAreas.cpp
+    src/data/TerrainLoader.cpp src/data/ScenarioIO.cpp)
 target_include_directories(ridgeline_layer_tests PRIVATE src)
 target_link_libraries(ridgeline_layer_tests
     Qt6::Core Qt6::Gui glm::glm nlohmann_json::nlohmann_json)
 add_test(NAME layer_tests COMMAND ridgeline_layer_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# Canopy ingestion: the from-scratch TIFF reader, the LANDFIRE decode and the
+# geographic resample onto a terrain grid. The two committed fixtures are real
+# responses from the LANDFIRE image service (a US Government work, public
+# domain) and are always passed, so the decode is exercised against genuine
+# provider bytes on every build rather than only against synthesised ones.
+# Optional end-to-end check against the live LANDFIRE service. Off by default:
+# CI must not depend on a third-party endpoint being up, and a network test that
+# fails for network reasons teaches nothing. Configure with
+# -DRIDGELINE_LIVE_CANOPY_CHECK=ON to build it.
+option(RIDGELINE_LIVE_CANOPY_CHECK "Build the live canopy service check" OFF)
+if(RIDGELINE_LIVE_CANOPY_CHECK)
+    add_executable(ridgeline_live_canopy tools/live_canopy_check.cpp
+        src/data/CanopyLoader.cpp src/data/CanopyRaster.cpp
+        src/data/LandfireCanopy.cpp src/data/RasterTiff.cpp
+        src/data/TileBatchDownloader.cpp src/data/TerrainLoader.cpp
+        src/sim/TerrainModel.cpp src/sim/VegetationAreas.cpp src/sim/RFModels.cpp
+        src/sim/SimEngine.cpp src/sim/FastSolver.cpp src/sim/FullSolver.cpp
+        src/sim/MaterialLibrary.cpp src/sim/ItmPropagation.cpp
+        src/data/AntennaPatternIO.cpp)
+    target_include_directories(ridgeline_live_canopy PRIVATE src)
+    target_link_libraries(ridgeline_live_canopy
+        Qt6::Core Qt6::Gui Qt6::Network glm::glm nlohmann_json::nlohmann_json)
+endif()
+
+add_executable(ridgeline_canopy_tests tests/test_canopy.cpp
+    src/data/RasterTiff.cpp src/data/CanopyRaster.cpp src/data/LandfireCanopy.cpp
+    src/data/TerrainLoader.cpp
+    src/sim/TerrainModel.cpp src/sim/VegetationAreas.cpp src/sim/SolveSignature.cpp)
+target_include_directories(ridgeline_canopy_tests PRIVATE src)
+target_link_libraries(ridgeline_canopy_tests glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME canopy_tests COMMAND ridgeline_canopy_tests
+        "${CMAKE_SOURCE_DIR}/tests/data/canopy/landfire_lf2024_CH_fayetteville_64.tif"
+        "${CMAKE_SOURCE_DIR}/tests/data/canopy/landfire_lf2024_CC_fayetteville_64.tif"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(ridgeline_hgt_georef_tests

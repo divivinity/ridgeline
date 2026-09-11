@@ -55,13 +55,26 @@ std::string SolveSignature::of(const std::vector<Antenna>& antennas,
     // same stand moved somewhere else, since both paint the same number of
     // samples at the same height. Moving vegetation changes coverage, so it has
     // to change the fingerprint.
+    //
+    // Cover is hashed alongside height because it scales the depth: two
+    // imports with the same canopy heights and different crown cover give
+    // different coverage, and without this the second would be shown wearing
+    // the first one's answer.
+    auto rollingHash = [](std::uint64_t hash, std::uint64_t value) {
+        hash ^= value;
+        return hash * 1099511628211ull;                // FNV prime
+    };
     put(out, static_cast<int>(terrain.canopyHeightDm.size()));
-    if (!terrain.canopyHeightDm.empty()) {
+    put(out, static_cast<int>(terrain.canopyCoverPct.size()));
+    if (!terrain.canopyHeightDm.empty() || !terrain.canopyCoverPct.empty()) {
         std::uint64_t hash = 1469598103934665603ull;   // FNV-1a offset basis
-        for (std::uint8_t v : terrain.canopyHeightDm) {
-            hash ^= static_cast<std::uint64_t>(v);
-            hash *= 1099511628211ull;                  // FNV prime
-        }
+        for (std::uint16_t v : terrain.canopyHeightDm)
+            hash = rollingHash(hash, v);
+        // A separator, so a height grid ending in the values a cover grid
+        // begins with cannot collide with the pair swapped around.
+        hash = rollingHash(hash, 0xFFFFFFFFull);
+        for (std::uint8_t v : terrain.canopyCoverPct)
+            hash = rollingHash(hash, v);
         put(out, static_cast<int>(hash & 0x7fffffffu));
         put(out, static_cast<int>((hash >> 32) & 0x7fffffffu));
     }

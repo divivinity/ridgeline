@@ -85,7 +85,33 @@ void applyProcedural(Antenna& antenna, const ProceduralPlacement& placement,
 
 void SimEngine::setVegetation(std::vector<VegetationArea> areas) {
     m_vegetation = std::move(areas);
-    VegetationAreas::apply(m_terrain, m_vegetation);
+    rebuildCanopy();
+}
+
+void SimEngine::setImportedCanopy(CanopySampler sampler, CanopySourceInfo info) {
+    m_canopySampler = std::move(sampler);
+    m_canopyInfo = std::move(info);
+    rebuildCanopy();
+}
+
+void SimEngine::clearImportedCanopy() {
+    m_canopySampler = nullptr;
+    m_canopyInfo = {};
+    rebuildCanopy();
+}
+
+void SimEngine::rebuildCanopy() {
+    std::vector<std::uint16_t> baseHeightDm;
+    std::vector<std::uint8_t>  baseCoverPct;
+    if (m_canopySampler &&
+        !m_canopySampler(m_terrain, baseHeightDm, baseCoverPct)) {
+        // The sampler declined this terrain, so it must contribute nothing
+        // rather than a partially-filled grid.
+        baseHeightDm.clear();
+        baseCoverPct.clear();
+    }
+    VegetationAreas::apply(m_terrain, m_vegetation, baseHeightDm, baseCoverPct);
+    ++m_canopyRevision;
 }
 
 void SimEngine::setTerrain(TerrainModel terrain) {
@@ -118,8 +144,8 @@ void SimEngine::setTerrain(TerrainModel terrain) {
                 syncGeoFromWorld(m_antennas[i], m_terrain);
     }
     // New terrain means a new grid, so the canopy raster must be rebuilt from
-    // the areas rather than carried over at the old resolution.
-    VegetationAreas::apply(m_terrain, m_vegetation);
+    // its sources rather than carried over at the old resolution.
+    rebuildCanopy();
 }
 
 void SimEngine::setAntennas(std::vector<Antenna> antennas) {
