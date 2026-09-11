@@ -1,6 +1,8 @@
 #include "SolveSignature.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <sstream>
 #include <iomanip>
 
@@ -46,6 +48,23 @@ std::string SolveSignature::of(const std::vector<Antenna>& antennas,
     put(out, terrain.georeferenced);
     put(out, static_cast<float>(terrain.originLatDeg));
     put(out, static_cast<float>(terrain.originLonDeg));
+
+    // Vegetation changes the result, so it belongs in the fingerprint.
+    //
+    // A rolling hash, not a sum: a sum cannot tell a stand of trees from the
+    // same stand moved somewhere else, since both paint the same number of
+    // samples at the same height. Moving vegetation changes coverage, so it has
+    // to change the fingerprint.
+    put(out, static_cast<int>(terrain.canopyHeightDm.size()));
+    if (!terrain.canopyHeightDm.empty()) {
+        std::uint64_t hash = 1469598103934665603ull;   // FNV-1a offset basis
+        for (std::uint8_t v : terrain.canopyHeightDm) {
+            hash ^= static_cast<std::uint64_t>(v);
+            hash *= 1099511628211ull;                  // FNV prime
+        }
+        put(out, static_cast<int>(hash & 0x7fffffffu));
+        put(out, static_cast<int>((hash >> 32) & 0x7fffffffu));
+    }
 
     put(out, static_cast<int>(antennas.size()));
     for (const Antenna& a : antennas) {
