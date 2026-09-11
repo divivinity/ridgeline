@@ -94,6 +94,18 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                     ant, rx, receiver);
                 const float rainDb = enableRain
                     ? rainAttenuationDb(rainRateMmH, freq, distKm) : 0.0f;
+                // Vegetation rides alongside rain rather than sitting in the
+                // analytic branch. Rain is the existing precedent for an excess
+                // term applied to both branches; a foliage term added only to
+                // the analytic side would be silently inert in Engineering mode
+                // beyond 1 km, where ITM takes over. ITM models no land cover -
+                // its clutter factor is bare-earth roughness, diffraction-region
+                // only and capped at 15 dB - so this is additive, not double
+                // counting.
+                const float foliageDb = terrain.hasVegetation()
+                    ? RFModels::vegetationLossDb(
+                          terrain.foliageDepthM(ant.position, rx), freq)
+                    : 0.0f;
 
                 float directRxDbm = NEG_INF;
                 const float itmLoss = enableItm
@@ -103,10 +115,10 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
 
                 if (std::isfinite(itmLoss)) {
                     directRxDbm = txPowerDbm + effectiveGainDbi
-                                - itmLoss - rainDb;
+                                - itmLoss - rainDb - foliageDb;
                 } else {
                     const float matLossDb = mat.lossDbPer100m(freq) * distM / 100.0f;
-                    float directLoss = fsplDb(distM, freq) + matLossDb + rainDb;
+                    float directLoss = fsplDb(distM, freq) + matLossDb + rainDb + foliageDb;
                     const auto losStatus = terrain.lineOfSightStatus(ant.position, rx);
 
                     if (enableFresnelPenalty && losStatus == TerrainModel::LOSStatus::Clear) {

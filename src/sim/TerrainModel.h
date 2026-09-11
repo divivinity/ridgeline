@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -34,10 +35,31 @@ public:
 
     std::vector<float> heights;
 
+    // Canopy height above ground in decimetres, parallel to `heights`. Zero
+    // means bare ground; empty means no vegetation data at all, which is the
+    // default so every existing construction site is unaffected.
+    //
+    // Decimetres in a byte spans 0-25.5 m, which covers essentially all canopy,
+    // at 1 MiB for a 1024x1024 grid. An attenuation model needs depth in
+    // metres, and only canopy height over bare earth can produce it - cover
+    // percent modulates the coefficient and land-cover class cannot give depth
+    // at all.
+    std::vector<std::uint8_t> canopyHeightDm;
+
+    bool hasVegetation() const { return !canopyHeightDm.empty(); }
+    float canopyHeightAt(int x, int z) const;
+    // Canopy top above sea level at a world position, or the bare ground height
+    // where there is no vegetation data.
+    float canopyTopAtWorld(float worldX, float worldZ) const;
+
     // Throws before malformed or incomplete terrain can replace a live model.
     void validate() const;
 
     enum class LOSStatus { Clear, Diffracted, Blocked };
+
+    // Metres of the path that pass through vegetation: below canopy top but
+    // above bare ground. Zero when the model carries no vegetation.
+    float foliageDepthM(glm::vec3 from, glm::vec3 to, int steps = 0) const;
 
     struct PeakObstacle {
         float clearanceM;
@@ -65,7 +87,11 @@ public:
     int adaptivePathSteps(glm::vec3 from, glm::vec3 to,
                           int minimum = 32, int maximum = 2048) const;
     bool lineOfSight(glm::vec3 from, glm::vec3 to, int steps = 0) const;
-    LOSStatus lineOfSightStatus(glm::vec3 from, glm::vec3 to, int steps = 0) const;
+    // outFoliageDepthM, when given, receives the vegetation depth measured on
+    // the same walk. An out-parameter rather than a richer return type because
+    // four call sites outside the solver consume this enum directly.
+    LOSStatus lineOfSightStatus(glm::vec3 from, glm::vec3 to, int steps = 0,
+                                float* outFoliageDepthM = nullptr) const;
     PeakObstacle peakObstacle(glm::vec3 from, glm::vec3 to, int steps = 0) const;
     float fresnelClearanceRatio(glm::vec3 from, glm::vec3 to,
                                 float frequencyMHz, int steps = 0) const;
