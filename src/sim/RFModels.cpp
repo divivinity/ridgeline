@@ -88,6 +88,70 @@ void validateSolveInputs(const TerrainModel& terrain,
     }
 }
 
+
+namespace {
+// Specific attenuation anchors from ITU-R P.833-10 Table 1, in dB/m.
+//
+// CAVEAT the table itself carries: the 105.9 MHz entry is HORIZONTAL
+// polarisation while the other four are SLANT, so one interpolated curve
+// crosses a polarisation boundary at exactly the frequencies where P.833 says
+// polarisation matters most. This model has no polarisation term; that is a
+// known limitation, not an oversight.
+struct VegetationAnchor { float freqMHz; float value; };
+constexpr VegetationAnchor kGamma[] = {
+    {105.9f, 0.04f}, {466.475f, 0.12f}, {949.0f, 0.17f},
+    {1852.2f, 0.30f}, {2118.0f, 0.34f},
+};
+
+// Saturation ceilings, dB. P.833's own Am values are NON-MONOTONIC above about
+// 2 GHz (34.1 dB at 2118 MHz, 46 dB at 3605 MHz, 34.5 dB measured at 28 GHz),
+// so a monotone A1*f^nu fit extrapolates to ~94 dB at 28 GHz - roughly three
+// times too pessimistic. The curve is therefore HELD FLAT above the highest
+// anchor rather than extrapolated.
+constexpr VegetationAnchor kMaxLoss[] = {
+    {105.9f, 9.4f}, {466.475f, 18.0f}, {949.0f, 26.5f},
+    {1852.2f, 32.0f}, {2118.0f, 34.1f},
+};
+
+template <std::size_t N>
+float interpolateLogFreq(const VegetationAnchor (&anchors)[N], float freqMHz) {
+    if (!std::isfinite(freqMHz) || freqMHz <= 0.0f) return anchors[0].value;
+    // Clamped at both ends: below the lowest anchor there is no measurement to
+    // extrapolate from, and above the highest the data stop being monotone.
+    if (freqMHz <= anchors[0].freqMHz) return anchors[0].value;
+    if (freqMHz >= anchors[N - 1].freqMHz) return anchors[N - 1].value;
+    for (std::size_t i = 1; i < N; ++i) {
+        if (freqMHz > anchors[i].freqMHz) continue;
+        // Attenuation rises roughly as a power of frequency, so interpolate in
+        // log-frequency; linear interpolation would sag between decades.
+        const float lo = std::log(anchors[i - 1].freqMHz);
+        const float hi = std::log(anchors[i].freqMHz);
+        const float t = (std::log(freqMHz) - lo) / (hi - lo);
+        return anchors[i - 1].value + t * (anchors[i].value - anchors[i - 1].value);
+    }
+    return anchors[N - 1].value;
+}
+} // namespace
+
+float vegetationGammaDbPerM(float freqMHz) {
+    return interpolateLogFreq(kGamma, freqMHz);
+}
+
+float vegetationMaxLossDb(float freqMHz) {
+    return interpolateLogFreq(kMaxLoss, freqMHz);
+}
+
+float vegetationLossDb(float depthM, float freqMHz) {
+    if (!std::isfinite(depthM) || depthM <= 0.0f) return 0.0f;
+    if (!std::isfinite(freqMHz) || freqMHz <= 0.0f) return 0.0f;
+    const float gamma = vegetationGammaDbPerM(freqMHz);
+    const float maxLoss = vegetationMaxLossDb(freqMHz);
+    if (!(gamma > 0.0f) || !(maxLoss > 0.0f)) return 0.0f;
+    // Saturating: approaches maxLoss rather than growing without bound, because
+    // a path around or over the canopy eventually beats going through it.
+    return maxLoss * (1.0f - std::exp(-depthM * gamma / maxLoss));
+}
+
 float dbmToMw(float dbm) {
     if (!std::isfinite(dbm)) return 0.0f;
     return std::pow(10.0f, dbm / 10.0f);
