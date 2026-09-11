@@ -1,6 +1,7 @@
 #pragma once
 #include "Types.h"
 #include "TerrainModel.h"
+#include "VegetationAreas.h"
 #include "FastSolver.h"
 #include "FullSolver.h"
 #include "MaterialLibrary.h"
@@ -28,6 +29,11 @@ public:
     CoverageCalibrationSettings calibration;
 
     void setTerrain(TerrainModel terrain);
+
+    // Hand-drawn vegetation. Setting either terrain or areas re-rasterises the
+    // canopy grid, so the two can never drift apart.
+    void setVegetation(std::vector<VegetationArea> areas);
+    const std::vector<VegetationArea>& vegetation() const { return m_vegetation; }
     void setAntennas(std::vector<Antenna> antennas);
     void addAntenna(Antenna antenna);
     void removeAntenna(int index);
@@ -47,6 +53,7 @@ public:
 
 private:
     TerrainModel         m_terrain;
+    std::vector<VegetationArea> m_vegetation;
     std::vector<Antenna> m_antennas;
     FieldGrid            m_field;
     FastSolver           m_fast;

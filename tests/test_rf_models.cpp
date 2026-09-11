@@ -627,6 +627,31 @@ void testSolveSignatureTracksEveryInput() {
 
     TerrainModel other = TerrainLoader::makeFlat(64, 64, 45.0f, 0.0f);
     CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, other) != base);
+
+    // Vegetation changes the result, so it must change the fingerprint - both
+    // adding it and changing its height.
+    TerrainModel wooded = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(wooded, {{100.0f, 100.0f, 500.0f, 500.0f, 15.0f, "wood"}});
+    const std::string woodedSig =
+        SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, wooded);
+    CHECK(woodedSig != base);
+
+    TerrainModel taller = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(taller, {{100.0f, 100.0f, 500.0f, 500.0f, 20.0f, "wood"}});
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, taller)
+          != woodedSig);
+
+    TerrainModel moved = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(moved, {{200.0f, 200.0f, 600.0f, 600.0f, 15.0f, "wood"}});
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, moved)
+          != woodedSig);
+
+    // Clearing it returns to the bare fingerprint.
+    TerrainModel cleared = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(cleared, {});
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, cleared)
+          == SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration,
+                                TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f)));
 }
 
 

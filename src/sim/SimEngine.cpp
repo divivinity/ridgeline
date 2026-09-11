@@ -83,6 +83,11 @@ void applyProcedural(Antenna& antenna, const ProceduralPlacement& placement,
 
 } // namespace
 
+void SimEngine::setVegetation(std::vector<VegetationArea> areas) {
+    m_vegetation = std::move(areas);
+    VegetationAreas::apply(m_terrain, m_vegetation);
+}
+
 void SimEngine::setTerrain(TerrainModel terrain) {
     terrain.validate();
     if (m_terrain.hasGeoReference()) {
@@ -112,6 +117,9 @@ void SimEngine::setTerrain(TerrainModel terrain) {
             if (carried[i].carry)
                 syncGeoFromWorld(m_antennas[i], m_terrain);
     }
+    // New terrain means a new grid, so the canopy raster must be rebuilt from
+    // the areas rather than carried over at the old resolution.
+    VegetationAreas::apply(m_terrain, m_vegetation);
 }
 
 void SimEngine::setAntennas(std::vector<Antenna> antennas) {

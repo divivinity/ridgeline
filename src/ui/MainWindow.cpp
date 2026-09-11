@@ -1629,6 +1629,7 @@ ScenarioDoc MainWindow::currentScenarioDoc() const {
     doc.layers.clear();
     for (const LayerStack::State& layer : m_layerStack.state())
         doc.layers.push_back({layer.id.toStdString(), layer.visible, layer.opacity});
+    doc.vegetation = m_engine.vegetation();
     return doc;
 }
 
@@ -1839,6 +1840,8 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     else if (doc.mode == SimEngine::Mode::Engineering) m_modeCombo->setCurrentIndex(2);
     else m_modeCombo->setCurrentIndex(1);
     m_engine.setAntennas(doc.antennas);
+    // After setTerrain, so the areas rasterise onto the grid just installed.
+    m_engine.setVegetation(doc.vegetation);
     if (!doc.layers.empty()) {
         std::vector<LayerStack::State> layers;
         layers.reserve(doc.layers.size());
