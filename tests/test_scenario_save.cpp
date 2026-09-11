@@ -186,6 +186,42 @@ int main() {
                     "clearing forgets history and layout together");
             qunsetenv("RIDGELINE_STATE_DIR");
         }
+        {
+            // Vegetation areas persist as areas, not as the raster they make.
+            ScenarioDoc vegetated;
+            vegetated.vegetation = {
+                {100.0f, 150.0f, 300.0f, 400.0f, 18.0f, "north wood"},
+                {500.0f, 500.0f, 700.0f, 700.0f, 9.5f, "scrub"},
+            };
+            const QString vegPath = dir.filePath("vegetation.json");
+            ScenarioIO::save(vegetated, vegPath.toStdString());
+            const ScenarioDoc back = ScenarioIO::load(vegPath.toStdString());
+            require(back.vegetation.size() == 2, "vegetation areas round-trip");
+            require(back.vegetation[0].name == "north wood", "area names round-trip");
+            require(std::abs(back.vegetation[0].maxZ - 400.0f) < 1e-4f,
+                    "area bounds round-trip");
+            require(std::abs(back.vegetation[1].canopyHeightM - 9.5f) < 1e-4f,
+                    "canopy height round-trips");
+
+            // A malformed area is dropped on read rather than reaching the UI.
+            QFile malformed(vegPath);
+            require(malformed.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                    "rewrite scenario with a malformed area");
+            malformed.write("{\"vegetation\":[{\"minX\":200,\"maxX\":100,"
+                            "\"minZ\":0,\"maxZ\":100,\"canopyHeightM\":10}]}");
+            malformed.close();
+            require(ScenarioIO::load(vegPath.toStdString()).vegetation.empty(),
+                    "an inverted area is dropped on read");
+
+            // Scenarios written before vegetation existed still load.
+            QFile legacy(vegPath);
+            require(legacy.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                    "rewrite scenario without vegetation");
+            legacy.write("{\"mode\":\"planner\"}");
+            legacy.close();
+            require(ScenarioIO::load(vegPath.toStdString()).vegetation.empty(),
+                    "a scenario without vegetation loads with none");
+        }
         std::cout << "Scenario save checks passed\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

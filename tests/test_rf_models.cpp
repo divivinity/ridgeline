@@ -1,3 +1,4 @@
+#include "sim/VegetationAreas.h"
 #include "sim/RFModels.h"
 #include "sim/SolveSignature.h"
 #include "data/TerrainLoader.h"
@@ -746,6 +747,66 @@ void testVegetationDepthAndSolveEffect() {
     CHECK(stronger == 0);   // and never helps
 }
 
+
+// Hand-drawn stands, stored as areas and rasterised into the canopy grid.
+void testVegetationAreasRasterise() {
+    TerrainModel t = TerrainLoader::makeFlat(64, 64, 10.0f, 0.0f);   // 630 m square
+
+    // No areas means no vegetation at all, not a grid of zeroes that
+    // hasVegetation() would then report as present.
+    VegetationAreas::apply(t, {});
+    CHECK(!t.hasVegetation());
+    CHECK(t.canopyHeightDm.empty());
+
+    // An invalid area is ignored rather than producing an empty stand.
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 50.0f, 200.0f, 15.0f, "inverted"}});
+    CHECK(!t.hasVegetation());
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 200.0f, 200.0f, 0.0f, "zero height"}});
+    CHECK(!t.hasVegetation());
+
+    // A real stand paints its footprint and nothing else.
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 200.0f, 200.0f, 15.0f, "wood"}});
+    CHECK(t.hasVegetation());
+    CHECK(t.canopyHeightDm.size() == t.heights.size());
+    t.validate();
+    CHECK(std::abs(t.canopyHeightAt(15, 15) - 15.0f) < 0.06f);   // inside
+    CHECK(t.canopyHeightAt(1, 1) == 0.0f);                       // outside
+    CHECK(t.canopyHeightAt(60, 60) == 0.0f);
+
+    // Height is clamped to what a decimetre byte can carry, not wrapped.
+    VegetationAreas::apply(t, {{0.0f, 0.0f, 630.0f, 630.0f, 400.0f, "impossible"}});
+    CHECK(std::abs(t.canopyHeightAt(30, 30) - VegetationAreas::kMaxCanopyHeightM) < 0.06f);
+
+    // Overlapping stands are one canopy at the tallest height, not a sum.
+    VegetationAreas::apply(t, {
+        {100.0f, 100.0f, 300.0f, 300.0f, 10.0f, "short"},
+        {200.0f, 200.0f, 400.0f, 400.0f, 20.0f, "tall"},
+    });
+    CHECK(std::abs(t.canopyHeightAt(25, 25) - 20.0f) < 0.06f);   // in both
+    CHECK(std::abs(t.canopyHeightAt(15, 15) - 10.0f) < 0.06f);   // short only
+    CHECK(std::abs(t.canopyHeightAt(38, 38) - 20.0f) < 0.06f);   // tall only
+
+    // An area entirely off the terrain leaves nothing behind.
+    VegetationAreas::apply(t, {{5000.0f, 5000.0f, 6000.0f, 6000.0f, 15.0f, "elsewhere"}});
+    CHECK(!t.hasVegetation());
+
+    // An area partly off the terrain still paints the part that is on it.
+    VegetationAreas::apply(t, {{-500.0f, -500.0f, 150.0f, 150.0f, 12.0f, "overhang"}});
+    CHECK(t.hasVegetation());
+    CHECK(std::abs(t.canopyHeightAt(0, 0) - 12.0f) < 0.06f);
+    CHECK(t.canopyHeightAt(50, 50) == 0.0f);
+
+    // Reapplying replaces rather than accumulating.
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 200.0f, 200.0f, 15.0f, "wood"}});
+    CHECK(t.canopyHeightAt(0, 0) == 0.0f);
+    CHECK(std::abs(t.canopyHeightAt(15, 15) - 15.0f) < 0.06f);
+
+    const VegetationArea probe{0.0f, 0.0f, 100.0f, 100.0f, 10.0f, ""};
+    CHECK(probe.contains(50.0f, 50.0f));
+    CHECK(!probe.contains(150.0f, 50.0f));
+    CHECK(probe.valid());
+}
+
 int main() {
     testFieldGridValidity();
     testInvalidSolveInputs<FastSolver>();
@@ -768,6 +829,7 @@ int main() {
     testSolveSignatureTracksEveryInput();
     testVegetationLossSaturates();
     testVegetationDepthAndSolveEffect();
+    testVegetationAreasRasterise();
     if (failures == 0) std::cout << "RF model tests passed.\n";
     return failures ? 1 : 0;
 }

@@ -479,8 +479,18 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     // position the cursor is not actually over.
     auto* readout = window.findChild<QLabel*>("CursorReadout");
     check(readout != nullptr, "the viewport carries a cursor readout");
-    check(readout && readout->isHidden(),
-          "the cursor readout stays hidden until the cursor is over terrain");
+    if (readout && viewport) {
+        // Asserting the initial state here was flaky: if the developer's real
+        // pointer happened to sit over the window, Qt delivered a move event
+        // and the readout legitimately appeared. Drive the guarantee that
+        // actually matters instead - once the cursor leaves, the readout must
+        // not linger over a map it is no longer pointing at.
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(viewport, &leave);
+        settle(60);
+        check(readout->isHidden(),
+              "the cursor readout hides once the cursor leaves the map");
+    }
 
     // Every action a user is expected to find must be reachable from a menu
     // with a visible shortcut, not only from a toolbar button.
