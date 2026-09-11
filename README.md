@@ -178,10 +178,50 @@ is why the roadmap ranks it last rather than bundling it with this. Deriving a
 DEM from a point cloud is well served by existing tools (PDAL, LAStools, or
 `gdal_grid`); the output loads through the GeoTIFF path above.
 
-Canopy height, the difference between a surface model and a bare-earth model,
-needs both rasters and a subtraction step. 3DEP publishes both, but Ridgeline
-loads one terrain at a time and has no raster arithmetic, so this is not yet
-possible in the application.
+Canopy height as the difference between a surface model and a bare-earth model
+is still not possible here: 3DEP publishes both rasters, but Ridgeline loads one
+terrain at a time and has no raster arithmetic. Canopy arrives a different way
+instead — see below.
+
+## Vegetation and canopy
+
+Vegetation attenuates, and where it is changes the answer. Ridgeline gets canopy
+from two places.
+
+**Imported, from LANDFIRE.** *Analysis ▸ Vegetation ▸ Load Canopy for This Area*
+fetches canopy height and crown cover covering exactly the ground the loaded
+terrain covers, and resamples it onto the terrain's own grid so one path walk
+consumes both. LANDFIRE is a US federal product in the public domain, which is
+why it ships: the global alternatives are CC BY and cannot go into an offline
+package until that format can carry a licence notice. Its cost is coverage — the
+United States and its territories only.
+
+**Drawn by hand.** Vegetation areas in a scenario paint over whatever was
+imported, and work anywhere. A drawn stand replaces what is underneath rather
+than adding to it, and carries no cover measurement, so it is treated as
+complete cover.
+
+Three things about the imported data are worth knowing before you trust a
+number:
+
+- **LANDFIRE canopy height is quantised to about four metres** and its top class
+  is open-ended above 50 m. It is a model with a vintage, not a survey of today:
+  a stand felled last year is still in the data.
+- **Over developed land LANDFIRE does not measure canopy height.** It assigns a
+  nationwide constant by vegetation type — 39 m for evergreen and mixed forest,
+  19 m for deciduous. Passing that through paints a tall forest across every
+  suburb, so Ridgeline substitutes a stated assumption (10 m by default),
+  reports how many samples that affected, and lets you change or disable the
+  substitution under *Canopy Options*. Over a typical American residential
+  scene this is about a fifth of the vegetated area.
+- **The attenuation model is an engineering extrapolation, not a standard.**
+  ITU-R P.833-10 has no sanctioned terrestrial model for woodland with both
+  terminals outside it, and nothing here is validated against field
+  measurements.
+
+A scenario records the canopy *request*, not the raster. The raster already
+lives in the tile cache keyed by that request, so reopening a scenario is a
+cache read and works offline.
 
 ## Portable offline terrain and imagery packages
 
@@ -206,7 +246,10 @@ requests. A missing tile is reported as an offline cache miss. The package
 contains provider-separated imagery and terrain tile trees, making its contents
 inspectable and reproducible rather than relying on an opaque HTTP cache.
 
-Built-in elevation retains `terrain/{z}/{x}/{y}.png`; built-in imagery retains
+Canopy responses are cached the same way, under
+`canopy/<product>/<region>/<layer>/<digest>.tif`, so a package carries the
+vegetation for the locations it covers. Built-in elevation retains
+`terrain/{z}/{x}/{y}.png`; built-in imagery retains
 `imagery/esri/{z}/{x}/{y}.tile` (or `imagery/google/...`). Custom URL templates
 use separate `terrain/custom-<sha256>/...` and `imagery/custom-<sha256>/...`
 folders. The hash covers the exact full template, including query parameters.
@@ -243,7 +286,14 @@ $env:RIDGELINE_GEOCODER_URL = "https://your-nominatim.example/search"
 $env:RIDGELINE_TERRAIN_URL = "https://your-tiles/terrarium/{z}/{x}/{y}.png"
 $env:RIDGELINE_TILE_URL = "https://your-imagery/{z}/{x}/{y}.jpg"
 $env:RIDGELINE_TILE_ATTRIBUTION = "Your imagery provider"
+$env:RIDGELINE_CANOPY_PRODUCT = "LF2024"
+$env:RIDGELINE_CANOPY_URL = "https://your-service/{product}/{layer}/{region}?bbox={bbox}&size={width},{height}"
 ```
+
+`RIDGELINE_CANOPY_URL` substitutes `{product}`, `{layer}` (`CH`, `CC` or `EVH`),
+`{region}`, `{bbox}` (west,south,east,north in WGS84), `{width}` and `{height}`
+by name. It must answer with an uncompressed single-band TIFF; the reader
+refuses anything else by name rather than guessing at it.
 
 ## Scenario format
 
