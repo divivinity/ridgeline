@@ -35,6 +35,24 @@ struct ScenarioLayerState {
     float opacity = 1.0f;
 };
 
+// A canopy import, recorded as the request that produced it rather than as the
+// raster it produced.
+//
+// The raster is megabytes; it already lives in the portable tile cache, keyed
+// by the request. Re-issuing the request on open finds it there, so a scenario
+// reopened offline still gets back the vegetation it was solved with - and a
+// scenario file stays a few kilobytes of text that a person can read.
+//
+// The substitution policy is part of the record because it changes the answer:
+// the same fetch with a different developed-land policy is a different canopy.
+struct CanopyImport {
+    bool        enabled = false;
+    std::string sourceId;                    // "landfire-LF2024"
+    std::string developedPolicy = "assume";  // assume | source | bare
+    float       assumedDevelopedCanopyM = 10.0f;
+    std::string retrievedUtc;
+};
+
 struct ScenarioDoc {
     TerrainSource        terrain;
     SimEngine::Mode      mode = SimEngine::Mode::Fast;
@@ -52,6 +70,7 @@ struct ScenarioDoc {
     // produce: a megabyte of canopy grid would not survive a terrain change and
     // could not be edited afterwards.
     std::vector<VegetationArea> vegetation;
+    CanopyImport canopyImport;
 };
 
 class ScenarioIO {

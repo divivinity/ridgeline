@@ -14,11 +14,13 @@
 #include "ScenarioComparisonPanel.h"
 #include "CalibrationPanel.h"
 #include "data/AntennaLibrary.h"
+#include "data/CanopyLoader.h"
 #include "data/ScenarioIO.h"
 #include "sim/MeasurementCalibration.h"
 #include "sim/ScenarioComparison.h"
 #include <cstdint>
 #include <cstddef>
+#include <memory>
 #include <limits>
 
 #include "map/LayerStack.h"
@@ -56,6 +58,9 @@ private slots:
     void onAntennaMoved(int index, float worldX, float worldZ);
     void onTerrainClicked(float worldX, float worldZ);
     void onTerrainInspected(float worldX, float worldZ);
+    void onLoadCanopy();
+    void onClearCanopy();
+    void onCanopyOptions();
 
 private:
     SimEngine        m_engine;
@@ -171,4 +176,23 @@ private:
     void resetCalibrationCorrection();
     void clearCalibrationMeasurements();
     void handleCalibrationTerrainChange();
+
+    // Installs an imported canopy layer on the engine as a sampler, so it is
+    // re-placed on every later terrain load rather than going stale.
+    void installCanopy(CanopyRaster raster);
+    // Re-issues the recorded request after a scenario load or a policy change.
+    // Silent on failure: a scenario must still open when the canopy cannot be
+    // restored, with the reason on the status line rather than in a dialog.
+    void restoreCanopyImport(const CanopyImport& record);
+    void refreshCanopyActions();
+    // One line naming the source, its vintage and how much of the area it
+    // describes. Shown after a load and kept in the vegetation menu.
+    QString canopySummary() const;
+
+    // Shared, so the sampler handed to the engine keeps the raster alive
+    // regardless of which member is destroyed first.
+    std::shared_ptr<const CanopyRaster> m_canopy;
+    landfire::Options m_canopyOptions;
+    QAction*         m_clearCanopyAct = nullptr;
+    QAction*         m_canopyStatusAct = nullptr;
 };

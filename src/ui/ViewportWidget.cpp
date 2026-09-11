@@ -1,5 +1,6 @@
 #include "ViewportWidget.h"
 #include "TerrainPresentation.h"
+#include "map/CanopyShade.h"
 #include "map/Hillshade.h"
 #include "map/MapMeasure.h"
 #include "render/TerrainRaycast.h"
@@ -693,12 +694,23 @@ void ViewportWidget::applyRasterLayers(bool force) {
     if (reliefOn)
         signature += "hillshade" + QString::number(relief->opacity, 'f', 3) + ";";
 
+    const MapLayer* canopy = m_layers->find(QStringLiteral("vegetation"));
+    // Vegetation only contributes when there is vegetation to draw, so toggling
+    // the layer on an unvegetated scene neither rebuilds the texture nor makes
+    // the layer report itself as drawn.
+    const bool canopyOn = canopy && canopy->visible &&
+                          m_engine && m_engine->terrain().hasVegetation();
+    if (canopyOn)
+        signature += "vegetation" + QString::number(canopy->opacity, 'f', 3) + "@" +
+                     QString::number(m_engine->canopyRevision()) + ";";
+
     const bool anyRaster = !rasters.empty() || reliefOn;
     m_basemap.visible = anyRaster;
     m_activeRasterIds.clear();
     for (const BasemapOverlay::RasterRequest& raster : rasters)
         m_activeRasterIds << raster.layerId;
     if (reliefOn) m_activeRasterIds << QStringLiteral("hillshade");
+    if (canopyOn) m_activeRasterIds << QStringLiteral("vegetation");
 
     // MainWindow binds the stack during construction, before this widget has a
     // GL context. makeCurrent() and the texture build below both require one,
@@ -720,6 +732,12 @@ void ViewportWidget::applyRasterLayers(bool force) {
     } else {
         m_basemap.setHillshade(QImage(), 0.0f);
     }
+
+    if (canopyOn)
+        m_basemap.setCanopyTint(CanopyShade::render(m_engine->terrain()),
+                                canopy->opacity);
+    else
+        m_basemap.setCanopyTint(QImage(), 0.0f);
 
     makeCurrent();
     m_basemap.destroy();
