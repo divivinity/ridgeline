@@ -898,8 +898,9 @@ void testLayersPanelDrivesTheStack() {
     auto* los = panel.findChild<QCheckBox*>("LayerVisiblelos");
     CHECK(los && los->isChecked());
 
-    for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
-                           "comparison", "los", "pattern", "jamming", "fresnel"}) {
+    for (const char* id : {"satellite", "usgs-topo", "hillshade", "vegetation",
+                           "coverage", "comparison", "los", "pattern", "jamming",
+                           "fresnel"}) {
         CHECK(panel.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id)) != nullptr);
         CHECK(panel.findChild<QSlider*>(QString("LayerOpacity%1").arg(id)) != nullptr);
     }

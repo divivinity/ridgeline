@@ -139,6 +139,14 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     }
     j["vegetation"] = std::move(vegetation);
 
+    if (doc.canopyImport.enabled) {
+        j["canopyImport"] = {
+            {"sourceId", doc.canopyImport.sourceId},
+            {"developedPolicy", doc.canopyImport.developedPolicy},
+            {"assumedDevelopedCanopyM", doc.canopyImport.assumedDevelopedCanopyM},
+            {"retrievedUtc", doc.canopyImport.retrievedUtc}};
+    }
+
     // Serialize before opening anything: invalid strings must not truncate an
     // existing scenario. Commit checks flushing and atomic replacement too.
     const std::string payload = j.dump(2);
@@ -183,6 +191,18 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                 // keeps the invalid shape out of the editing UI.
                 if (area.valid()) doc.vegetation.push_back(area);
             }
+        }
+        // Absent in scenarios written before canopy could be imported.
+        if (j.contains("canopyImport") && j["canopyImport"].is_object()) {
+            const auto& entry = j["canopyImport"];
+            doc.canopyImport.enabled = true;
+            doc.canopyImport.sourceId = entry.value("sourceId", std::string{});
+            doc.canopyImport.developedPolicy =
+                entry.value("developedPolicy", std::string{"assume"});
+            doc.canopyImport.assumedDevelopedCanopyM =
+                entry.value("assumedDevelopedCanopyM", 10.0f);
+            doc.canopyImport.retrievedUtc =
+                entry.value("retrievedUtc", std::string{});
         }
         if (j.contains("layers") && j["layers"].is_array()) {
             for (const auto& entry : j["layers"]) {

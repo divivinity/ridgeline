@@ -45,6 +45,14 @@ public:
         m_hillshade = std::move(shade);
         m_hillshadeOpacity = opacity;
     }
+    // Painted over the composited rasters and the relief. Source-over rather
+    // than multiply, because canopy carries its own alpha: bare ground is
+    // transparent and must leave the imagery untouched. A null image disables
+    // it.
+    void setCanopyTint(QImage tint, float opacity) {
+        m_canopyTint = std::move(tint);
+        m_canopyOpacity = opacity;
+    }
 
     bool hasTexture() const { return m_hasTexture; }
     QString attribution() const { return m_attribution; }
@@ -75,6 +83,8 @@ private:
     std::vector<RasterRequest> m_rasterLayers;
     QImage m_hillshade;
     float  m_hillshadeOpacity = 0.0f;
+    QImage m_canopyTint;
+    float  m_canopyOpacity = 0.0f;
     QString m_providerName;
     QString m_lastError;
     ProgressCallback m_loadProgress;

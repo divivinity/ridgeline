@@ -6,6 +6,7 @@ LayerStack::LayerStack() {
         {"satellite",  "Satellite",        LayerKind::BaseRaster,     true,  0.86f},
         {"usgs-topo",  "USGS topographic", LayerKind::BaseRaster,     false, 1.0f},
         {"hillshade",  "Hillshade",        LayerKind::TerrainDerived, false, 0.6f},
+        {"vegetation", "Vegetation",       LayerKind::TerrainDerived, true,  0.55f},
         {"coverage",   "Coverage",         LayerKind::Analysis,       true,  1.0f},
         {"comparison", "Scenario compare", LayerKind::Analysis,       false, 1.0f},
         {"los",        "Line of sight",    LayerKind::Analysis,       false, 1.0f},
