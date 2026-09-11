@@ -156,6 +156,7 @@ if(RIDGELINE_LIVE_CANOPY_CHECK)
         src/data/LandfireCanopy.cpp src/data/RasterTiff.cpp
         src/data/TileBatchDownloader.cpp src/data/TerrainLoader.cpp
         src/sim/TerrainModel.cpp src/sim/VegetationAreas.cpp src/sim/RFModels.cpp
+        src/map/CanopyShade.cpp
         src/sim/SimEngine.cpp src/sim/FastSolver.cpp src/sim/FullSolver.cpp
         src/sim/MaterialLibrary.cpp src/sim/ItmPropagation.cpp
         src/data/AntennaPatternIO.cpp)

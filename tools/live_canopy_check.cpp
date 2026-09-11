@@ -2,11 +2,13 @@
 // terrain grid, fetch canopy for exactly its footprint, install it, and measure
 // the loss along a path. Not part of the suite - it needs the network.
 #include "data/CanopyLoader.h"
+#include "map/CanopyShade.h"
 #include "data/TerrainLoader.h"
 #include "sim/RFModels.h"
 #include "sim/SimEngine.h"
 
 #include <QCoreApplication>
+#include <QImage>
 #include <QNetworkAccessManager>
 
 #include <cstdio>
@@ -97,6 +99,19 @@ int main(int argc, char** argv) {
     for (float f : {150.0f, 450.0f, 900.0f, 1800.0f, 5800.0f}) {
         std::printf("   %6.0f MHz -> %5.1f dB vegetation loss\n",
                     f, RFModels::vegetationLossDb(depth, f));
+    }
+    // Render the map wash so the colour ramp, the alpha and - the part a test
+    // cannot see - the north/south orientation can be looked at.
+    const QImage wash = CanopyShade::render(live);
+    if (wash.isNull()) {
+        std::printf("wash     : nothing to draw\n");
+    } else {
+        const QString out = argc > 3 ? argv[3] : "canopy-wash.png";
+        const bool saved = wash.scaled(wash.width() * 2, wash.height() * 2,
+                                       Qt::KeepAspectRatio, Qt::FastTransformation)
+                               .save(out, "PNG");
+        std::printf("wash     : %dx%d -> %s (%s)\n", wash.width(), wash.height(),
+                    out.toUtf8().constData(), saved ? "saved" : "FAILED");
     }
     return 0;
 }
