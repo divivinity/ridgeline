@@ -34,6 +34,11 @@
 #include <QEventLoop>
 #include <QFutureWatcher>
 #include <QProgressDialog>
+#include <QNetworkAccessManager>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QDoubleSpinBox>
 #include <QPointer>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -185,6 +190,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     comparisonAct->setObjectName("ScenarioComparisonAction");
     QAction* calibrationAct = analysisMenu->addAction("Measurement &Calibration…");
     calibrationAct->setObjectName("MeasurementCalibrationAction");
+
+    QMenu* vegetationMenu = analysisMenu->addMenu("&Vegetation");
+    vegetationMenu->setObjectName("VegetationMenu");
+    QAction* loadCanopyAct = vegetationMenu->addAction("&Load Canopy for This Area…");
+    loadCanopyAct->setObjectName("LoadCanopyAction");
+    connect(loadCanopyAct, &QAction::triggered, this, &MainWindow::onLoadCanopy);
+    m_clearCanopyAct = vegetationMenu->addAction("&Clear Imported Canopy");
+    m_clearCanopyAct->setObjectName("ClearCanopyAction");
+    connect(m_clearCanopyAct, &QAction::triggered, this, &MainWindow::onClearCanopy);
+    QAction* canopyOptionsAct = vegetationMenu->addAction("Canopy &Options…");
+    canopyOptionsAct->setObjectName("CanopyOptionsAction");
+    connect(canopyOptionsAct, &QAction::triggered, this, &MainWindow::onCanopyOptions);
+    vegetationMenu->addSeparator();
+    // A permanently disabled entry, used as a label: what is loaded should be
+    // readable without opening a dialog, and there is nowhere else in this menu
+    // for it to live.
+    m_canopyStatusAct = vegetationMenu->addAction(QString());
+    m_canopyStatusAct->setEnabled(false);
 
     m_viewport = new ViewportWidget(&m_engine, this);
     setCentralWidget(m_viewport);
@@ -495,6 +518,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Queued after the deferred dock re-add above, so what is captured is the
     // arrangement the user actually starts with.
     refreshRecentMenus();
+    // Nothing is imported yet, so Clear starts disabled and the status line in
+    // the vegetation menu says so rather than being blank.
+    refreshCanopyActions();
 
     QTimer::singleShot(0, this, [this] {
         // Captured before any stored layout is applied, so Reset always returns
@@ -779,6 +805,273 @@ void MainWindow::clearCalibrationMeasurements() {
             ? "  Field measurements cleared · Applied correction retained"
             : "  Field measurements cleared");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Vegetation
+// ---------------------------------------------------------------------------
+
+QString MainWindow::canopySummary() const {
+    if (!m_canopy) return QStringLiteral("No canopy data loaded");
+    const CanopyProvenance& source = m_canopy->provenance;
+    const CanopyCoverage& coverage = m_canopy->coverage;
+    QString text = QString::fromStdString(source.productVintage);
+    text += QString(" · %1% of the area is vegetated")
+                .arg(100.0 * coverage.vegetatedFraction(), 0, 'f', 0);
+    if (coverage.assignedHeight > 0 &&
+        m_canopyOptions.developed != landfire::DevelopedPolicy::TreatAsBare)
+        text += QString(" · %1% of it at an assumed height")
+                    .arg(100.0 * coverage.assignedFraction(), 0, 'f', 0);
+    return text;
+}
+
+void MainWindow::refreshCanopyActions() {
+    if (m_clearCanopyAct) m_clearCanopyAct->setEnabled(static_cast<bool>(m_canopy));
+    if (m_canopyStatusAct) m_canopyStatusAct->setText(canopySummary());
+}
+
+void MainWindow::installCanopy(CanopyRaster raster) {
+    auto shared = std::make_shared<const CanopyRaster>(std::move(raster));
+    m_canopy = shared;
+
+    CanopySourceInfo info;
+    info.displayName = shared->provenance.displayName;
+    info.vintage = shared->provenance.productVintage;
+    info.licence = shared->provenance.licence;
+    info.attribution = shared->provenance.attribution;
+    info.retrievedUtc = shared->provenance.retrievedUtc;
+    info.sourceResolutionM = shared->provenance.sourceResolutionM;
+    info.vegetatedSamples = shared->coverage.vegetated;
+    info.assignedSamples = shared->coverage.assignedHeight;
+
+    // The sampler holds the raster, so it stays alive for exactly as long as
+    // the engine needs it and is re-placed on every later terrain load.
+    m_engine.setImportedCanopy(
+        [shared](const TerrainModel& terrain,
+                 std::vector<std::uint16_t>& heightDm,
+                 std::vector<std::uint8_t>& coverPct) {
+            return shared->sampleOnto(terrain, heightDm, coverPct);
+        },
+        std::move(info));
+
+    // Vegetation changes every predicted path, so whatever is on screen was
+    // computed for a different scene.
+    m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
+    invalidateScenarioComparisonCurrent();
+    invalidateCalibrationCurrent();
+    markScenarioDirty();
+    refreshCanopyActions();
+    if (m_viewport) m_viewport->refreshLayers();
+    refreshBottomBar();
+}
+
+void MainWindow::onLoadCanopy() {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
+    if (!m_engine.terrain().hasGeoReference()) {
+        QMessageBox::information(this, "Canopy needs real-world terrain",
+            "Vegetation is fetched for the ground the terrain covers, so the "
+            "terrain has to know where it is. Choose a location first, then "
+            "load canopy for it.");
+        return;
+    }
+
+    QProgressDialog progress("Contacting the LANDFIRE image service…", "Cancel",
+                             0, 0, this);
+    progress.setWindowTitle("Loading canopy");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setMinimumWidth(460);
+    progress.show();
+
+    QNetworkAccessManager network;
+    const CanopyLoader::Result result = CanopyLoader::loadForTerrain(
+        network, m_engine.terrain(), m_canopyOptions,
+        [&progress](int completed, int total) {
+            progress.setRange(0, std::max(total, 1));
+            progress.setValue(completed);
+            progress.setLabelText(QString("Canopy layers · %1 / %2")
+                                      .arg(completed).arg(total));
+        },
+        [&progress] { return progress.wasCanceled(); });
+    progress.close();
+
+    if (progress.wasCanceled()) {
+        m_statusLabel->setText("  Canopy loading cancelled");
+        return;
+    }
+    if (!result.ok()) {
+        m_statusLabel->setText("  Canopy not loaded · Existing vegetation kept");
+        QMessageBox::warning(this, "Could not load canopy",
+                             result.error.isEmpty()
+                                 ? QStringLiteral("The canopy layer came back unusable.")
+                                 : result.error);
+        return;
+    }
+
+    const CanopyProvenance source = result.canopy.provenance;
+    const CanopyCoverage coverage = result.canopy.coverage;
+    installCanopy(result.canopy);
+
+    m_statusLabel->setText("  " + canopySummary());
+
+    // Everything an operator needs to judge the number, in one place: what the
+    // data is, how old, what licence, how much of it was substituted, and that
+    // the attenuation model is an extrapolation rather than a standard.
+    QString detail = QString(
+        "<b>%1</b><br>%2 · %3 m ground sample · retrieved %4<br>%5<br><br>")
+        .arg(QString::fromStdString(source.displayName))
+        .arg(QString::fromStdString(source.productVintage))
+        .arg(source.sourceResolutionM, 0, 'f', 0)
+        .arg(QString::fromStdString(source.retrievedUtc))
+        .arg(QString::fromStdString(source.licence));
+    detail += QString("%1% of this area carries canopy.")
+                  .arg(100.0 * coverage.vegetatedFraction(), 0, 'f', 0);
+    if (!result.note.isEmpty()) detail += "<br>" + result.note + ".";
+    if (coverage.assignedHeight > 0 &&
+        m_canopyOptions.developed == landfire::DevelopedPolicy::AssumeHeight) {
+        detail += QString(
+            "<br><br>Over developed land LANDFIRE assigns a fixed canopy height "
+            "rather than measuring one — a nationwide 39 m for evergreen and "
+            "mixed forest, 19 m for deciduous. Those cells have been replaced "
+            "with an assumed %1 m. Change this under Analysis ▸ Vegetation ▸ "
+            "Canopy Options.")
+            .arg(m_canopyOptions.assumedDevelopedCanopyM, 0, 'f', 1);
+    }
+    detail += QStringLiteral(
+        "<br><br>The vegetation attenuation model is an engineering "
+        "extrapolation, not an ITU-R P.833 procedure: the standard has no "
+        "sanctioned terrestrial model for woodland with both terminals outside "
+        "it. Nothing here is validated against field measurements.");
+
+    QMessageBox note(QMessageBox::Information, "Canopy loaded", detail,
+                     QMessageBox::Ok, this);
+    note.setTextFormat(Qt::RichText);
+    note.exec();
+}
+
+void MainWindow::onClearCanopy() {
+    if (!m_canopy) return;
+    m_canopy.reset();
+    m_engine.clearImportedCanopy();
+    m_engine.setFieldGrid({});
+    m_solvedSignature.clear();
+    invalidateScenarioComparisonCurrent();
+    invalidateCalibrationCurrent();
+    markScenarioDirty();
+    refreshCanopyActions();
+    if (m_viewport) m_viewport->refreshLayers();
+    refreshBottomBar();
+    m_statusLabel->setText(m_engine.terrain().hasVegetation()
+        ? "  Imported canopy cleared · Hand-drawn vegetation kept"
+        : "  Imported canopy cleared");
+}
+
+void MainWindow::onCanopyOptions() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("Canopy options");
+    auto* form = new QFormLayout(&dialog);
+
+    auto* policy = new QComboBox(&dialog);
+    policy->addItem("Substitute an assumed height",
+                    static_cast<int>(landfire::DevelopedPolicy::AssumeHeight));
+    policy->addItem("Use the provider's value unchanged",
+                    static_cast<int>(landfire::DevelopedPolicy::UseSourceValue));
+    policy->addItem("Treat as bare ground",
+                    static_cast<int>(landfire::DevelopedPolicy::TreatAsBare));
+    policy->setCurrentIndex(policy->findData(
+        static_cast<int>(m_canopyOptions.developed)));
+
+    auto* assumed = new QDoubleSpinBox(&dialog);
+    assumed->setRange(0.0, 60.0);
+    assumed->setDecimals(1);
+    assumed->setSingleStep(0.5);
+    assumed->setSuffix(" m");
+    assumed->setValue(m_canopyOptions.assumedDevelopedCanopyM);
+
+    auto* explanation = new QLabel(
+        "Over developed land LANDFIRE does not measure canopy height. It assigns "
+        "a nationwide constant by vegetation type — 39 m for evergreen and mixed "
+        "forest, 19 m for deciduous — which would paint a tall forest across "
+        "every suburb. Ten metres is a mature residential tree, and is an "
+        "assumption rather than a measurement.", &dialog);
+    explanation->setWordWrap(true);
+    explanation->setMinimumWidth(420);
+
+    form->addRow(explanation);
+    form->addRow("Developed land", policy);
+    form->addRow("Assumed canopy height", assumed);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    form->addRow(buttons);
+
+    const auto syncEnabled = [policy, assumed] {
+        assumed->setEnabled(policy->currentData().toInt() ==
+                            static_cast<int>(landfire::DevelopedPolicy::AssumeHeight));
+    };
+    connect(policy, &QComboBox::currentIndexChanged, &dialog, syncEnabled);
+    syncEnabled();
+
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const auto chosen =
+        static_cast<landfire::DevelopedPolicy>(policy->currentData().toInt());
+    const float chosenHeight = static_cast<float>(assumed->value());
+    if (chosen == m_canopyOptions.developed &&
+        std::abs(chosenHeight - m_canopyOptions.assumedDevelopedCanopyM) < 1e-3f)
+        return;
+
+    m_canopyOptions.developed = chosen;
+    m_canopyOptions.assumedDevelopedCanopyM = chosenHeight;
+
+    // The policy is applied while decoding, so a loaded canopy has to be
+    // rebuilt. The request is unchanged, so this is a cache read rather than a
+    // second download.
+    if (!m_canopy) {
+        m_statusLabel->setText("  Canopy options saved");
+        return;
+    }
+    onLoadCanopy();
+}
+
+void MainWindow::restoreCanopyImport(const CanopyImport& record) {
+    if (!record.enabled) return;
+    if (!m_engine.terrain().hasGeoReference()) return;
+
+    if (record.developedPolicy == "source")
+        m_canopyOptions.developed = landfire::DevelopedPolicy::UseSourceValue;
+    else if (record.developedPolicy == "bare")
+        m_canopyOptions.developed = landfire::DevelopedPolicy::TreatAsBare;
+    else
+        m_canopyOptions.developed = landfire::DevelopedPolicy::AssumeHeight;
+    if (record.assumedDevelopedCanopyM > 0.0f)
+        m_canopyOptions.assumedDevelopedCanopyM = record.assumedDevelopedCanopyM;
+
+    QNetworkAccessManager network;
+    const CanopyLoader::Result result =
+        CanopyLoader::loadForTerrain(network, m_engine.terrain(), m_canopyOptions);
+    if (!result.ok()) {
+        // Opening a scenario must not fail because vegetation could not be
+        // restored, but the operator has to know the scene is missing it.
+        if (m_statusLabel)
+            m_statusLabel->setText("  Scenario opened · Canopy could not be "
+                                   "restored, so vegetation is missing");
+        return;
+    }
+
+    // Putting back what the file already recorded is not an edit. The caller
+    // decides whether the loaded document counts as clean - opening a scenario
+    // does, restoring a crash recovery does not - so this must not overrule it
+    // in either direction.
+    const bool wasDirty = m_scenarioDirty;
+    installCanopy(result.canopy);
+    m_scenarioDirty = wasDirty;
+    setWindowModified(isScenarioDirty());
 }
 
 void MainWindow::handleCalibrationTerrainChange() {
@@ -1629,6 +1922,22 @@ ScenarioDoc MainWindow::currentScenarioDoc() const {
     doc.layers.clear();
     for (const LayerStack::State& layer : m_layerStack.state())
         doc.layers.push_back({layer.id.toStdString(), layer.visible, layer.opacity});
+    doc.vegetation = m_engine.vegetation();
+    if (m_canopy && !m_canopy->provenance.empty()) {
+        doc.canopyImport.enabled = true;
+        doc.canopyImport.sourceId = m_canopy->provenance.sourceId;
+        doc.canopyImport.retrievedUtc = m_canopy->provenance.retrievedUtc;
+        doc.canopyImport.assumedDevelopedCanopyM =
+            m_canopyOptions.assumedDevelopedCanopyM;
+        switch (m_canopyOptions.developed) {
+            case landfire::DevelopedPolicy::AssumeHeight:
+                doc.canopyImport.developedPolicy = "assume"; break;
+            case landfire::DevelopedPolicy::UseSourceValue:
+                doc.canopyImport.developedPolicy = "source"; break;
+            case landfire::DevelopedPolicy::TreatAsBare:
+                doc.canopyImport.developedPolicy = "bare"; break;
+        }
+    }
     return doc;
 }
 
@@ -1839,6 +2148,17 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     else if (doc.mode == SimEngine::Mode::Engineering) m_modeCombo->setCurrentIndex(2);
     else m_modeCombo->setCurrentIndex(1);
     m_engine.setAntennas(doc.antennas);
+    // After setTerrain, so the areas rasterise onto the grid just installed.
+    m_engine.setVegetation(doc.vegetation);
+    // An imported canopy from a previous session, if any. Cleared first so a
+    // scenario without one never inherits the last scenario's vegetation.
+    m_canopy.reset();
+    m_engine.clearImportedCanopy();
+    if (doc.canopyImport.enabled) {
+        progress.setLabelText("Restoring canopy · Scenario settings loaded");
+        restoreCanopyImport(doc.canopyImport);
+    }
+    refreshCanopyActions();
     if (!doc.layers.empty()) {
         std::vector<LayerStack::State> layers;
         layers.reserve(doc.layers.size());

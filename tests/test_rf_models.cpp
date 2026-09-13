@@ -1,3 +1,4 @@
+#include "sim/VegetationAreas.h"
 #include "sim/RFModels.h"
 #include "sim/SolveSignature.h"
 #include "data/TerrainLoader.h"
@@ -626,6 +627,209 @@ void testSolveSignatureTracksEveryInput() {
 
     TerrainModel other = TerrainLoader::makeFlat(64, 64, 45.0f, 0.0f);
     CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, other) != base);
+
+    // Vegetation changes the result, so it must change the fingerprint - both
+    // adding it and changing its height.
+    TerrainModel wooded = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(wooded, {{100.0f, 100.0f, 500.0f, 500.0f, 15.0f, "wood"}});
+    const std::string woodedSig =
+        SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, wooded);
+    CHECK(woodedSig != base);
+
+    TerrainModel taller = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(taller, {{100.0f, 100.0f, 500.0f, 500.0f, 20.0f, "wood"}});
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, taller)
+          != woodedSig);
+
+    TerrainModel moved = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(moved, {{200.0f, 200.0f, 600.0f, 600.0f, 15.0f, "wood"}});
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, moved)
+          != woodedSig);
+
+    // Clearing it returns to the bare fingerprint.
+    TerrainModel cleared = TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f);
+    VegetationAreas::apply(cleared, {});
+    CHECK(SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration, cleared)
+          == SolveSignature::of(antennas, receiver, SimEngine::Mode::Fast, calibration,
+                                TerrainLoader::makeFlat(64, 64, 30.0f, 0.0f)));
+}
+
+
+// Vegetation attenuation. The shape matters more than any single number: the
+// model this replaces was unbounded linear and reached ~96 dB at 1 km of
+// woodland against a measured asymptote near 26.5 dB.
+void testVegetationLossSaturates() {
+    // No vegetation, no loss. Degenerate inputs must not produce one either.
+    CHECK(RFModels::vegetationLossDb(0.0f, 949.0f) == 0.0f);
+    CHECK(RFModels::vegetationLossDb(-5.0f, 949.0f) == 0.0f);
+    CHECK(RFModels::vegetationLossDb(100.0f, 0.0f) == 0.0f);
+    CHECK(RFModels::vegetationLossDb(std::numeric_limits<float>::quiet_NaN(), 949.0f) == 0.0f);
+    CHECK(RFModels::vegetationLossDb(100.0f, std::numeric_limits<float>::quiet_NaN()) == 0.0f);
+
+    // Shallow depth behaves like the specific attenuation, since the
+    // exponential is still nearly linear there.
+    const float gamma949 = RFModels::vegetationGammaDbPerM(949.0f);
+    CHECK(std::abs(gamma949 - 0.17f) < 1e-4f);
+    const float shallow = RFModels::vegetationLossDb(10.0f, 949.0f);
+    CHECK(std::abs(shallow - gamma949 * 10.0f) < 0.1f);
+
+    // THE POINT OF THE MODEL: it saturates. Ten times the depth must not give
+    // ten times the loss, and the result must stay under the ceiling forever.
+    const float ceiling = RFModels::vegetationMaxLossDb(949.0f);
+    CHECK(std::abs(ceiling - 26.5f) < 1e-4f);
+    const float deep = RFModels::vegetationLossDb(1000.0f, 949.0f);
+    CHECK(deep < ceiling);
+    CHECK(deep > 0.9f * ceiling);              // but close to it by 1 km
+    // Asymptotic: at absurd depth it reaches the ceiling in float arithmetic
+    // and must never exceed it.
+    CHECK(RFModels::vegetationLossDb(100000.0f, 949.0f) <= ceiling);
+    // Sub-linear where it matters: a linear dB/m form would give gamma*1000,
+    // which is what produced ~96 dB at 1 km before.
+    CHECK(deep < 0.25f * gamma949 * 1000.0f);
+
+    // Monotonic in depth, and never negative.
+    float previous = 0.0f;
+    for (float d = 0.0f; d <= 2000.0f; d += 25.0f) {
+        const float loss = RFModels::vegetationLossDb(d, 949.0f);
+        CHECK(loss >= previous - 1e-4f);
+        CHECK(loss >= 0.0f);
+        previous = loss;
+    }
+
+    // Higher frequency attenuates more, across the anchored range.
+    CHECK(RFModels::vegetationLossDb(50.0f, 2118.0f) >
+          RFModels::vegetationLossDb(50.0f, 105.9f));
+
+    // Held flat outside the anchors rather than extrapolated: P.833's own Am
+    // values stop being monotone above ~2 GHz, and a monotone fit reaches ~94 dB
+    // at 28 GHz against a measured ~34.5 dB.
+    CHECK(RFModels::vegetationMaxLossDb(28000.0f) == RFModels::vegetationMaxLossDb(2118.0f));
+    CHECK(RFModels::vegetationGammaDbPerM(28000.0f) == RFModels::vegetationGammaDbPerM(2118.0f));
+    CHECK(RFModels::vegetationMaxLossDb(1.0f) == RFModels::vegetationMaxLossDb(105.9f));
+    CHECK(RFModels::vegetationLossDb(1000.0f, 28000.0f) < 40.0f);
+
+    // A 1 km stand must never approach the ~96 dB the previous linear form gave.
+    CHECK(RFModels::vegetationLossDb(1000.0f, 949.0f) < 30.0f);
+}
+
+
+// Depth measurement and the end-to-end effect on a solve. The model is only
+// useful if the geometry feeding it is right.
+void testVegetationDepthAndSolveEffect() {
+    // Flat ground, a band of 20 m canopy across the middle of the scene.
+    TerrainModel t = TerrainLoader::makeFlat(64, 64, 10.0f, 0.0f);
+    CHECK(!t.hasVegetation());
+    CHECK(t.foliageDepthM({0, 5, 0}, {600, 5, 0}) == 0.0f);
+
+    t.canopyHeightDm.assign(t.heights.size(), 0);
+    for (int z = 0; z < t.height; ++z)
+        for (int x = 20; x < 40; ++x)
+            t.canopyHeightDm[z * t.width + x] = 200;   // 20.0 m
+    CHECK(t.hasVegetation());
+    t.validate();   // must accept a matching grid
+
+    // A ray at 5 m altitude crosses the band: about 200 m of canopy between
+    // x=200 and x=400 on a 10 m grid.
+    const float depth = t.foliageDepthM({0.0f, 5.0f, 300.0f}, {630.0f, 5.0f, 300.0f});
+    CHECK(depth > 150.0f && depth < 250.0f);
+
+    // Above the canopy there is no vegetation on the path at all.
+    CHECK(t.foliageDepthM({0.0f, 40.0f, 300.0f}, {630.0f, 40.0f, 300.0f}) < 1.0f);
+
+    // A path entirely outside the band never enters it.
+    CHECK(t.foliageDepthM({0.0f, 5.0f, 300.0f}, {150.0f, 5.0f, 300.0f}) == 0.0f);
+
+    // A mismatched grid is a bug, not a partially usable model.
+    TerrainModel bad = t;
+    bad.canopyHeightDm.pop_back();
+    bool rejected = false;
+    try { bad.validate(); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+
+    // End to end: the same scene with and without vegetation must differ, and
+    // vegetation must never improve the signal.
+    std::vector<Antenna> antennas(1);
+    antennas[0].position = {50.0f, 15.0f, 300.0f};
+    antennas[0].frequencyMHz = 949.0f;
+    antennas[0].powerW = 50.0f;
+    MaterialLibrary materials;
+    FastSolver solver;
+    solver.gridResolution = 40.0f;
+
+    TerrainModel bare = TerrainLoader::makeFlat(64, 64, 10.0f, 0.0f);
+    const FieldGrid withoutVeg = solver.solve(bare, antennas, materials);
+    const FieldGrid withVeg = solver.solve(t, antennas, materials);
+    CHECK(withoutVeg.valid() && withVeg.valid());
+    CHECK(withoutVeg.dbm.size() == withVeg.dbm.size());
+
+    int weaker = 0, stronger = 0;
+    for (std::size_t i = 0; i < withVeg.dbm.size(); ++i) {
+        if (!std::isfinite(withVeg.dbm[i]) || !std::isfinite(withoutVeg.dbm[i])) continue;
+        if (withVeg.dbm[i] < withoutVeg.dbm[i] - 0.01f) ++weaker;
+        if (withVeg.dbm[i] > withoutVeg.dbm[i] + 0.01f) ++stronger;
+    }
+    CHECK(weaker > 0);      // vegetation actually reaches the solve
+    CHECK(stronger == 0);   // and never helps
+}
+
+
+// Hand-drawn stands, stored as areas and rasterised into the canopy grid.
+void testVegetationAreasRasterise() {
+    TerrainModel t = TerrainLoader::makeFlat(64, 64, 10.0f, 0.0f);   // 630 m square
+
+    // No areas means no vegetation at all, not a grid of zeroes that
+    // hasVegetation() would then report as present.
+    VegetationAreas::apply(t, {});
+    CHECK(!t.hasVegetation());
+    CHECK(t.canopyHeightDm.empty());
+
+    // An invalid area is ignored rather than producing an empty stand.
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 50.0f, 200.0f, 15.0f, "inverted"}});
+    CHECK(!t.hasVegetation());
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 200.0f, 200.0f, 0.0f, "zero height"}});
+    CHECK(!t.hasVegetation());
+
+    // A real stand paints its footprint and nothing else.
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 200.0f, 200.0f, 15.0f, "wood"}});
+    CHECK(t.hasVegetation());
+    CHECK(t.canopyHeightDm.size() == t.heights.size());
+    t.validate();
+    CHECK(std::abs(t.canopyHeightAt(15, 15) - 15.0f) < 0.06f);   // inside
+    CHECK(t.canopyHeightAt(1, 1) == 0.0f);                       // outside
+    CHECK(t.canopyHeightAt(60, 60) == 0.0f);
+
+    // Height is clamped to what a decimetre byte can carry, not wrapped.
+    VegetationAreas::apply(t, {{0.0f, 0.0f, 630.0f, 630.0f, 400.0f, "impossible"}});
+    CHECK(std::abs(t.canopyHeightAt(30, 30) - VegetationAreas::kMaxCanopyHeightM) < 0.06f);
+
+    // Overlapping stands are one canopy at the tallest height, not a sum.
+    VegetationAreas::apply(t, {
+        {100.0f, 100.0f, 300.0f, 300.0f, 10.0f, "short"},
+        {200.0f, 200.0f, 400.0f, 400.0f, 20.0f, "tall"},
+    });
+    CHECK(std::abs(t.canopyHeightAt(25, 25) - 20.0f) < 0.06f);   // in both
+    CHECK(std::abs(t.canopyHeightAt(15, 15) - 10.0f) < 0.06f);   // short only
+    CHECK(std::abs(t.canopyHeightAt(38, 38) - 20.0f) < 0.06f);   // tall only
+
+    // An area entirely off the terrain leaves nothing behind.
+    VegetationAreas::apply(t, {{5000.0f, 5000.0f, 6000.0f, 6000.0f, 15.0f, "elsewhere"}});
+    CHECK(!t.hasVegetation());
+
+    // An area partly off the terrain still paints the part that is on it.
+    VegetationAreas::apply(t, {{-500.0f, -500.0f, 150.0f, 150.0f, 12.0f, "overhang"}});
+    CHECK(t.hasVegetation());
+    CHECK(std::abs(t.canopyHeightAt(0, 0) - 12.0f) < 0.06f);
+    CHECK(t.canopyHeightAt(50, 50) == 0.0f);
+
+    // Reapplying replaces rather than accumulating.
+    VegetationAreas::apply(t, {{100.0f, 100.0f, 200.0f, 200.0f, 15.0f, "wood"}});
+    CHECK(t.canopyHeightAt(0, 0) == 0.0f);
+    CHECK(std::abs(t.canopyHeightAt(15, 15) - 15.0f) < 0.06f);
+
+    const VegetationArea probe{0.0f, 0.0f, 100.0f, 100.0f, 10.0f, ""};
+    CHECK(probe.contains(50.0f, 50.0f));
+    CHECK(!probe.contains(150.0f, 50.0f));
+    CHECK(probe.valid());
 }
 
 int main() {
@@ -648,6 +852,9 @@ int main() {
     testScenarioV5RoundTrip();
     testLegacyScenarioDefaultsReceiverHeight();
     testSolveSignatureTracksEveryInput();
+    testVegetationLossSaturates();
+    testVegetationDepthAndSolveEffect();
+    testVegetationAreasRasterise();
     if (failures == 0) std::cout << "RF model tests passed.\n";
     return failures ? 1 : 0;
 }

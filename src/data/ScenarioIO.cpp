@@ -130,6 +130,23 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     }
     j["layers"] = std::move(layers);
 
+    json vegetation = json::array();
+    for (const auto& area : doc.vegetation) {
+        vegetation.push_back({{"minX", area.minX}, {"minZ", area.minZ},
+                              {"maxX", area.maxX}, {"maxZ", area.maxZ},
+                              {"canopyHeightM", area.canopyHeightM},
+                              {"name", area.name}});
+    }
+    j["vegetation"] = std::move(vegetation);
+
+    if (doc.canopyImport.enabled) {
+        j["canopyImport"] = {
+            {"sourceId", doc.canopyImport.sourceId},
+            {"developedPolicy", doc.canopyImport.developedPolicy},
+            {"assumedDevelopedCanopyM", doc.canopyImport.assumedDevelopedCanopyM},
+            {"retrievedUtc", doc.canopyImport.retrievedUtc}};
+    }
+
     // Serialize before opening anything: invalid strings must not truncate an
     // existing scenario. Commit checks flushing and atomic replacement too.
     const std::string payload = j.dump(2);
@@ -159,6 +176,34 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
         // Absent in scenarios written before layers existed, so its absence is
         // not an error. Ids the running build does not know are kept out here
         // and ignored by the stack, leaving a newer file loadable.
+        // Absent in scenarios written before vegetation existed.
+        if (j.contains("vegetation") && j["vegetation"].is_array()) {
+            for (const auto& entry : j["vegetation"]) {
+                if (!entry.is_object()) continue;
+                VegetationArea area;
+                area.minX = entry.value("minX", 0.0f);
+                area.minZ = entry.value("minZ", 0.0f);
+                area.maxX = entry.value("maxX", 0.0f);
+                area.maxZ = entry.value("maxZ", 0.0f);
+                area.canopyHeightM = entry.value("canopyHeightM", 0.0f);
+                area.name = entry.value("name", std::string{});
+                // A malformed area would paint nothing anyway; dropping it here
+                // keeps the invalid shape out of the editing UI.
+                if (area.valid()) doc.vegetation.push_back(area);
+            }
+        }
+        // Absent in scenarios written before canopy could be imported.
+        if (j.contains("canopyImport") && j["canopyImport"].is_object()) {
+            const auto& entry = j["canopyImport"];
+            doc.canopyImport.enabled = true;
+            doc.canopyImport.sourceId = entry.value("sourceId", std::string{});
+            doc.canopyImport.developedPolicy =
+                entry.value("developedPolicy", std::string{"assume"});
+            doc.canopyImport.assumedDevelopedCanopyM =
+                entry.value("assumedDevelopedCanopyM", 10.0f);
+            doc.canopyImport.retrievedUtc =
+                entry.value("retrievedUtc", std::string{});
+        }
         if (j.contains("layers") && j["layers"].is_array()) {
             for (const auto& entry : j["layers"]) {
                 if (!entry.is_object()) continue;

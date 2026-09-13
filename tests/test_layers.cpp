@@ -1,6 +1,7 @@
 // Headless tests for the map layer model. No widgets and no GL context, so
 // these run on every platform and in the default (non-GUI) configure.
 #include "map/LayerStack.h"
+#include "map/CanopyShade.h"
 #include "map/Hillshade.h"
 #include "map/TileProviders.h"
 #include "map/MapMeasure.h"
@@ -21,16 +22,66 @@ void check(bool ok, const char* what) {
     if (!ok) ++failures;
 }
 
+void testCanopyShade() {
+    TerrainModel bare = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    check(CanopyShade::render(bare).isNull(),
+          "terrain with no vegetation renders no canopy wash at all, rather "
+          "than a transparent image that would make the layer look active");
+
+    TerrainModel wooded = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    std::vector<std::uint16_t> heights(wooded.heights.size(), 0);
+    // One tall stand in the north-west, one short one in the south-east.
+    heights[static_cast<std::size_t>(wooded.height - 1) * wooded.width] = 300;
+    heights[0] = 30;
+    VegetationAreas::apply(wooded, {}, heights, {});
+
+    const QImage wash = CanopyShade::render(wooded);
+    check(!wash.isNull() && wash.width() == 8 && wash.height() == 8,
+          "the canopy wash has one pixel per terrain sample");
+
+    // Image row 0 is the north; terrain row 0 is the south. Getting this
+    // backwards would mirror the vegetation against the terrain it describes.
+    const QColor north = wash.pixelColor(0, 0);
+    const QColor south = wash.pixelColor(0, 7);
+    check(north.alpha() > 0 && south.alpha() > 0,
+          "both stands are painted");
+    check(north.green() < south.green() && north.red() < south.red(),
+          "taller canopy is painted a deeper green, and the tall stand lands "
+          "on the northern row where it was placed");
+    check(wash.pixelColor(4, 4).alpha() == 0,
+          "bare ground stays fully transparent, so imagery shows through");
+
+    // Cover thins the wash without changing where it is.
+    TerrainModel sparse = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    VegetationAreas::apply(sparse, {}, heights,
+                           std::vector<std::uint8_t>(sparse.heights.size(), 20));
+    const QImage thin = CanopyShade::render(sparse);
+    check(!thin.isNull() &&
+          thin.pixelColor(0, 0).alpha() < wash.pixelColor(0, 0).alpha(),
+          "sparse crown cover paints a thinner wash than full cover");
+    check(thin.pixelColor(0, 0).alpha() > 0,
+          "sparse cover still shows, rather than vanishing into the imagery");
+
+    // A grid that exists but is empty is not something to draw.
+    TerrainModel emptyGrid = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    emptyGrid.canopyHeightDm.assign(emptyGrid.heights.size(), 0);
+    check(CanopyShade::render(emptyGrid).isNull(),
+          "a canopy grid that is present but entirely bare renders nothing");
+}
+
 void testDefaults() {
     LayerStack stack;
-    check(stack.size() == 9, "stack has nine default layers");
+    check(stack.size() == 10, "stack has ten default layers");
     check(stack.at(0).id == "satellite", "satellite is the bottom layer");
-    check(stack.at(8).id == "fresnel", "fresnel is the top layer");
+    check(stack.at(9).id == "fresnel", "fresnel is the top layer");
     check(stack.at(0).visible, "satellite starts visible");
     check(!stack.find("usgs-topo")->visible, "topo starts hidden");
     check(!stack.find("hillshade")->visible, "hillshade starts hidden");
     check(stack.find("coverage")->visible, "coverage starts visible");
     check(!stack.find("los")->visible, "los starts hidden");
+    check(stack.find("vegetation")->visible,
+          "vegetation starts visible, so imported canopy is seen as soon as it "
+          "is loaded rather than needing to be found in a panel");
     check(stack.find("missing") == nullptr, "unknown id returns null");
 }
 
@@ -66,9 +117,9 @@ void testReorder() {
     stack.move("hillshade", 0);
     check(stack.at(0).id == "hillshade", "move places a layer at the requested index");
     check(stack.at(1).id == "satellite", "move shifts the displaced layer up");
-    check(stack.size() == 9, "move does not change the layer count");
+    check(stack.size() == 10, "move does not change the layer count");
     stack.move("hillshade", 99);
-    check(stack.at(8).id == "hillshade", "an out-of-range index clamps to the top");
+    check(stack.at(9).id == "hillshade", "an out-of-range index clamps to the top");
 }
 
 void testVisibleOfKind() {
@@ -82,6 +133,11 @@ void testVisibleOfKind() {
     stack.setVisible("satellite", false);
     check(stack.visibleOfKind(LayerKind::BaseRaster).size() == 1,
           "hiding a layer removes it from the result");
+    // Vegetation is terrain-derived and starts visible, so it has to be turned
+    // off for this to be a kind with nothing visible.
+    check(stack.visibleOfKind(LayerKind::TerrainDerived).size() == 1,
+          "vegetation is the one terrain-derived layer visible by default");
+    stack.setVisible("vegetation", false);
     check(stack.visibleOfKind(LayerKind::TerrainDerived).empty(),
           "a kind with nothing visible returns empty");
 }
@@ -98,18 +154,18 @@ void testScenarioRoundTrip() {
     check(restored.find("hillshade")->visible, "applyState restores visibility");
     check(std::abs(restored.find("hillshade")->opacity - 0.3f) < 1e-6f,
           "applyState restores opacity");
-    check(restored.size() == 9, "applyState keeps every layer");
+    check(restored.size() == 10, "applyState keeps every layer");
 
     LayerStack unknown;
     unknown.applyState({{"not-a-layer", true, 1.0f}});
-    check(unknown.size() == 9, "an unknown id is ignored, not inserted");
+    check(unknown.size() == 10, "an unknown id is ignored, not inserted");
     check(unknown.at(0).id == "satellite", "an unknown id leaves order intact");
 
     // A partial list must place the named layers first and keep the rest.
     LayerStack partial;
     partial.applyState({{"fresnel", true, 0.5f}});
     check(partial.at(0).id == "fresnel", "a partial list orders named layers first");
-    check(partial.size() == 9, "a partial list keeps unnamed layers");
+    check(partial.size() == 10, "a partial list keeps unnamed layers");
     check(partial.at(1).id == "satellite", "unnamed layers keep their relative order");
 
     LayerStack empty;
@@ -311,6 +367,7 @@ void testScaleBar() {
 
 int main() {
     testDefaults();
+    testCanopyShade();
     testVisibilityAndOpacity();
     testReorder();
     testVisibleOfKind();

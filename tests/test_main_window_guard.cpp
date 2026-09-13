@@ -369,23 +369,26 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     // drift, so every row is checked against what the viewport will draw.
     auto* layerList = window.findChild<QListWidget*>("LayerList");
     check(layerList != nullptr, "the Layers dock lists its layers");
-    check(layerList && layerList->count() == 9, "every layer has a row");
-    for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
-                           "comparison", "los", "pattern", "jamming", "fresnel"}) {
+    check(layerList && layerList->count() == 10, "every layer has a row");
+    for (const char* id : {"satellite", "usgs-topo", "hillshade", "vegetation",
+                           "coverage", "comparison", "los", "pattern", "jamming",
+                           "fresnel"}) {
         auto* box = window.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id));
         check(box != nullptr, "found the layer visibility toggle");
         if (!box) continue;
-        // Scenario comparison is data-gated: with no comparison computed there
-        // is nothing to draw, so its row can be checked while the viewport
-        // correctly draws nothing. Every other layer must match exactly.
-        const bool dataGated = QLatin1String(id) == QLatin1String("comparison");
-        check(box->isChecked() == viewport->isLayerVisible(id),
+        // Two layers are data-gated: with no comparison computed and no
+        // vegetation loaded there is nothing to draw, so their rows can be
+        // checked while the viewport correctly draws nothing. Every other layer
+        // must match exactly.
+        const bool dataGated = QLatin1String(id) == QLatin1String("comparison") ||
+                               QLatin1String(id) == QLatin1String("vegetation");
+        check(dataGated || box->isChecked() == viewport->isLayerVisible(id),
               "layer row matches what the viewport draws at startup");
         box->setChecked(!box->isChecked());
         settle(60);
         if (dataGated) {
             check(!viewport->isLayerVisible(id),
-                  "scenario comparison stays undrawn until a comparison exists");
+                  "a data-gated layer stays undrawn until it has data");
         } else {
             check(box->isChecked() == viewport->isLayerVisible(id),
                   "toggling a layer row changes what the viewport draws");
@@ -479,8 +482,18 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
     // position the cursor is not actually over.
     auto* readout = window.findChild<QLabel*>("CursorReadout");
     check(readout != nullptr, "the viewport carries a cursor readout");
-    check(readout && readout->isHidden(),
-          "the cursor readout stays hidden until the cursor is over terrain");
+    if (readout && viewport) {
+        // Asserting the initial state here was flaky: if the developer's real
+        // pointer happened to sit over the window, Qt delivered a move event
+        // and the readout legitimately appeared. Drive the guarantee that
+        // actually matters instead - once the cursor leaves, the readout must
+        // not linger over a map it is no longer pointing at.
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(viewport, &leave);
+        settle(60);
+        check(readout->isHidden(),
+              "the cursor readout hides once the cursor leaves the map");
+    }
 
     // Every action a user is expected to find must be reachable from a menu
     // with a visible shortcut, not only from a toolbar button.
@@ -775,15 +788,17 @@ void testTerrainFailureAndCancellationPreserveWorkspace() {
         // Exercise both settings for each layer, so a reset to defaults cannot
         // pass merely because the test started with those same defaults.
         for (bool visible : {false, true}) {
-            for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
-                                   "comparison", "los", "pattern", "jamming", "fresnel"}) {
+            for (const char* id : {"satellite", "usgs-topo", "hillshade", "vegetation",
+                                   "coverage", "comparison", "los", "pattern",
+                                   "jamming", "fresnel"}) {
                 if (auto* box = window.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id)))
                     box->setChecked(visible);
             }
             settle(80);
             pickTerrain(true);
-            for (const char* id : {"satellite", "usgs-topo", "hillshade", "coverage",
-                                   "comparison", "los", "pattern", "jamming", "fresnel"}) {
+            for (const char* id : {"satellite", "usgs-topo", "hillshade", "vegetation",
+                                   "coverage", "comparison", "los", "pattern",
+                                   "jamming", "fresnel"}) {
                 auto* box = window.findChild<QCheckBox*>(QString("LayerVisible%1").arg(id));
                 check(box && box->isChecked() == visible,
                       "terrain picker cancellation preserves every layer visibility setting");

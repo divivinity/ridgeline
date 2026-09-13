@@ -337,6 +337,14 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
             painter.setCompositionMode(QPainter::CompositionMode_Multiply);
             painter.setOpacity(std::clamp(m_hillshadeOpacity, 0.0f, 1.0f));
             painter.drawImage(0, 0, m_hillshade.convertToFormat(QImage::Format_RGBA8888));
+            if (!m_canopyTint.isNull() && m_canopyOpacity > 0.0f) {
+                painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                painter.setOpacity(std::clamp(m_canopyOpacity, 0.0f, 1.0f));
+                painter.drawImage(QRectF(0, 0, relief.width(), relief.height()),
+                                  m_canopyTint.convertToFormat(QImage::Format_RGBA8888),
+                                  QRectF(0, 0, m_canopyTint.width(),
+                                         m_canopyTint.height()));
+            }
         }
         // Hillshade::render is north-up; the mesh's v axis starts at the south.
         if (!uploadTexture(relief.mirrored(false, true), expectedContext)) return false;
@@ -495,6 +503,7 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
     // Relief alone is a legitimate map: composite it over neutral ground so it
     // stays readable when no raster loaded or none was requested.
     const bool haveHillshade = !m_hillshade.isNull() && m_hillshadeOpacity > 0.0f;
+    const bool haveCanopy = !m_canopyTint.isNull() && m_canopyOpacity > 0.0f;
     if (layersLoaded == 0 && !haveHillshade) return false;
     if (layersLoaded == 0 && haveHillshade) {
         mosaic.fill(QColor(150, 150, 150));
@@ -532,6 +541,17 @@ bool BasemapOverlay::loadTextureForTerrain(const TerrainModel& terrain) {
             painter.drawImage(QRectF(0, 0, targetW, targetH),
                               m_hillshade.convertToFormat(QImage::Format_RGBA8888),
                               QRectF(0, 0, m_hillshade.width(), m_hillshade.height()));
+        }
+        if (haveCanopy) {
+            // Over the relief, not under it: vegetation sits on the ground the
+            // shading describes, so the wash should read as canopy on a lit
+            // hillside rather than as hillside seen through canopy.
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            painter.setOpacity(std::clamp(m_canopyOpacity, 0.0f, 1.0f));
+            painter.drawImage(QRectF(0, 0, targetW, targetH),
+                              m_canopyTint.convertToFormat(QImage::Format_RGBA8888),
+                              QRectF(0, 0, m_canopyTint.width(),
+                                     m_canopyTint.height()));
         }
     }
     image = image.mirrored(false, true);

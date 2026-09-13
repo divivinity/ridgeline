@@ -16,6 +16,12 @@ void TerrainModel::validate() const {
     if (!std::isfinite(sx) || !std::isfinite(sz) || sx <= 0 || sz <= 0 ||
         !std::isfinite(cellSizeX) || !std::isfinite(cellSizeZ) || cellSizeX < 0 || cellSizeZ < 0)
         throw std::invalid_argument("Terrain sample spacing must be finite and positive.");
+    if (!canopyHeightDm.empty() && canopyHeightDm.size() != heights.size())
+        throw std::invalid_argument(
+            "Vegetation grid must match the terrain grid sample for sample.");
+    if (!canopyCoverPct.empty() && canopyCoverPct.size() != heights.size())
+        throw std::invalid_argument(
+            "Canopy cover grid must match the terrain grid sample for sample.");
     if (std::any_of(heights.begin(), heights.end(), [](float h) { return !std::isfinite(h); }))
         throw std::invalid_argument("Terrain contains missing elevation. Load a complete elevation dataset before solving.");
     const glm::vec3 extent = worldSize();
@@ -155,17 +161,91 @@ bool TerrainModel::lineOfSight(glm::vec3 from, glm::vec3 to, int steps) const {
     return true;
 }
 
+float TerrainModel::canopyHeightAt(int x, int z) const {
+    if (canopyHeightDm.empty()) return 0.0f;
+    if (x < 0 || z < 0 || x >= width || z >= height) return 0.0f;
+    const std::size_t index = static_cast<std::size_t>(z) * width + x;
+    if (index >= canopyHeightDm.size()) return 0.0f;
+    return static_cast<float>(canopyHeightDm[index]) * 0.1f;
+}
+
+float TerrainModel::canopyCoverAt(int x, int z) const {
+    // Unknown cover reads as complete cover, so a scene carrying heights but no
+    // cover measurement attenuates exactly as it did before cover existed.
+    if (canopyCoverPct.empty()) return 1.0f;
+    if (x < 0 || z < 0 || x >= width || z >= height) return 1.0f;
+    const std::size_t index = static_cast<std::size_t>(z) * width + x;
+    if (index >= canopyCoverPct.size()) return 1.0f;
+    return static_cast<float>(canopyCoverPct[index]) * 0.01f;
+}
+
+float TerrainModel::canopyTopAtWorld(float worldX, float worldZ) const {
+    const float ground = heightAtWorld(worldX, worldZ);
+    if (canopyHeightDm.empty()) return ground;
+    // Nearest sample rather than bilinear: canopy is a discontinuous surface at
+    // a stand edge, and interpolating it would invent a ramp that is not there.
+    const float sx = metersPerCellX(), sz = metersPerCellZ();
+    if (!(sx > 0.0f) || !(sz > 0.0f)) return ground;
+    const int x = static_cast<int>(std::lround(worldX / sx));
+    const int z = static_cast<int>(std::lround(worldZ / sz));
+    return ground + canopyHeightAt(x, z);
+}
+
+float TerrainModel::canopyCoverAtWorld(float worldX, float worldZ) const {
+    if (canopyCoverPct.empty()) return 1.0f;
+    const float sx = metersPerCellX(), sz = metersPerCellZ();
+    if (!(sx > 0.0f) || !(sz > 0.0f)) return 1.0f;
+    return canopyCoverAt(static_cast<int>(std::lround(worldX / sx)),
+                         static_cast<int>(std::lround(worldZ / sz)));
+}
+
+float TerrainModel::foliageDepthM(glm::vec3 from, glm::vec3 to, int steps) const {
+    if (canopyHeightDm.empty()) return 0.0f;
+    if (steps <= 0) steps = adaptivePathSteps(from, to);
+    if (steps < 2) return 0.0f;
+    const glm::vec3 dir = to - from;
+    const float pathLength = glm::length(dir);
+    if (!(pathLength > 0.0f)) return 0.0f;
+    const float segment = pathLength / static_cast<float>(steps);
+
+    float depth = 0.0f;
+    for (int i = 1; i < steps; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(steps);
+        const glm::vec3 p = from + dir * t;
+        const float bulge = earthBulgeM(from, to, t);
+        const float ground = heightAtWorld(p.x, p.z) + bulge;
+        const float canopy = canopyTopAtWorld(p.x, p.z) + bulge;
+        // Inside the canopy: under its top, but not already underground. A
+        // sample below ground is terrain blockage, which diffraction handles.
+        //
+        // Cover scales the depth rather than the coefficient: crossing 200 m of
+        // 60% cover puts 120 m of crown in the way. That reading is an
+        // engineering choice - P.833 has no cover term - and is documented as
+        // one. Absent cover data leaves the factor at one.
+        if (p.y < canopy && p.y >= ground)
+            depth += segment * canopyCoverAtWorld(p.x, p.z);
+    }
+    return depth;
+}
+
 TerrainModel::LOSStatus TerrainModel::lineOfSightStatus(
-        glm::vec3 from, glm::vec3 to, int steps) const {
+        glm::vec3 from, glm::vec3 to, int steps, float* outFoliageDepthM) const {
     if (steps <= 0) steps = adaptivePathSteps(from, to);
     glm::vec3 dir = to - from;
+    const bool wantFoliage = outFoliageDepthM != nullptr && !canopyHeightDm.empty();
+    const float segment = steps > 0 ? glm::length(dir) / static_cast<float>(steps) : 0.0f;
+    float foliage = 0.0f;
     int blocked = 0;
     for (int i = 1; i < steps; ++i) {
         float t = static_cast<float>(i) / static_cast<float>(steps);
         glm::vec3 p = from + dir * t;
-        if (p.y < heightAtWorld(p.x, p.z) + earthBulgeM(from, to, t))
-            ++blocked;
+        const float bulge = earthBulgeM(from, to, t);
+        const float ground = heightAtWorld(p.x, p.z) + bulge;
+        if (p.y < ground) ++blocked;
+        else if (wantFoliage && p.y < canopyTopAtWorld(p.x, p.z) + bulge)
+            foliage += segment * canopyCoverAtWorld(p.x, p.z);
     }
+    if (outFoliageDepthM) *outFoliageDepthM = foliage;
     if (blocked == 0) return LOSStatus::Clear;
     // A very narrow obstruction is treated as one dominant knife edge; longer
     // obstructed intervals are handed to multiple-edge diffraction/ITM.

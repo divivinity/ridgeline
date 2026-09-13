@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -34,10 +35,48 @@ public:
 
     std::vector<float> heights;
 
+    // Canopy height above ground in decimetres, parallel to `heights`. Zero
+    // means bare ground; empty means no vegetation data at all, which is the
+    // default so every existing construction site is unaffected.
+    //
+    // An attenuation model needs depth in metres, and only canopy height over
+    // bare earth can produce it - cover percent modulates the result and
+    // land-cover class cannot give depth at all.
+    //
+    // Sixteen bits, not eight. A byte of decimetres tops out at 25.5 m, which
+    // was enough while the only writer was a hand-drawn height, but LANDFIRE
+    // canopy height reaches 510 dm and its tallest class is open-ended above
+    // that. Clamping would have halved the canopy over Douglas fir and redwood,
+    // and canopy height is geometric: it decides whether the ray is inside the
+    // crown at all. At the 1024x1024 ceiling this is 2 MiB against the 4 MiB
+    // the float height grid already costs.
+    std::vector<std::uint16_t> canopyHeightDm;
+
+    // Fraction of ground covered by crown, 0-100, parallel to `heights`. May be
+    // empty even when canopy heights are present: hand-drawn stands carry no
+    // cover measurement. Empty means unknown, and unknown is read as 100 - the
+    // conservative choice, and the one that leaves hand-drawn vegetation
+    // behaving exactly as it did before cover existed.
+    std::vector<std::uint8_t> canopyCoverPct;
+
+    bool hasVegetation() const { return !canopyHeightDm.empty(); }
+    float canopyHeightAt(int x, int z) const;
+    // Crown cover as a 0-1 fraction. One where no cover data is carried.
+    float canopyCoverAt(int x, int z) const;
+    // Canopy top above sea level at a world position, or the bare ground height
+    // where there is no vegetation data.
+    float canopyTopAtWorld(float worldX, float worldZ) const;
+    // Crown cover as a 0-1 fraction at a world position. One where unknown.
+    float canopyCoverAtWorld(float worldX, float worldZ) const;
+
     // Throws before malformed or incomplete terrain can replace a live model.
     void validate() const;
 
     enum class LOSStatus { Clear, Diffracted, Blocked };
+
+    // Metres of the path that pass through vegetation: below canopy top but
+    // above bare ground. Zero when the model carries no vegetation.
+    float foliageDepthM(glm::vec3 from, glm::vec3 to, int steps = 0) const;
 
     struct PeakObstacle {
         float clearanceM;
@@ -65,7 +104,11 @@ public:
     int adaptivePathSteps(glm::vec3 from, glm::vec3 to,
                           int minimum = 32, int maximum = 2048) const;
     bool lineOfSight(glm::vec3 from, glm::vec3 to, int steps = 0) const;
-    LOSStatus lineOfSightStatus(glm::vec3 from, glm::vec3 to, int steps = 0) const;
+    // outFoliageDepthM, when given, receives the vegetation depth measured on
+    // the same walk. An out-parameter rather than a richer return type because
+    // four call sites outside the solver consume this enum directly.
+    LOSStatus lineOfSightStatus(glm::vec3 from, glm::vec3 to, int steps = 0,
+                                float* outFoliageDepthM = nullptr) const;
     PeakObstacle peakObstacle(glm::vec3 from, glm::vec3 to, int steps = 0) const;
     float fresnelClearanceRatio(glm::vec3 from, glm::vec3 to,
                                 float frequencyMHz, int steps = 0) const;

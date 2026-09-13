@@ -520,6 +520,117 @@ Specter remains deferred until the standalone release bar is met.
 
 ## Remaining release checks
 
+### Foliage propagation: foundation — September 10
+
+- Roadmap item 13, foundation slice. Design in
+  `docs/superpowers/specs/2026-09-10-foliage-propagation-design.md`, written
+  from a three-lane investigation whose every claim was put to an adversarial
+  reviewer told to default to refuting. 17 claims were refuted.
+- The `foliage` material has shipped in assets/materials.json all along and has
+  never been reachable: both solvers call the static `defaultMaterial()` (dry
+  soil) through the library reference, and `MaterialLibrary::find()` is called
+  nowhere in src/. Every solve has applied dry-soil loss regardless of cover.
+- Its numbers were also wrong in two opposite directions at once: coefficients
+  1.8-2.2x BELOW P.833's measured specific attenuation, yet unbounded linear, so
+  about 96 dB at 1 km of woodland against a measured asymptote near 26.5 dB.
+- Delivered: a canopy-height grid on TerrainModel (decimetres, empty by
+  default), path depth measured on the walk lineOfSightStatus already performs
+  via an out-parameter, a saturating loss term, and hand-drawn vegetation areas
+  that rasterise into the grid and persist in the scenario.
+- The loss term sits where rainDb sits, so it reaches both solver branches.
+  Rain is the existing precedent for an excess term riding on both; foliage
+  added only to the analytic branch would be silently inert in Engineering mode
+  beyond 1 km where ITM takes over. ITM models no land cover, so it is additive.
+- Labelled as an engineering extrapolation, not a standards-conformant
+  calculation: ITU-R P.833-10 has NO sanctioned terrestrial model for
+  Ridgeline's geometry - extensive woodland with both terminals outside it. Its
+  equation (1) is explicitly excluded for that case and equation (7) is scoped
+  to at or below 1 GHz. The saturating shape is borrowed because it is
+  physically right; the conformance claim is not made.
+- Am is held flat above 2.2 GHz rather than extrapolated: P.833's own values are
+  non-monotonic there and a monotone fit lands roughly 3x too pessimistic at
+  28 GHz. The gamma anchors mix polarisations (105.9 MHz horizontal, the rest
+  slant), recorded as a known limitation since the model has no polarisation
+  term.
+- Two defects found by testing rather than review: the solve fingerprint first
+  summarised the canopy raster as sum-and-peak, which cannot tell a stand from
+  the same stand moved elsewhere, so moving vegetation would not have
+  invalidated coverage; and a cursor-readout test asserted initial visibility,
+  which failed whenever the developer's real pointer sat over the window.
+- Not established: no UI yet for drawing areas, so vegetation is reachable only
+  through a scenario file. No data ingestion - LANDFIRE (CC0) and Meta/ESA
+  (CC BY) are specified in the design but not built, and the CC BY layers
+  require an attribution manifest in the offline package format before they can
+  ship. No cover-percent modulation, no seasonal leaf state, no polarisation.
+  Nothing here is validated against field measurements; honest accuracy is
+  roughly 5-10 dB RMS at UHF even for site-tuned models.
+
+### Canopy data ingestion — September 11
+
+- Completes the deferred half of item 13. Foliage propagation had a model and no
+  data: vegetation was reachable only by drawing rectangles from memory. Canopy
+  now comes from a published product, covering exactly the ground the loaded
+  terrain covers and resampled onto its grid, so one path walk consumes both.
+  Spec: `docs/superpowers/specs/2026-09-11-canopy-data-ingestion.md`.
+- Source: LANDFIRE, via its ArcGIS image service. Chosen over the alternatives
+  because its `exportImage` will return an arbitrary bounding box at an
+  arbitrary pixel size in WGS84 — the provider does the reprojection and
+  resampling, and the grid comes back already aligned. Verified against the live
+  service, not assumed: a request for `-78.90,35.03,-78.86,35.07` at 64x64 came
+  back with the tiepoint and pixel scale exactly as asked. It is a US Government
+  work in the public domain, so unlike the CC BY alternatives it can ship in an
+  offline package today.
+- The load-bearing finding: **over developed land LANDFIRE does not measure
+  canopy height, it assigns a nationwide constant per vegetation type.** Across
+  five sampled scenes, 1007 of 1008 Developed-Upland Evergreen Forest cells
+  carried canopy height exactly 390 (37-41 m) at exactly 45% cover, and 201 of
+  202 Developed Deciduous cells carried exactly 190. Passing that through paints
+  a uniform 39 m evergreen canopy over every American suburb. On a live fetch
+  over Fayetteville this was 5694 of 25375 vegetated cells — 22%, and precisely
+  where short links get planned. The substitution is explicit, adjustable and
+  counted; the operator is never shown an assigned number as though it were a
+  measurement.
+- Getting there required being wrong first. The scattered single pixels at 390
+  in a suburb looked like a sentinel value, and the first hypothesis was that
+  390 meant "developed, no height". Cross-tabulating against Olympic and
+  Redwoods refuted it: 390 also carries genuine 37-41 m forest there, so keying
+  off the value alone would have deleted real canopy. The discrimination has to
+  come from the vegetation-type layer, which is why three rasters are fetched
+  rather than two.
+- A TIFF reader, written here rather than taken from GDAL. Ridgeline's GeoTIFF
+  path is optional at configure time and GDAL is absent on the development
+  machine, so a canopy feature behind it would have been unbuildable by the
+  person building it. The reader covers exactly what the service returns and
+  refuses everything else by name — BigTIFF, compression, multiple bands — on
+  the principle that a reader which quietly mis-decodes puts vegetation in the
+  wrong place and nothing downstream can tell.
+- `canopyHeightDm` widened from a byte to sixteen bits. The 25.5 m ceiling was
+  chosen when the only writer was a hand-drawn height; LANDFIRE reaches 510 dm.
+  Clamping would have halved the canopy over Douglas fir and redwood, and canopy
+  height is geometric — it decides whether the ray is inside the crown at all.
+- Canopy is anchored to latitude and longitude, not to the grid, and the engine
+  holds a sampler rather than a raster. Terrain gets reloaded at different
+  resolutions from different providers over shifted footprints; a grid-anchored
+  layer would smear sideways the first time that happened.
+- Crown cover scales the depth rather than the coefficient: 200 m of 60% cover
+  puts 120 m of crown in the way. P.833 has no cover term, so this is labelled
+  an engineering reading like the rest of the model. Absent cover reads as
+  complete cover, leaving hand-drawn stands behaving exactly as before.
+- Verified end to end against the live service, not only in tests: 65536 samples
+  over Fayetteville, all with data, 25375 vegetated, heights distributed across
+  the LANDFIRE classes with every one of the 5694 developed cells substituted
+  and only five genuine 39 m cells surviving. A 6.9 km path at 10 m AGL crossed
+  1000 m of effective canopy — 11.4 dB at 150 MHz rising to 34.1 dB at 5.8 GHz.
+- Not established: coverage is the United States and its territories only, and
+  outside it the feature falls back to hand-drawn areas. ESA WorldCover via
+  Terrascope was unreachable from this machine, which is not evidence the
+  service is down. Meta/WRI's model is reachable but ships 46 MB BigTIFF tiles
+  under CC BY and cannot be packaged until the offline format carries a licence
+  notice. LANDFIRE canopy height is itself quantised to about four metres and
+  describes a past year. Shrub and herb heights are in the vegetation layer but
+  are not used. A drawn area still cannot express a clearing. Nothing here is
+  validated against field measurements.
+
 ### Project protection: autosave, recovery, history and layout — September 10
 
 - Roadmap item 4, started after the five requested slices landed.

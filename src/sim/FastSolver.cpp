@@ -68,10 +68,14 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
                     std::max(ant.powerW, 1.0e-9f) * 1000.0f);
                 const float directionalGain = RFModels::effectiveAntennaGainDbi(
                     ant, rxPos, receiver);
+                const float foliageDb = terrain.hasVegetation()
+                    ? RFModels::vegetationLossDb(
+                          terrain.foliageDepthM(ant.position, rxPos), ant.frequencyMHz)
+                    : 0.0f;
                 const float matLossDb = mat.lossDbPer100m(ant.frequencyMHz)
                                       * distM / 100.0f;
                 float loss = fsplDb(distM, ant.frequencyMHz)
-                           - directionalGain + matLossDb;
+                           - directionalGain + matLossDb + foliageDb;
 
                 if (!terrain.lineOfSight(ant.position, rxPos)) loss += 20.0f;
                 const float rxDbm = txPowerDbm - loss;
