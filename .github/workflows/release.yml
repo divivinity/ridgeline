@@ -57,7 +57,9 @@ jobs:
           # which can contain slashes that are not legal in a filename.
           $version = "${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-'
           $zip = "ridgeline-windows-$version.zip"
-          7z a -tzip $zip .\build\Release\* -xr!ridgeline_*_tests.exe -xr!*.pdb
+          # Switches are quoted: PowerShell splits an unquoted -xr!*.pdb at the
+          # dot, which hands 7-Zip a bare -xr!* that excludes everything.
+          7z a -tzip $zip '.\build\Release\*' '-xr!ridgeline_*_tests.exe' '-xr!*.pdb'
           if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
           $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
           echo "PACKAGE=$zip" >> $env:GITHUB_ENV
