@@ -1,6 +1,5 @@
 # Map Layers Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Ridgeline's fixed overlay checkboxes with an ordered layer stack, and add two layers to it: hillshade derived from the loaded elevation grid, and USGS topographic tiles.
 
@@ -8,7 +7,7 @@
 
 **Tech Stack:** C++17, Qt 6 (Core, Gui, Widgets, Network, OpenGLWidgets), OpenGL 3.3 core, glm, nlohmann/json, CMake + CTest.
 
-**Spec:** `docs/superpowers/specs/2026-09-10-map-layers-design.md`
+**Spec:** `docs/design/specs/2026-09-10-map-layers-design.md`
 
 ---
 

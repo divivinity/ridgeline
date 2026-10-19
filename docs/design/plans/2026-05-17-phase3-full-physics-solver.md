@@ -1,6 +1,5 @@
 # Phase 3: Full Physics Solver Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a full-physics RF solver (multi-ray, Fresnel reflection, knife-edge diffraction, rain attenuation, per-frequency material EM properties) selectable from a toolbar toggle.
 

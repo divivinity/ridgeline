@@ -1,6 +1,5 @@
 # Phase 5 — Data Layer Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add AntennaLibrary (JSON-loaded type table), antenna type picker in PropertiesPanel, ScenarioIO (JSON scenario save/load), PNG/CSV coverage export, and wire everything into MainWindow's File and Export menus.
 

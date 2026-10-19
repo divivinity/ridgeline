@@ -523,7 +523,7 @@ Specter remains deferred until the standalone release bar is met.
 ### Foliage propagation: foundation — September 10
 
 - Roadmap item 13, foundation slice. Design in
-  `docs/superpowers/specs/2026-09-10-foliage-propagation-design.md`, written
+  `docs/design/specs/2026-09-10-foliage-propagation-design.md`, written
   from a three-lane investigation whose every claim was put to an adversarial
   reviewer told to default to refuting. 17 claims were refuted.
 - The `foliage` material has shipped in assets/materials.json all along and has
@@ -571,7 +571,7 @@ Specter remains deferred until the standalone release bar is met.
   data: vegetation was reachable only by drawing rectangles from memory. Canopy
   now comes from a published product, covering exactly the ground the loaded
   terrain covers and resampled onto its grid, so one path walk consumes both.
-  Spec: `docs/superpowers/specs/2026-09-11-canopy-data-ingestion.md`.
+  Spec: `docs/design/specs/2026-09-11-canopy-data-ingestion.md`.
 - Source: LANDFIRE, via its ArcGIS image service. Chosen over the alternatives
   because its `exportImage` will return an arbitrary bounding box at an
   arbitrary pixel size in WGS84 — the provider does the reprojection and
@@ -778,7 +778,7 @@ Specter remains deferred until the standalone release bar is met.
 ### Map layer stack, hillshade and USGS topographic — September 10
 
 - Roadmap item 6, the first of five slices in the agreed order 6 -> 3 -> 2 -> 7
-  -> 12. Design in `docs/superpowers/specs/2026-09-10-map-layers-design.md`.
+  -> 12. Design in `docs/design/specs/2026-09-10-map-layers-design.md`.
 - An ordered LayerStack replaces the fixed overlay checkboxes and the Layers
   menu: nine layers with per-layer visibility, opacity and drag reordering, in
   a Layers dock. The stack is Qt-Widget-free and tested headlessly.

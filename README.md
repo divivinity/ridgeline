@@ -1,8 +1,20 @@
 # Ridgeline
 
+[![CI](https://github.com/divivinity/ridgeline/actions/workflows/ci.yml/badge.svg)](https://github.com/divivinity/ridgeline/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![C++](https://img.shields.io/badge/C%2B%2B-Qt6%20%7C%20OpenGL%20%7C%20GDAL-00599C)
+
 Ridgeline is a terrain-aware RF coverage planner for desktop. It aligns elevation,
 satellite imagery, emitter/jammer positions, propagation results, and exports in
 one WGS84 coordinate system.
+
+### Highlights
+
+- **3D terrain viewer** in C++/Qt 6/OpenGL, with satellite imagery, map layers and LiDAR-derived elevation
+- **Propagation engine** with three fidelity modes, up to the NTIA Irregular Terrain Model (Longley-Rice)
+- **Emitter and jammer modelling** — antenna patterns, link budgets, SNR/SINR/J-S and service contours
+- **Vegetation and canopy loss**, rain and reflection effects, multi-obstacle diffraction
+- **Offline terrain/imagery packages**, scenario files, exports, and CI release builds
 
 ## Core workflow
 
@@ -390,3 +402,7 @@ visible in the viewport. Place search results are © OpenStreetMap contributors.
 High-accuracy propagation incorporates the U.S. National Telecommunications and
 Information Administration (NTIA) Irregular Terrain Model reference
 implementation, pinned to v1.4 in the build for reproducibility.
+
+## License
+
+Released under the [MIT License](LICENSE).
