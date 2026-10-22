@@ -60,7 +60,7 @@ struct VegetationArea {
         // Generous enough for an area carried by latitude and longitude to the
         // far side of the world - about 2e7 m on either axis, plus the terrain's
         // own extent - so a long location jump never makes a drawn area invalid.
-        constexpr float kLimitM = 5.0e7f;
+        static constexpr float kLimitM = 5.0e7f;
         const auto ok = [](float v) { return std::isfinite(v) && std::abs(v) <= kLimitM; };
         return ok(minX) && ok(minZ) && ok(maxX) && ok(maxZ) &&
                maxX > minX && maxZ > minZ &&
