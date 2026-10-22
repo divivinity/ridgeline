@@ -337,19 +337,24 @@ if(RIDGELINE_GUI_TESTS)
     set(RIDGELINE_APP_SOURCES ${SOURCES})
     list(REMOVE_ITEM RIDGELINE_APP_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 
-    add_executable(ridgeline_main_window_tests
-        tests/test_main_window_guard.cpp ${RIDGELINE_APP_SOURCES})
-    target_include_directories(ridgeline_main_window_tests PRIVATE src)
-    target_compile_definitions(ridgeline_main_window_tests PRIVATE HAVE_NTIA_ITM)
-    target_link_libraries(ridgeline_main_window_tests
+    # The application, compiled once for every GUI suite. Each suite used to
+    # compile all of it again, which doubled GUI build time and was enough to
+    # run the CI runner out of memory. An object library rather than a static
+    # one, so no translation unit is dropped for looking unreferenced.
+    add_library(ridgeline_gui_test_app OBJECT ${RIDGELINE_APP_SOURCES})
+    target_include_directories(ridgeline_gui_test_app PUBLIC src)
+    target_compile_definitions(ridgeline_gui_test_app PUBLIC HAVE_NTIA_ITM)
+    target_link_libraries(ridgeline_gui_test_app PUBLIC
         Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Concurrent
         OpenGL::GL glm::glm nlohmann_json::nlohmann_json ntia_itm)
     if(GDAL_FOUND)
-        target_compile_definitions(ridgeline_main_window_tests PRIVATE HAVE_GDAL)
-        target_include_directories(ridgeline_main_window_tests PRIVATE ${GDAL_INCLUDE_DIRS})
-        target_link_libraries(ridgeline_main_window_tests GDAL::GDAL)
+        target_compile_definitions(ridgeline_gui_test_app PUBLIC HAVE_GDAL)
+        target_include_directories(ridgeline_gui_test_app PUBLIC ${GDAL_INCLUDE_DIRS})
+        target_link_libraries(ridgeline_gui_test_app PUBLIC GDAL::GDAL)
     endif()
 
+    add_executable(ridgeline_main_window_tests tests/test_main_window_guard.cpp)
+    target_link_libraries(ridgeline_main_window_tests PRIVATE ridgeline_gui_test_app)
     # Runs beside the app's copied assets, which MainWindow loads at startup.
     add_dependencies(ridgeline_main_window_tests ridgeline)
     add_test(NAME main_window_tests COMMAND ridgeline_main_window_tests
@@ -358,18 +363,8 @@ if(RIDGELINE_GUI_TESTS)
     # Drawing and editing vegetation end to end in the real window, and pins for
     # what test_main_window_guard.cpp relies on without naming it. A separate
     # target so the guard target stays exactly as it is.
-    add_executable(ridgeline_vegetation_gui_tests
-        tests/test_vegetation_gui.cpp ${RIDGELINE_APP_SOURCES})
-    target_include_directories(ridgeline_vegetation_gui_tests PRIVATE src)
-    target_compile_definitions(ridgeline_vegetation_gui_tests PRIVATE HAVE_NTIA_ITM)
-    target_link_libraries(ridgeline_vegetation_gui_tests
-        Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Concurrent
-        OpenGL::GL glm::glm nlohmann_json::nlohmann_json ntia_itm)
-    if(GDAL_FOUND)
-        target_compile_definitions(ridgeline_vegetation_gui_tests PRIVATE HAVE_GDAL)
-        target_include_directories(ridgeline_vegetation_gui_tests PRIVATE ${GDAL_INCLUDE_DIRS})
-        target_link_libraries(ridgeline_vegetation_gui_tests GDAL::GDAL)
-    endif()
+    add_executable(ridgeline_vegetation_gui_tests tests/test_vegetation_gui.cpp)
+    target_link_libraries(ridgeline_vegetation_gui_tests PRIVATE ridgeline_gui_test_app)
     add_dependencies(ridgeline_vegetation_gui_tests ridgeline)
     add_test(NAME vegetation_gui_tests COMMAND ridgeline_vegetation_gui_tests
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
