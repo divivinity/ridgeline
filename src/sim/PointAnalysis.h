@@ -16,6 +16,7 @@ struct PointAnalysisResult {
     int gridZ = -1;
     int servingSourceIndex = -1;
     int strongestJammerIndex = -1;
+    PathModel pathModel = PathModel::None;
 
     float desiredDbm = 0.0f;
     float strongestSourceDbm = 0.0f;
@@ -47,6 +48,22 @@ struct PointAnalysisResult {
     std::vector<float> canopyTopElevationM;
     std::vector<std::string> explanations;
 };
+
+// A short name for the model that computed a serving path, for display.
+inline std::string pathModelName(PathModel model) {
+    switch (model) {
+        case PathModel::None: return "No serving path";
+        case PathModel::QuickEstimate: return "Quick preview estimate";
+        case PathModel::TerrainAnalytic: return "Free space + terrain diffraction";
+        case PathModel::Itm: return "NTIA ITM";
+        case PathModel::AnalyticShortPath:
+        case PathModel::AnalyticOutOfBand:
+        case PathModel::AnalyticItmRejected:
+        case PathModel::AnalyticItmMissing:
+            return "Free space + terrain diffraction (ITM not used)";
+    }
+    return "Unknown model";
+}
 
 PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
                                       const TerrainModel& terrain,

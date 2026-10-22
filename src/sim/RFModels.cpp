@@ -239,6 +239,7 @@ void initializeMetrics(FieldGrid& grid) {
     grid.service.assign(n, 0);
     grid.servingSourceIndex.assign(n, -1);
     grid.strongestJammerIndex.assign(n, -1);
+    grid.servingPathModel.assign(n, static_cast<std::uint8_t>(PathModel::None));
 }
 
 void finalizeMetrics(FieldGrid& grid, const ReceiverSettings& receiver) {

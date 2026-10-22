@@ -300,13 +300,14 @@ void PointAnalysisPanel::setAnalysis(const PointAnalysisResult& analysis,
     m_sinr->setText(formatMetric(analysis.sinrDb));
     m_margin->setText(formatMetric(analysis.fadeMarginDb));
     if (analysis.servingSourceIndex >= 0) {
-        m_path->setText(QString("%1 · %2 · Fresnel clearance %3%4%5")
+        m_path->setText(QString("%1 · %2 · Fresnel clearance %3\nModel: %4%5%6")
             .arg(analysis.distanceM >= 1000.0f
                     ? QString("%1 km").arg(analysis.distanceM / 1000.0f, 0, 'f', 2)
                     : QString("%1 m").arg(analysis.distanceM, 0, 'f', 0))
             .arg(losName(analysis.losStatus))
             .arg(QString("%1%").arg(
                 analysis.fresnelClearanceRatio * 100.0f, 0, 'f', 0))
+            .arg(QString::fromStdString(pathModelName(analysis.pathModel)))
             .arg(analysis.foliageLossDb >= 0.1f
                     ? QString("\nFoliage: %1 m, %2 dB")
                           .arg(analysis.foliageDepthM, 0, 'f', 0)

@@ -26,6 +26,8 @@ ItmPrediction ItmPropagation::predict(const TerrainModel& terrain,
                                             glm::vec2(rx.x, rx.z));
     if (horizontalM < 1000.0f || antenna.frequencyMHz < 20.0f ||
         antenna.frequencyMHz > 20000.0f) {
+        prediction.outcome = horizontalM < 1000.0f
+            ? ItmOutcome::ShortPath : ItmOutcome::OutOfBand;
         return prediction;
     }
 
@@ -71,6 +73,7 @@ ItmPrediction ItmPropagation::predict(const TerrainModel& terrain,
     prediction.errorCode = error;
     prediction.warnings = warnings;
     prediction.valid = error == 0 && std::isfinite(lossDb) && lossDb > 0.0;
+    prediction.outcome = prediction.valid ? ItmOutcome::Valid : ItmOutcome::Rejected;
     prediction.basicTransmissionLossDb = static_cast<float>(lossDb);
     return prediction;
 #endif

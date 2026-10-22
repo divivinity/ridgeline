@@ -376,6 +376,11 @@ void testPointAnalysisPanelShowsExplanation() {
     CHECK(pathSummary && plot);
     if (!pathSummary || !plot) return;
     CHECK(!pathSummary->text().contains("Foliage"));
+    CHECK(pathSummary->text().contains("Model: No serving path"));
+    analysis.pathModel = PathModel::Itm;
+    panel.setAnalysis(analysis, "35.0°, -80.0°", "Emitter 1 · 450 MHz", "Jammer 1");
+    CHECK(pathSummary->text().contains("Model: NTIA ITM"));
+    CHECK(pathSummary->text().contains("Jammer 1"));
     auto canopyPixels = [plot] {
         const QImage image = plot->grab().toImage();
         int count = 0;
