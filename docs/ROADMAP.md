@@ -22,7 +22,9 @@ calls something pending or the current handoff, this section supersedes it.
   - the inspector shows the crown depth and foliage loss on the serving path,
     and draws canopy on the link profile (#11);
   - it names the propagation model behind each cell, and why ITM fell back
-    when it did (#12).
+    when it did (#12);
+  - it traces the strongest jammer's path too, with its own profile, and says
+    whether terrain shields the point from it (#18).
 - Exports, roadmap item 8: *Coverage GeoTIFF* writes desired signal as a
   WGS 84 float32 raster, verified by the built-in reader and, on CI, by
   GDAL (#13).
@@ -34,12 +36,13 @@ calls something pending or the current handoff, this section supersedes it.
   scenarios, kept per installation (#16).
 - CI: the build is capped at four jobs. An unbounded `--parallel` let the
   Ubuntu runner run out of memory once two GUI suites each compiled the whole
-  application.
+  application. The application is now compiled once for both GUI suites,
+  64 fewer compiles per GUI-enabled build (#17).
 
 **Next, in priority order**
 
-1. Result clarity (5): failure explanations for whole-solve errors, and a
-   profile view for the strongest jammer as well as the serving source.
+1. Result clarity (5): what remains is native visual QA of the inspector
+   (whole-solve errors already name what to change).
 2. Exports (8): SINR, fade margin and service as GeoTIFF bands. The
    built-in reader handles one band, so verification needs it extended or
    separate files. Also metadata and a printable report.
@@ -54,9 +57,6 @@ calls something pending or the current handoff, this section supersedes it.
 
 **Engineering follow-ups**
 
-- The GUI suites compile every application source again, once per
-  executable. Building the application as a library once would roughly halve
-  CI time and memory.
 - A calibration fitted in High accuracy mode over vegetation predates #14
   and is worth re-fitting.
 - On Windows, `<windows.h>` defines `NEAR` as an empty macro. A test that
