@@ -699,6 +699,9 @@ void geoTiffFixture(FieldGrid& grid, TerrainModel& terrain) {
     const float none = -std::numeric_limits<float>::infinity();
     grid.dbm = {-70.0f, -75.0f, -80.0f,   // south row
                 -85.0f, none, -90.0f};    // north row
+    grid.sinrDb = {12.0f, 6.5f, -3.0f, 1.0f, none, 20.0f};
+    grid.fadeMarginDb = {30.0f, 25.0f, 20.0f, 15.0f, none, 10.0f};
+    grid.service = {1, 1, 0, 0, 0, 1};
 }
 
 void testGeoTiffExportPlacesEachCell() {
@@ -759,6 +762,44 @@ void testGeoTiffExportPlacesEachCell() {
     CHECK(file.open(QIODevice::ReadOnly));
     CHECK(file.readAll() == bytes);
     file.close();
+
+    // Each metric is its own single band, in the same placement, with the same
+    // no-data rule - except service, which is defined everywhere.
+    auto decodeMetric = [&](CoverageGeoTiff::Metric metric) {
+        const QString metricPath = directory.filePath(QStringLiteral("metric.tif"));
+        RasterTiff decoded;
+        if (!Exporter::exportGeoTiff(grid, terrain, metricPath.toStdString(), metric)) {
+            CHECK(false);
+            return decoded;
+        }
+        QFile metricFile(metricPath);
+        if (!metricFile.open(QIODevice::ReadOnly)) { CHECK(false); return decoded; }
+        const QByteArray metricBytes = metricFile.readAll();
+        try {
+            decoded = RasterTiff::decode(
+                std::vector<std::uint8_t>(metricBytes.begin(), metricBytes.end()));
+        } catch (const std::exception&) {
+            CHECK(false);
+        }
+        return decoded;
+    };
+    const RasterTiff sinr = decodeMetric(CoverageGeoTiff::Metric::Sinr);
+    CHECK(sinr.width == 3 && sinr.height == 2 && sinr.georeferenced);
+    CHECK_NEAR(sinr.westLonDeg, raster.westLonDeg, 1e-12);
+    CHECK_NEAR(sinr.northLatDeg, raster.northLatDeg, 1e-12);
+    CHECK_NEAR(sinr.at(0, 0), 1.0, 1e-6);    // north row, west
+    CHECK(std::isnan(sinr.at(1, 0)));
+    CHECK_NEAR(sinr.at(1, 1), 6.5, 1e-6);    // south row, middle
+    const RasterTiff margin = decodeMetric(CoverageGeoTiff::Metric::FadeMargin);
+    CHECK_NEAR(margin.at(2, 0), 10.0, 1e-6);
+    CHECK_NEAR(margin.at(0, 1), 30.0, 1e-6);
+    const RasterTiff service = decodeMetric(CoverageGeoTiff::Metric::Service);
+    CHECK_NEAR(service.at(1, 0), 0.0, 0.0);  // no signal: out of service, not no-data
+    CHECK_NEAR(service.at(2, 0), 1.0, 0.0);
+    CHECK_NEAR(service.at(0, 1), 1.0, 0.0);
+    CHECK_NEAR(service.at(2, 1), 0.0, 0.0);
+    CHECK(std::string(CoverageGeoTiff::unit(CoverageGeoTiff::Metric::Sinr)) == "dB" &&
+          std::string(CoverageGeoTiff::unit(CoverageGeoTiff::Metric::Service)).empty());
 }
 
 void testCsvUsesClampedEdgeCellCenter() {

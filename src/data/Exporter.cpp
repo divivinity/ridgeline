@@ -62,8 +62,8 @@ bool Exporter::exportPng(const FieldGrid& grid, const std::string& path) {
 }
 
 bool Exporter::exportGeoTiff(const FieldGrid& grid, const TerrainModel& terrain,
-                             const std::string& path) {
-    const std::vector<std::uint8_t> bytes = CoverageGeoTiff::encode(grid, terrain);
+                             const std::string& path, CoverageGeoTiff::Metric metric) {
+    const std::vector<std::uint8_t> bytes = CoverageGeoTiff::encode(grid, terrain, metric);
     if (bytes.empty()) return false;
     QSaveFile output(QString::fromStdString(path));
     output.setDirectWriteFallback(false);

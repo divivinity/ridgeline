@@ -30,6 +30,8 @@ class LayersPanel;
 class QProgressDialog;
 class QTimer;
 
+namespace CoverageGeoTiff { enum class Metric; }
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -49,7 +51,6 @@ private slots:
     void onImportMeasurements();
     void onExportPng();
     void onExportCsv();
-    void onExportGeoTiff();
     void onAddAntenna();
     void onAddJammer();
     void onRemoveAntenna(int index);
@@ -77,6 +78,7 @@ private slots:
     void applyEquipmentPreset(const QString& name);
 
 private:
+    void onExportGeoTiff(CoverageGeoTiff::Metric metric);
     SimEngine        m_engine;
     AntennaLibrary   m_antennaLib;
     TerrainSource    m_terrainSource;
