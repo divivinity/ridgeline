@@ -137,6 +137,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     redoAction->setObjectName("RedoSourceAction");
     redoAction->setShortcut(QKeySequence::Redo);
     editMenu->addAction(redoAction);
+    editMenu->addSeparator();
+    QAction* duplicateAct = editMenu->addAction("&Duplicate Source");
+    duplicateAct->setObjectName("DuplicateSourceAction");
+    duplicateAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
+    connect(duplicateAct, &QAction::triggered, this, &MainWindow::onDuplicateAntenna);
 
     QMenu* analysisMenu = menuBar()->addMenu("&Analysis");
     // Running coverage is the point of the application, and until now it lived
@@ -2037,6 +2042,48 @@ void MainWindow::onRemoveAntenna(int index) {
         selectedAfter = std::min(index, static_cast<int>(after.size()) - 1);
     pushSourceChange(std::move(after), selectedAfter, "Remove source");
     m_statusLabel->setText("  Antenna removed");
+}
+
+// A copy with every setting of the original, set down beside it rather than
+// on top of it so both stay visible and draggable. It keeps its height above
+// ground, and lands east, then west, north or south: whichever stays on the
+// terrain.
+void MainWindow::onDuplicateAntenna() {
+    const int index = m_selectedIndex;
+    if (index < 0 || index >= static_cast<int>(m_engine.antennas().size())) {
+        m_statusLabel->setText("  Select a source to duplicate");
+        return;
+    }
+    const TerrainModel& terrain = m_engine.terrain();
+    const glm::vec3 size = terrain.worldSize();
+    const float offsetM = std::clamp(0.02f * std::min(size.x, size.z), 25.0f, 250.0f);
+    Antenna copy = m_engine.antennas()[index];
+    const float ground = terrain.heightAtWorld(copy.position.x, copy.position.z);
+    const float heightAgl = std::max(0.0f, copy.position.y - ground);
+    struct Step { float dx, dz; const char* direction; };
+    const Step steps[] = {{offsetM, 0.0f, "east"}, {-offsetM, 0.0f, "west"},
+                          {0.0f, offsetM, "north"}, {0.0f, -offsetM, "south"}};
+    const char* direction = nullptr;
+    for (const Step& step : steps) {
+        const float x = copy.position.x + step.dx;
+        const float z = copy.position.z + step.dz;
+        if (x < 0.0f || z < 0.0f || x > size.x || z > size.z) continue;
+        copy.position.x = x;
+        copy.position.z = z;
+        direction = step.direction;
+        break;
+    }
+    copy.position.y = terrain.heightAtWorld(copy.position.x, copy.position.z) + heightAgl;
+    if (!terrain.hasGeoReference()) copy.hasGeoPosition = false;
+    syncAntennaGeo(copy);
+
+    std::vector<Antenna> after = m_engine.antennas();
+    after.insert(after.begin() + index + 1, std::move(copy));
+    pushSourceChange(std::move(after), index + 1, "Duplicate source");
+    m_statusLabel->setText(direction
+        ? QString("  Source duplicated %1 m %2 · Undo is available from Edit or Ctrl+Z")
+              .arg(offsetM, 0, 'f', 0).arg(direction)
+        : QStringLiteral("  Source duplicated in place · Undo is available from Edit or Ctrl+Z"));
 }
 
 void MainWindow::onAntennaSelected(int index) {

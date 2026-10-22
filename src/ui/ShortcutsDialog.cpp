@@ -27,6 +27,7 @@ ShortcutsDialog::ShortcutsDialog(QWidget* parent) : QDialog(parent) {
             {"Ctrl+Shift+O", "Open a scenario"},
             {"Ctrl+S", "Save the scenario"},
             {"Ctrl+Z / Ctrl+Y", "Undo / redo a source or vegetation edit"},
+            {"Ctrl+D", "Duplicate the selected source beside it"},
         }},
         {"Analysis", {
             {"F5", "Run coverage"},

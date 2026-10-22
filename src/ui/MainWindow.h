@@ -52,6 +52,7 @@ private slots:
     void onAddAntenna();
     void onAddJammer();
     void onRemoveAntenna(int index);
+    void onDuplicateAntenna();
     void onAntennaSelected(int index);
     void onAntennaChanged(Antenna updated);
     void onEditAntennaPosition();

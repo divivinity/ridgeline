@@ -26,6 +26,9 @@ one WGS84 coordinate system.
 5. Select a source to edit frequency, power, AGL height, antenna type, gain,
    azimuth, downtilt, horizontal/vertical beamwidth, front-to-back ratio, cable
    loss, polarization, or an imported measured pattern.
+   **Edit → Duplicate Source** (`Ctrl+D`) copies the selected source with all
+   its settings and sets it down beside the original, at the same height above
+   ground, ready to move.
 6. Use **Analysis → Receiver / Service Criteria** to set receiver sensitivity,
    bandwidth, noise figure, required SINR, fade-margin target, and receive
    polarization.
