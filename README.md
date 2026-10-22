@@ -73,6 +73,14 @@ sensitivity, required SINR, and fade-margin target. CSV exports include these
 metrics together with WGS84 coordinates and terrain elevation when the terrain
 is georeferenced.
 
+*File ▸ Export ▸ Coverage GeoTIFF* writes desired signal as a GIS raster: one
+float32 band in dBm, one pixel per result cell, in WGS 84 longitude/latitude,
+with no-signal cells masked as no-data. QGIS, ArcGIS and GDAL open it directly.
+It needs terrain with a real-world location. Each pixel covers the area its cell
+stands for, so the last row and column can reach up to one partial cell past
+the terrain edge. *Coverage PNG* is different: it is a capture of the map as
+you see it, with overlays and legend, and carries no placement.
+
 ## Antenna patterns
 
 The analytic antenna model supports gain, azimuth, downtilt, horizontal and
