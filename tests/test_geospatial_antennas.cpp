@@ -338,6 +338,42 @@ static void test_drawn_vegetation_survives_a_far_location() {
     CHECK(engine.terrain().canopyHeightAt(cx, cz) > 0.0f);
 }
 
+// A drawn area half a world from the new terrain's origin can have its two
+// corners land on opposite sides of the longitude seam. Projected separately
+// they once made a rectangle around the whole planet, which overlapped the new
+// terrain and planted canopy across it. Both corners must stay on one branch.
+static void test_drawn_vegetation_keeps_its_width_across_the_seam() {
+    SimEngine engine;
+    const TerrainModel greenwich = makeCustomGeoTerrain(101, 0.0f, -0.05, -0.05, 0.1);
+    engine.setTerrain(greenwich);
+    // About -0.005 to +0.005 degrees of longitude: it straddles the meridian.
+    const float half = static_cast<float>(TerrainModel::metersPerDegreeLon(0.0) * 0.005);
+    const float centreX = greenwich.worldSize().x * 0.5f;
+    const float centreZ = greenwich.worldSize().z * 0.5f;
+    const VegetationArea stand = standAt(centreX - half, centreZ - 500.0f,
+                                         centreX + half, centreZ + 500.0f);
+    engine.setVegetation({stand});
+
+    engine.setTerrain(makeCustomGeoTerrain(101, 0.0f, -0.05, 179.999, 0.1));
+    CHECK(engine.vegetation().size() == 1);
+    const VegetationArea carried = engine.vegetation()[0];
+    CHECK(carried.valid());
+    // Half a world from the origin a float resolves about 2 m, hence the tolerance.
+    CHECK_NEAR(carried.maxX - carried.minX, stand.maxX - stand.minX, 3.0);
+    CHECK(VegetationAreas::countOutside(engine.terrain(), engine.vegetation()) == 1);
+    const TerrainModel& far = engine.terrain();
+    bool painted = false;
+    for (int z = 0; z < far.height && !painted; ++z)
+        for (int x = 0; x < far.width && !painted; ++x)
+            painted = far.canopyHeightAt(x, z) > 0.0f;
+    CHECK(!painted);
+
+    engine.setTerrain(greenwich);
+    const VegetationArea back = engine.vegetation()[0];
+    CHECK_NEAR(back.minX, stand.minX, 1.5);
+    CHECK_NEAR(back.maxX, stand.maxX, 1.5);
+}
+
 // With no georeference on either side there is no shared frame, so areas keep
 // their metres exactly rather than being moved by a guess.
 static void test_drawn_vegetation_verbatim_without_georeference() {
@@ -400,6 +436,7 @@ int main() {
 
     test_drawn_vegetation_keeps_its_ground();
     test_drawn_vegetation_survives_a_far_location();
+    test_drawn_vegetation_keeps_its_width_across_the_seam();
     test_drawn_vegetation_verbatim_without_georeference();
     test_vegetation_rename_does_not_rebuild_canopy();
 
