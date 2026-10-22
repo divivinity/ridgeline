@@ -1,4 +1,5 @@
 #include "HeatmapOverlay.h"
+#include "render/TerrainTriangulation.h"
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -46,7 +47,7 @@ void HeatmapOverlay::build(const TerrainModel& terrain) {
             unsigned int tr = tl + 1;
             unsigned int bl = tl + terrain.width;
             unsigned int br = bl + 1;
-            idx.insert(idx.end(), {tl, bl, tr, tr, bl, br});
+            TerrainTriangulation::appendCellIndices(idx, tl, tr, bl, br);
         }
     }
     m_indexCount = static_cast<int>(idx.size());

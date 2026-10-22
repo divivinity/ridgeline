@@ -3,17 +3,23 @@
 #include "map/CanopyShade.h"
 #include "map/Hillshade.h"
 #include "map/MapMeasure.h"
+#include "map/VegetationGeometry.h"
+#include "render/ScreenProjection.h"
 #include "render/TerrainRaycast.h"
 #include <QApplication>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QLabel>
 #include <QCursor>
+#include <QFocusEvent>
+#include <QScopeGuard>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <array>
 #include <limits>
+#include <utility>
 #include <vector>
 
 ViewportWidget::ViewportWidget(SimEngine* engine, QWidget* parent)
@@ -98,6 +104,8 @@ void ViewportWidget::initializeGL() {
         m_antennaLobe.destroy();
         m_jammerBubble.destroy();
         m_fresnel.destroy();
+        m_vegetationOverlay.destroy();
+        m_vegGesture = VegetationGesture{};
         if (m_markerVAO) { glDeleteVertexArrays(1, &m_markerVAO); m_markerVAO = 0; }
         if (m_markerVBO) { glDeleteBuffers(1, &m_markerVBO);      m_markerVBO = 0; }
         doneCurrent();
@@ -130,6 +138,10 @@ void ViewportWidget::initializeGL() {
     m_antennaLobe.build();
     m_jammerBubble.build();
     m_fresnel.build();
+    m_vegetationOverlay.build();
+    rebuildVegetationCommitted();
+    rebuildVegetationSelection();
+    m_vegPreviewDirty = true;
 
     // Build marker GL objects
     glGenVertexArrays(1, &m_markerVAO);
@@ -200,6 +212,9 @@ void ViewportWidget::paintGL() {
     // The inspected-point path belongs to the result inspector, not the LOS
     // layer, so it survives that layer being hidden.
     m_losRay.drawProbe(m_lastMVP);
+    // After the coverage drape, which blends without writing depth and would
+    // otherwise wash over the outlines; before the markers, which stay on top.
+    drawVegetationAreas();
     drawAntennaMarkers();
 }
 
@@ -305,6 +320,7 @@ void ViewportWidget::reloadTerrain() {
     m_antennaLobe.destroy();
     m_jammerBubble.destroy();
     m_fresnel.destroy();
+    m_vegetationOverlay.destroy();
     const auto& terrain = m_engine->terrain();
     m_terrain.build(terrain);
     m_basemap.build(terrain);
@@ -317,6 +333,12 @@ void ViewportWidget::reloadTerrain() {
     m_antennaLobe.build();
     m_jammerBubble.build();
     m_fresnel.build();
+    m_vegetationOverlay.build();
+    // Outlines are draped on the terrain, so new terrain means new outlines.
+    cancelVegetationGesture();
+    rebuildVegetationCommitted();
+    rebuildVegetationSelection();
+    m_vegPreviewDirty = true;
     buildMarkers();
     float cx = terrain.worldSize().x * 0.5f;
     float cz = terrain.worldSize().z * 0.5f;
@@ -334,16 +356,49 @@ void ViewportWidget::reloadTerrain() {
 }
 
 void ViewportWidget::mousePressEvent(QMouseEvent* e) {
+    // A new left press means the release owed to a cancelled drag went somewhere
+    // else, typically to a modal dialog. Another button pressed while that left
+    // button is still down changes nothing: the rest of the drag stays swallowed
+    // rather than turning into an orbit.
+    if (e->button() == Qt::LeftButton) m_vegSwallowUntilRelease = false;
+    if (m_vegGesture.kind != VegetationGestureKind::None && e->button() != Qt::LeftButton) {
+        // A second button mid-drag abandons the gesture rather than mixing it
+        // with a camera move.
+        cancelVegetationGesture();
+        return;
+    }
     m_pressPos  = e->pos();
     m_lastMouse = e->pos();
     m_dragging  = true;
     m_cameraDragging = false;
-    m_markerPressIndex = (e->button() == Qt::LeftButton && !m_placementActive)
+    // Inside the vegetation tool the left button belongs to the tool, so a
+    // corner placed near a mast does not grab the mast.
+    m_markerPressIndex = (e->button() == Qt::LeftButton && !m_placementActive &&
+                          !m_vegetationToolActive)
         ? antennaAtScreenPosition(e->pos()) : -1;
     if (m_markerPressIndex >= 0) setCursor(Qt::ClosedHandCursor);
+    // Only the left button on its own starts a gesture. With the right or
+    // middle button already down the press is part of a camera move; a gesture
+    // started there would lose its drag state when that button let go, freezing
+    // the preview while the left release still committed.
+    if (e->button() == Qt::LeftButton && m_vegetationToolActive &&
+        !(e->buttons() & (Qt::RightButton | Qt::MiddleButton)))
+        beginVegetationGesture(e->pos());
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton && m_vegSwallowUntilRelease) {
+        // The end of a drag whose gesture was cancelled: not a click, not a commit.
+        m_vegSwallowUntilRelease = false;
+        m_dragging = false;
+        m_cameraDragging = false;
+        m_markerPressIndex = -1;
+        return;
+    }
+    if (e->button() == Qt::LeftButton && m_vegetationToolActive) {
+        finishVegetationGesture(e->pos());
+        return;
+    }
     if (e->button() == Qt::LeftButton) {
         m_dragging = false;
         const QPoint delta = e->pos() - m_pressPos;
@@ -406,20 +461,13 @@ int ViewportWidget::antennaAtScreenPosition(const QPoint& screenPos,
     int bestIndex = -1;
 
     for (int i = 0; i < static_cast<int>(antennas.size()); ++i) {
-        const glm::vec4 clip = mvp * glm::vec4(antennas[i].position, 1.0f);
-        if (clip.w <= 0.0f) continue;
-
-        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-        if (ndc.x < -1.05f || ndc.x > 1.05f ||
-            ndc.y < -1.05f || ndc.y > 1.05f ||
-            ndc.z < -1.0f || ndc.z > 1.0f) {
+        // The projection vegetation grips use too, so a marker and a corner at
+        // the same spot are found at the same pixel.
+        glm::vec2 px{0.0f};
+        if (!ScreenProjection::toScreen(mvp, width(), height(), antennas[i].position, px))
             continue;
-        }
-
-        const float sx = (ndc.x * 0.5f + 0.5f) * static_cast<float>(width());
-        const float sy = (0.5f - ndc.y * 0.5f) * static_cast<float>(height());
-        const float dx = sx - static_cast<float>(screenPos.x());
-        const float dy = sy - static_cast<float>(screenPos.y());
+        const float dx = px.x - static_cast<float>(screenPos.x());
+        const float dy = px.y - static_cast<float>(screenPos.y());
         const float distanceSq = dx * dx + dy * dy;
         if (distanceSq <= bestDistanceSq) {
             bestDistanceSq = distanceSq;
@@ -437,6 +485,7 @@ void ViewportWidget::setMeasureMode(bool active) {
     // Placement and measuring both consume a terrain click, so one cancels the
     // other rather than leaving the next click ambiguous.
     if (active && m_placementActive) setPlacementMode(false);
+    if (active && m_vegetationToolActive) setVegetationDrawMode(false);
     if (!active) clearMeasurement();
     setCursor(active ? Qt::CrossCursor : Qt::ArrowCursor);
     emit measureModeChanged(m_measureActive);
@@ -502,6 +551,7 @@ void ViewportWidget::takeMeasurementPoint(float worldX, float worldZ) {
 }
 
 void ViewportWidget::setPlacementMode(bool active, bool jammer) {
+    if (active && m_vegetationToolActive) setVegetationDrawMode(false);
     m_placementActive = active;
     m_placingJammer = jammer;
     if (active) {
@@ -567,8 +617,24 @@ void ViewportWidget::repositionHud() {
 }
 
 void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
+    // A move with the button already up means the release was taken elsewhere.
+    if (m_vegSwallowUntilRelease && !(e->buttons() & Qt::LeftButton))
+        m_vegSwallowUntilRelease = false;
+    // Likewise for a drag the tool is tracking without a gesture - the rest of a
+    // cancelled one, or a camera move - once no button is down at all. Its drag
+    // state goes too, or hover feedback and the readout would stay off until the
+    // next press. (A live gesture abandons itself further down.)
+    if (m_vegetationToolActive && m_dragging &&
+        m_vegGesture.kind == VegetationGestureKind::None &&
+        !(e->buttons() & (Qt::LeftButton | Qt::RightButton | Qt::MiddleButton))) {
+        m_dragging = false;
+        m_cameraDragging = false;
+        m_markerPressIndex = -1;
+    }
     if (!m_dragging) {
-        if (!m_placementActive && !m_measureActive) {
+        if (m_vegetationToolActive) {
+            updateVegetationHoverCursor(e->pos());
+        } else if (!m_placementActive && !m_measureActive) {
             setCursor(antennaAtScreenPosition(e->pos()) >= 0
                 ? Qt::PointingHandCursor : Qt::ArrowCursor);
         }
@@ -578,6 +644,29 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
     // While the camera is being dragged the readout would chase the cursor
     // across a moving scene, which reads as noise.
     hideCursorReadout();
+
+    // The rest of a cancelled drag: no orbit, no preview.
+    if (m_vegSwallowUntilRelease) return;
+    if (m_vegGesture.kind != VegetationGestureKind::None) {
+        if (!(e->buttons() & Qt::LeftButton)) {
+            // The release went to something else. Abandon the gesture without
+            // swallowing, since there is no release left to swallow.
+            m_vegGesture = VegetationGesture{};
+            m_vegPreviewVerts.clear();
+            m_vegPreviewDirty = true;
+            m_dragging = false;
+            update();
+            return;
+        }
+        m_vegGesture.lastCursor = e->pos();
+        if (!m_vegGesture.dragged) {
+            if ((e->pos() - m_pressPos).manhattanLength() < QApplication::startDragDistance())
+                return;
+            m_vegGesture.dragged = true;
+        }
+        updateVegetationPreview(e->pos());
+        return;
+    }
 
     if (m_markerPressIndex >= 0 && (e->buttons() & Qt::LeftButton)) {
         if ((e->pos() - m_pressPos).manhattanLength() >=
@@ -601,6 +690,9 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* e) {
         m_camera.orbit(-delta.x() * 0.4f, delta.y() * 0.4f);
     else if (e->buttons() & Qt::MiddleButton)
         m_camera.pan(delta.x(), delta.y());
+    else if ((e->buttons() & Qt::RightButton) && m_vegetationToolActive)
+        // The left button draws inside the vegetation tool, so orbit moves here.
+        m_camera.orbit(-delta.x() * 0.4f, delta.y() * 0.4f);
     update();
 }
 
@@ -622,6 +714,8 @@ void ViewportWidget::wheelEvent(QWheelEvent* e) {
             m_camera.target += (focus - m_camera.target) * shrink;
         }
     }
+    if (m_vegGesture.kind != VegetationGestureKind::None && m_vegGesture.dragged)
+        updateVegetationPreview(m_vegGesture.lastCursor);
     updateCursorReadout(e->position().toPoint());
     update();
 }
@@ -629,6 +723,11 @@ void ViewportWidget::wheelEvent(QWheelEvent* e) {
 void ViewportWidget::leaveEvent(QEvent* e) {
     hideCursorReadout();
     QOpenGLWidget::leaveEvent(e);
+}
+
+void ViewportWidget::focusOutEvent(QFocusEvent* e) {
+    cancelVegetationGesture();
+    QOpenGLWidget::focusOutEvent(e);
 }
 
 void ViewportWidget::hideCursorReadout() {
@@ -680,6 +779,24 @@ void ViewportWidget::setLayerStack(LayerStack* layers) {
 // texture. Comparing it means an analysis-layer toggle never triggers a tile
 // fetch, while a raster or relief change always does.
 void ViewportWidget::applyRasterLayers(bool force) {
+    // Building the basemap can run nested event loops - tile-cache misses,
+    // Google session requests - and those deliver input and timers. A second
+    // call arriving from inside one would destroy the basemap in the middle of
+    // its own build, so it is coalesced into one follow-up pass instead.
+    if (m_rasterBuildActive) {
+        m_rasterBuildPending = true;
+        m_rasterBuildForce = m_rasterBuildForce || force;
+        return;
+    }
+    m_rasterBuildActive = true;
+    const auto done = qScopeGuard([this] { m_rasterBuildActive = false; });
+    do {
+        applyRasterLayersOnce(force);
+        force = std::exchange(m_rasterBuildForce, false);
+    } while (std::exchange(m_rasterBuildPending, false));
+}
+
+void ViewportWidget::applyRasterLayersOnce(bool force) {
     if (!m_layers) return;
 
     std::vector<BasemapOverlay::RasterRequest> rasters;
@@ -719,6 +836,9 @@ void ViewportWidget::applyRasterLayers(bool force) {
         m_rasterSignature.clear();
         return;
     }
+    // From here the texture reflects the current canopy grid: it is either
+    // rebuilt below or its signature proves nothing it draws has changed.
+    m_appliedCanopyRevision = m_engine ? m_engine->canopyRevision() : 0;
     if (!force && signature == m_rasterSignature) return;
     m_rasterSignature = signature;
     if (!anyRaster) return;
@@ -778,13 +898,39 @@ bool ViewportWidget::isLayerVisible(const QString& id) const {
 void ViewportWidget::keyPressEvent(QKeyEvent* e) {
     switch (e->key()) {
         case Qt::Key_Escape:
-            if (m_measureActive) {
+            // Innermost first: a drag, then measuring or placement, then the
+            // selection, then the vegetation tool itself.
+            if (m_vegGesture.kind != VegetationGestureKind::None) {
+                cancelVegetationGesture();
+            } else if (m_measureActive) {
                 setMeasureMode(false);
             } else if (m_placementActive) {
                 setPlacementMode(false);
                 emit placementCancelled();
+            } else if (m_vegetationToolActive && m_vegetationSelection >= 0) {
+                emit vegetationAreaClicked(-1);
+            } else if (m_vegetationToolActive) {
+                setVegetationDrawMode(false);
             }
             break;
+        case Qt::Key_Delete:
+        case Qt::Key_Backspace:
+            if (m_vegetationToolActive && m_vegetationSelection >= 0 &&
+                m_vegGesture.kind == VegetationGestureKind::None) {
+                emit vegetationDeleteRequested();
+                break;
+            }
+            QOpenGLWidget::keyPressEvent(e);
+            return;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            if (m_vegetationToolActive && m_vegetationSelection >= 0 &&
+                m_vegGesture.kind == VegetationGestureKind::None) {
+                emit vegetationEditRequested();
+                break;
+            }
+            QOpenGLWidget::keyPressEvent(e);
+            return;
         case Qt::Key_T:
             topView();
             break;
@@ -886,4 +1032,383 @@ void ViewportWidget::clearScenarioComparison() {
     doneCurrent();
     if (m_comparisonLegend) m_comparisonLegend->hide();
     update();
+}
+
+// ---------------------------------------------------------------------------
+// Drawn vegetation
+// ---------------------------------------------------------------------------
+
+glm::mat4 ViewportWidget::renderMvp() const {
+    const float aspect = height() > 0
+        ? static_cast<float>(width()) / static_cast<float>(height()) : 1.0f;
+    return m_camera.mvp(aspect) *
+           glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, kVertScale, 1.0f));
+}
+
+void ViewportWidget::setVegetationDrawMode(bool active, VegetationKind kind) {
+    if (!active) {
+        if (!m_vegetationToolActive) return;
+        cancelVegetationGesture();
+        m_vegetationToolActive = false;
+        m_vegetationSelection = -1;
+        rebuildVegetationSelection();
+        unsetCursor();
+        emit vegetationDrawModeChanged(false, static_cast<int>(m_vegetationKind));
+        update();
+        return;
+    }
+
+    const bool changed = !m_vegetationToolActive || m_vegetationKind != kind;
+    // Measuring and placement both own the left button too, so they end here -
+    // placement with its cancellation signal, so MainWindow's copy of that
+    // state cannot go stale.
+    if (m_measureActive) setMeasureMode(false);
+    if (m_placementActive) {
+        setPlacementMode(false);
+        emit placementCancelled();
+    }
+    cancelVegetationGesture();
+    m_vegetationToolActive = true;
+    m_vegetationKind = kind;
+    setCursor(Qt::CrossCursor);
+    rebuildVegetationSelection();
+    if (changed) emit vegetationDrawModeChanged(true, static_cast<int>(kind));
+    update();
+}
+
+void ViewportWidget::setVegetationSelection(int index) {
+    const int count = m_engine ? static_cast<int>(m_engine->vegetation().size()) : 0;
+    m_vegetationSelection = (index >= 0 && index < count) ? index : -1;
+    rebuildVegetationSelection();
+    update();
+}
+
+void ViewportWidget::refreshVegetationAreas() {
+    cancelVegetationGesture();
+    const int count = static_cast<int>(m_engine->vegetation().size());
+    if (m_vegetationSelection >= count) m_vegetationSelection = -1;
+    rebuildVegetationCommitted();
+    rebuildVegetationSelection();
+    update();
+}
+
+void ViewportWidget::cancelVegetationGesture() {
+    if (m_vegGesture.kind == VegetationGestureKind::None) return;
+    m_vegSwallowUntilRelease = m_dragging;
+    m_vegGesture = VegetationGesture{};
+    if (!m_vegPreviewVerts.empty()) {
+        m_vegPreviewVerts.clear();
+        m_vegPreviewDirty = true;
+    }
+    update();
+}
+
+int ViewportWidget::vegetationOutlineVertexCount() const {
+    std::size_t count = 0;
+    if (vegetationOutlinesVisible()) count += m_vegCommittedVerts.size();
+    if (m_vegetationToolActive) count += m_vegSelectionVerts.size();
+    if (m_vegGesture.kind != VegetationGestureKind::None && m_vegGesture.dragged)
+        count += m_vegPreviewVerts.size();
+    return static_cast<int>(count);
+}
+
+bool ViewportWidget::vegetationWashUpToDate() const {
+    return m_engine && m_appliedCanopyRevision == m_engine->canopyRevision();
+}
+
+bool ViewportWidget::vegetationOutlinesVisible() const {
+    // What is being edited must be visible, whatever the layer says.
+    if (m_vegetationToolActive) return true;
+    if (!m_layers) return true;
+    const MapLayer* layer = m_layers->find(QStringLiteral("vegetation"));
+    return layer && layer->visible;
+}
+
+void ViewportWidget::rebuildVegetationCommitted() {
+    m_vegCommittedVerts.clear();
+    if (m_engine) {
+        const TerrainModel& terrain = m_engine->terrain();
+        for (const VegetationArea& area : m_engine->vegetation()) {
+            if (!area.valid()) continue;
+            VegetationGeometry::appendOutline(
+                m_vegCommittedVerts, terrain, VegetationGeometry::boundsOf(area),
+                VegetationGeometry::styleFor(area.kind, VegetationGeometry::Role::Committed));
+        }
+    }
+    m_vegCommittedDirty = true;
+}
+
+void ViewportWidget::rebuildVegetationSelection() {
+    m_vegSelectionVerts.clear();
+    if (m_engine && m_vegetationToolActive && m_vegetationSelection >= 0) {
+        const auto& areas = m_engine->vegetation();
+        if (m_vegetationSelection < static_cast<int>(areas.size())) {
+            const VegetationArea& area = areas[static_cast<std::size_t>(m_vegetationSelection)];
+            if (area.valid()) {
+                const TerrainModel& terrain = m_engine->terrain();
+                VegetationGeometry::appendOutline(
+                    m_vegSelectionVerts, terrain, VegetationGeometry::boundsOf(area),
+                    VegetationGeometry::styleFor(area.kind, VegetationGeometry::Role::Selected));
+                // The ground the solver actually paints, which rounds outward
+                // from the drawn rectangle. Shown so the two cannot disagree
+                // without the operator seeing it.
+                const VegetationAreas::Footprint fp = VegetationAreas::footprint(terrain, area);
+                if (!fp.empty) {
+                    VegetationGeometry::appendOutline(
+                        m_vegSelectionVerts, terrain, {fp.minX, fp.minZ, fp.maxX, fp.maxZ},
+                        VegetationGeometry::styleFor(area.kind, VegetationGeometry::Role::Footprint));
+                }
+            }
+        }
+    }
+    m_vegSelectionDirty = true;
+}
+
+VegetationGeometry::Grip ViewportWidget::vegetationGripAt(const QPoint& cursor,
+                                                          bool haveWorldHit,
+                                                          glm::vec2 worldHit) const {
+    if (!m_engine) return VegetationGeometry::Grip::None;
+    const auto& areas = m_engine->vegetation();
+    if (m_vegetationSelection < 0 || m_vegetationSelection >= static_cast<int>(areas.size()))
+        return VegetationGeometry::Grip::None;
+    const VegetationGeometry::Rect rect =
+        VegetationGeometry::boundsOf(areas[static_cast<std::size_t>(m_vegetationSelection)]);
+    const auto corners = VegetationGeometry::cornersOnMesh(m_engine->terrain(), rect);
+    VegetationGeometry::ProjectedCorners projected;
+    const glm::mat4 mvp = renderMvp();
+    for (std::size_t i = 0; i < 4; ++i)
+        projected.visible[i] = ScreenProjection::toScreen(mvp, width(), height(), corners[i],
+                                                          projected.px[i]);
+    return VegetationGeometry::hitTest(rect, projected,
+                                       {static_cast<float>(cursor.x()),
+                                        static_cast<float>(cursor.y())},
+                                       haveWorldHit, worldHit);
+}
+
+void ViewportWidget::updateVegetationHoverCursor(const QPoint& cursor) {
+    const auto& areas = m_engine->vegetation();
+    if (m_vegetationSelection >= 0 && m_vegetationSelection < static_cast<int>(areas.size())) {
+        float wx = 0.0f, wz = 0.0f;
+        const bool hit = raycastTerrain(cursor, wx, wz);
+        const VegetationGeometry::Grip grip = vegetationGripAt(cursor, hit, {wx, wz});
+        if (grip == VegetationGeometry::Grip::Body) {
+            setCursor(Qt::SizeAllCursor);
+            return;
+        }
+        if (grip != VegetationGeometry::Grip::None) {
+            // The diagonal resize cursor that points along the grabbed corner,
+            // judged on screen, where the rectangle may be rotated.
+            const VegetationGeometry::Rect rect =
+                VegetationGeometry::boundsOf(areas[static_cast<std::size_t>(m_vegetationSelection)]);
+            const auto corners = VegetationGeometry::cornersOnMesh(m_engine->terrain(), rect);
+            const glm::mat4 mvp = renderMvp();
+            std::array<glm::vec2, 4> px{};
+            std::array<bool, 4> onScreen{};
+            glm::vec2 centre{0.0f};
+            int visible = 0;
+            for (std::size_t i = 0; i < 4; ++i) {
+                onScreen[i] = ScreenProjection::toScreen(mvp, width(), height(), corners[i], px[i]);
+                if (onScreen[i]) {
+                    centre += px[i];
+                    ++visible;
+                }
+            }
+            const auto corner = static_cast<std::size_t>(grip) -
+                                static_cast<std::size_t>(VegetationGeometry::Grip::MinXMinZ);
+            if (visible > 0 && corner < 4 && onScreen[corner]) {
+                const glm::vec2 offset = px[corner] - centre / static_cast<float>(visible);
+                setCursor(offset.x * offset.y > 0.0f ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor);
+            } else {
+                setCursor(Qt::SizeAllCursor);
+            }
+            return;
+        }
+    }
+    setCursor(Qt::CrossCursor);
+}
+
+void ViewportWidget::beginVegetationGesture(const QPoint& cursor) {
+    float wx = 0.0f, wz = 0.0f;
+    // A press on sky starts nothing, so a drag from there orbits as usual.
+    if (!raycastTerrain(cursor, wx, wz)) return;
+
+    const TerrainModel& terrain = m_engine->terrain();
+    VegetationGesture gesture;
+    gesture.anchor = {wx, VegetationGeometry::meshHeightAtWorld(terrain, wx, wz), wz};
+    gesture.lastGood = {wx, wz};
+    gesture.lastPrecise = true;
+    gesture.lastCursor = cursor;
+    gesture.pressCanopyRevision = m_engine->canopyRevision();
+
+    const auto& areas = m_engine->vegetation();
+    const bool haveSelection =
+        m_vegetationSelection >= 0 && m_vegetationSelection < static_cast<int>(areas.size()) &&
+        areas[static_cast<std::size_t>(m_vegetationSelection)].valid();
+    const VegetationGeometry::Grip grip = haveSelection
+        ? vegetationGripAt(cursor, true, {wx, wz}) : VegetationGeometry::Grip::None;
+
+    // A selected corner resizes, the selected body moves, anywhere else draws.
+    // So drawing a stand inside the selected one needs a deselect first.
+    if (grip == VegetationGeometry::Grip::None) {
+        gesture.kind = VegetationGestureKind::Draw;
+        gesture.preview = {wx, wz, wx, wz};
+    } else {
+        gesture.kind = grip == VegetationGeometry::Grip::Body ? VegetationGestureKind::Move
+                                                              : VegetationGestureKind::Resize;
+        gesture.grip = grip;
+        gesture.index = m_vegetationSelection;
+        gesture.original =
+            VegetationGeometry::boundsOf(areas[static_cast<std::size_t>(m_vegetationSelection)]);
+        gesture.preview = gesture.original;
+    }
+    m_vegGesture = gesture;
+}
+
+bool ViewportWidget::resolveVegetationPoint(VegetationGesture& gesture, const QPoint& cursor,
+                                            glm::vec2& out, bool& precise) const {
+    // Terrain first. Then the horizontal plane through the anchor, so a drag
+    // that leaves the terrain keeps the corner under the cursor rather than
+    // letting it jump to wherever the ray next meets ground. Then the last good
+    // point, which is marked imprecise so a release there commits nothing.
+    const glm::vec3 world = m_engine->terrain().worldSize();
+    float wx = 0.0f, wz = 0.0f;
+    if (raycastTerrain(cursor, wx, wz)) {
+        out = {wx, wz};
+        precise = true;
+        gesture.lastGood = out;
+        return true;
+    }
+    if (width() > 0 && height() > 0) {
+        const float aspect = static_cast<float>(width()) / static_cast<float>(height());
+        glm::vec2 plane{0.0f};
+        if (TerrainRaycast::onHorizontalPlane(m_camera.mvp(aspect), width(), height(),
+                                              static_cast<float>(cursor.x()),
+                                              static_cast<float>(cursor.y()),
+                                              kVertScale, gesture.anchor.y, plane)) {
+            out = {std::clamp(plane.x, 0.0f, world.x), std::clamp(plane.y, 0.0f, world.z)};
+            precise = true;
+            gesture.lastGood = out;
+            return true;
+        }
+    }
+    out = gesture.lastGood;
+    precise = false;
+    return false;
+}
+
+void ViewportWidget::updateVegetationPreview(const QPoint& cursor) {
+    if (m_vegGesture.kind == VegetationGestureKind::None) return;
+    glm::vec2 point{0.0f};
+    bool precise = false;
+    resolveVegetationPoint(m_vegGesture, cursor, point, precise);
+    m_vegGesture.lastPrecise = precise;
+
+    const TerrainModel& terrain = m_engine->terrain();
+    const glm::vec3 world = terrain.worldSize();
+    const glm::vec2 extent{world.x, world.z};
+    const glm::vec2 anchor{m_vegGesture.anchor.x, m_vegGesture.anchor.z};
+    m_vegGesture.preview = m_vegGesture.kind == VegetationGestureKind::Draw
+        ? VegetationGeometry::fromCorners(anchor, point, extent)
+        : VegetationGeometry::reshape(m_vegGesture.original, m_vegGesture.grip, anchor, point, extent);
+
+    VegetationKind kind = m_vegetationKind;
+    const auto& areas = m_engine->vegetation();
+    if (m_vegGesture.kind != VegetationGestureKind::Draw && m_vegGesture.index >= 0 &&
+        m_vegGesture.index < static_cast<int>(areas.size()))
+        kind = areas[static_cast<std::size_t>(m_vegGesture.index)].kind;
+    m_vegPreviewVerts.clear();
+    VegetationGeometry::appendOutline(
+        m_vegPreviewVerts, terrain, m_vegGesture.preview,
+        VegetationGeometry::styleFor(kind, VegetationGeometry::Role::Preview));
+    m_vegPreviewDirty = true;
+    update();
+}
+
+void ViewportWidget::finishVegetationGesture(const QPoint& cursor) {
+    m_dragging = false;
+    m_cameraDragging = false;
+    m_markerPressIndex = -1;
+    // Cleared before anything is emitted, so a handler that re-enters the
+    // viewport sees no gesture in progress.
+    VegetationGesture gesture = m_vegGesture;
+    m_vegGesture = VegetationGesture{};
+    if (!m_vegPreviewVerts.empty()) {
+        m_vegPreviewVerts.clear();
+        m_vegPreviewDirty = true;
+    }
+    update();
+
+    // The press missed the terrain, so any drag was a camera move.
+    if (gesture.kind == VegetationGestureKind::None) return;
+
+    if (!gesture.dragged) {
+        emit vegetationAreaClicked(VegetationGeometry::pick(m_engine->vegetation(),
+                                                            gesture.anchor.x, gesture.anchor.z));
+        return;
+    }
+
+    glm::vec2 point{0.0f};
+    bool precise = false;
+    resolveVegetationPoint(gesture, cursor, point, precise);
+    const glm::vec3 world = m_engine->terrain().worldSize();
+    const glm::vec2 extent{world.x, world.z};
+    const glm::vec2 anchor{gesture.anchor.x, gesture.anchor.z};
+    const VegetationGeometry::Rect rect = gesture.kind == VegetationGestureKind::Draw
+        ? VegetationGeometry::fromCorners(anchor, point, extent)
+        : VegetationGeometry::reshape(gesture.original, gesture.grip, anchor, point, extent);
+
+    if (m_engine->canopyRevision() != gesture.pressCanopyRevision) {
+        emit vegetationGestureRejected(
+            QStringLiteral("Vegetation changed during the drag; nothing was changed"));
+        return;
+    }
+    if (!precise) {
+        emit vegetationGestureRejected(
+            QStringLiteral("Released off the map; nothing was changed"));
+        return;
+    }
+    if (gesture.kind == VegetationGestureKind::Draw)
+        emit vegetationAreaDrawn(rect.minX, rect.minZ, rect.maxX, rect.maxZ);
+    else
+        emit vegetationAreaReshaped(gesture.index, rect.minX, rect.minZ, rect.maxX, rect.maxZ,
+                                    gesture.kind == VegetationGestureKind::Resize);
+}
+
+void ViewportWidget::drawVegetationAreas() {
+    if (!m_vegetationOverlay.ready()) return;
+    using Slot = VegetationAreaOverlay::Slot;
+    if (m_vegCommittedDirty) {
+        m_vegetationOverlay.upload(Slot::Committed, m_vegCommittedVerts);
+        m_vegCommittedDirty = false;
+    }
+    if (m_vegSelectionDirty) {
+        m_vegetationOverlay.upload(Slot::Selection, m_vegSelectionVerts);
+        m_vegSelectionDirty = false;
+    }
+    if (m_vegPreviewDirty) {
+        m_vegetationOverlay.upload(Slot::Preview, m_vegPreviewVerts);
+        m_vegPreviewDirty = false;
+    }
+
+    VegetationAreaOverlay::DrawParams params;
+    params.mvp = m_lastMVP;
+    const glm::vec3 eye = m_camera.eye();
+    params.eyeUnscaled = {eye.x, eye.y / kVertScale, eye.z};
+    const qreal ratio = devicePixelRatioF();
+    params.viewportPx = {static_cast<float>(width() * ratio),
+                         static_cast<float>(height() * ratio)};
+    params.vertScale = kVertScale;
+    // Camera::mvp's 45-degree vertical field of view over the framebuffer.
+    params.pixelAngleRad = static_cast<float>(45.0 * 3.14159265358979323846 / 180.0) /
+                           std::max(params.viewportPx.y, 1.0f);
+    // The same ground scale the scale bar uses, so dashes keep their size on
+    // screen at every zoom.
+    const double visibleHeightM = 2.0 * static_cast<double>(m_camera.radius) *
+                                  std::tan(22.5 * 3.14159265358979323846 / 180.0);
+    const double metresPerPixel = height() > 0 ? visibleHeightM / static_cast<double>(height()) : 1.0;
+    params.dashPeriodM = static_cast<float>(std::max(1.0, 14.0 * metresPerPixel));
+    params.committed = vegetationOutlinesVisible();
+    params.selection = m_vegetationToolActive;
+    params.preview = m_vegGesture.kind != VegetationGestureKind::None && m_vegGesture.dragged;
+    m_vegetationOverlay.draw(params);
 }

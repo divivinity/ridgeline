@@ -28,6 +28,39 @@ bool clipAxis(float origin,
     return tEnter <= tExit;
 }
 
+// The ray through a pixel's centre, in rendered world coordinates, shared by
+// the terrain hit and the plane fallback so the two can never disagree about
+// which ray a pixel means.
+bool screenRay(const glm::mat4& viewProjection,
+               int viewportWidth,
+               int viewportHeight,
+               float screenX,
+               float screenY,
+               glm::vec3& origin,
+               glm::vec3& direction,
+               float& length) {
+    // QPoint identifies a logical pixel; use its centre for stable mapping on
+    // both standard- and high-DPI framebuffers.
+    const float ndcX = 2.0f * (screenX + 0.5f) /
+                       static_cast<float>(viewportWidth) - 1.0f;
+    const float ndcY = 1.0f - 2.0f * (screenY + 0.5f) /
+                       static_cast<float>(viewportHeight);
+
+    const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+    glm::vec4 nearH = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+    glm::vec4 farH = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+    if (std::abs(nearH.w) < 1.0e-8f || std::abs(farH.w) < 1.0e-8f)
+        return false;
+
+    origin = glm::vec3(nearH) / nearH.w;
+    const glm::vec3 farPoint = glm::vec3(farH) / farH.w;
+    const glm::vec3 delta = farPoint - origin;
+    length = glm::length(delta);
+    if (!std::isfinite(length) || length < 1.0e-5f) return false;
+    direction = delta / length;
+    return true;
+}
+
 } // namespace
 
 bool TerrainRaycast::fromScreen(const TerrainModel& terrain,
@@ -43,25 +76,12 @@ bool TerrainRaycast::fromScreen(const TerrainModel& terrain,
         return false;
     }
 
-    // QPoint identifies a logical pixel; use its centre for stable mapping on
-    // both standard- and high-DPI framebuffers.
-    const float ndcX = 2.0f * (screenX + 0.5f) /
-                       static_cast<float>(viewportWidth) - 1.0f;
-    const float ndcY = 1.0f - 2.0f * (screenY + 0.5f) /
-                       static_cast<float>(viewportHeight);
-
-    const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
-    glm::vec4 nearH = inverseViewProjection * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
-    glm::vec4 farH = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
-    if (std::abs(nearH.w) < 1.0e-8f || std::abs(farH.w) < 1.0e-8f)
+    glm::vec3 rayOrigin{0.0f};
+    glm::vec3 rayDirection{0.0f};
+    float rayLength = 0.0f;
+    if (!screenRay(viewProjection, viewportWidth, viewportHeight, screenX, screenY,
+                   rayOrigin, rayDirection, rayLength))
         return false;
-
-    const glm::vec3 rayOrigin = glm::vec3(nearH) / nearH.w;
-    const glm::vec3 farPoint = glm::vec3(farH) / farH.w;
-    const glm::vec3 rayDelta = farPoint - rayOrigin;
-    const float rayLength = glm::length(rayDelta);
-    if (!std::isfinite(rayLength) || rayLength < 1.0e-5f) return false;
-    const glm::vec3 rayDirection = rayDelta / rayLength;
 
     const glm::vec3 worldSize = terrain.worldSize();
     float tEnter = 0.0f;
@@ -124,4 +144,32 @@ bool TerrainRaycast::fromScreen(const TerrainModel& terrain,
         previousDifference = currentDifference;
     }
     return false;
+}
+
+bool TerrainRaycast::onHorizontalPlane(const glm::mat4& viewProjection,
+                                       int viewportWidth,
+                                       int viewportHeight,
+                                       float screenX,
+                                       float screenY,
+                                       float verticalScale,
+                                       float planeYUnscaled,
+                                       glm::vec2& outXZ) {
+    if (viewportWidth <= 0 || viewportHeight <= 0 || !(verticalScale > 0.0f) ||
+        !std::isfinite(planeYUnscaled)) {
+        return false;
+    }
+    glm::vec3 origin{0.0f};
+    glm::vec3 direction{0.0f};
+    float length = 0.0f;
+    if (!screenRay(viewProjection, viewportWidth, viewportHeight, screenX, screenY,
+                   origin, direction, length))
+        return false;
+    if (std::abs(direction.y) < 1.0e-6f) return false;
+
+    // The plane is compared in rendered space, where heights are exaggerated,
+    // and the returned position is horizontal and therefore unaffected by it.
+    const float t = (planeYUnscaled * verticalScale - origin.y) / direction.y;
+    if (!(t > 0.0f) || t > length) return false;
+    outXZ = {origin.x + direction.x * t, origin.z + direction.z * t};
+    return true;
 }

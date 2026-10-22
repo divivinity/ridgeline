@@ -58,8 +58,12 @@ jobs:
             exit 1
           fi
 
+      # A bare --parallel gives Make an unlimited job count. With two GUI test
+      # executables each compiling the whole application, that exhausts the
+      # runner's memory and the compiler is killed, so cap it at the core count.
       - name: Build
-        run: cmake --build build --config Release --parallel
+        shell: bash
+        run: cmake --build build --config Release --parallel 4
 
       # Software GL keeps the GUI tests off the runner's absent hardware driver.
       - name: Test (Linux)

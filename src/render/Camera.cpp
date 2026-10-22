@@ -31,6 +31,10 @@ glm::mat4 Camera::mvp(float aspect) const {
     return projection(aspect) * view();
 }
 
+glm::vec3 Camera::eye() const {
+    return camPos(*this);
+}
+
 void Camera::orbit(float dAz, float dEl) {
     azimuth   += dAz;
     elevation  = std::clamp(elevation + dEl, 5.0f, 89.0f);

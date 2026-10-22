@@ -31,8 +31,13 @@ public:
 
     void setTerrain(TerrainModel terrain);
 
-    // Hand-drawn vegetation. Setting either terrain or areas re-rasterises the
-    // canopy grid, so the two can never drift apart.
+    // Hand-drawn stands and clearings. Setting terrain or areas re-rasterises the
+    // canopy grid, so the two can never drift apart - except that a list whose
+    // footprints are unchanged (a rename) is stored without a rebuild, so
+    // canopyRevision stays put and nothing downstream mistakes it for an edit.
+    //
+    // Areas are expressed in the world metres of the terrain currently
+    // installed. setTerrain carries existing areas onto a new terrain itself.
     void setVegetation(std::vector<VegetationArea> areas);
     const std::vector<VegetationArea>& vegetation() const { return m_vegetation; }
 
@@ -54,6 +59,11 @@ public:
     void clearImportedCanopy();
     const CanopySourceInfo& importedCanopy() const { return m_canopyInfo; }
     bool hasImportedCanopy() const { return static_cast<bool>(m_canopySampler); }
+    // Resamples the imported layer onto the current terrain without touching the
+    // canopy grid. False when there is no import or it declines this terrain.
+    // Used to suggest a drawn stand's height from measured data.
+    bool sampleImportedCanopy(std::vector<std::uint16_t>& heightDm,
+                              std::vector<std::uint8_t>& coverPct) const;
     // Bumped whenever the canopy grid is rebuilt. A renderer caching anything
     // derived from vegetation compares this rather than the grid itself, which
     // at the 1024x1024 ceiling would be a megabyte to re-hash on every layer

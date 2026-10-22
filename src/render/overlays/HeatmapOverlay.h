@@ -28,6 +28,9 @@ public:
     void draw(const glm::mat4& mvp);
     void destroy();
     Metric metric() const { return m_metric; }
+    // True while a coverage field is uploaded and would be drawn. Cleared when
+    // an invalid grid is uploaded, which is how a stale result is removed.
+    bool hasField() const { return m_texW > 0; }
 
 private:
     ShaderProgram m_shader;
