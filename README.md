@@ -208,10 +208,45 @@ why it ships: the global alternatives are CC BY and cannot go into an offline
 package until that format can carry a licence notice. Its cost is coverage — the
 United States and its territories only.
 
-**Drawn by hand.** Vegetation areas in a scenario paint over whatever was
-imported, and work anywhere. A drawn stand replaces what is underneath rather
-than adding to it, and carries no cover measurement, so it is treated as
-complete cover.
+**Drawn by hand.** *Analysis ▸ Vegetation ▸ Draw Stands* (or *Draw Clearings*)
+turns the map into a drawing tool. It works anywhere - including outside the
+United States and on terrain with no real-world location, where it is the only
+way to get vegetation into a solve.
+
+- Drag on the map to outline an area. Click an area to select it, then drag its
+  middle to move it or a corner to resize it. While the tool is active the left
+  button draws, so right-drag orbits the camera.
+- Enter edits the selected area's name, kind and canopy height; Delete removes
+  it; Esc cancels a drag, then deselects, then leaves the tool. Every change can
+  be undone.
+- A **stand** is trees of a stated height, treated as complete cover. A new
+  stand takes the median imported canopy beneath it when at least half its
+  ground carries some. Otherwise it takes the last height you set, and the
+  status line says the height is assumed rather than measured.
+- A **clearing** is felled ground. It removes canopy, imported or drawn, and
+  beats any stand it overlaps whatever order they were drawn in, so a road or a
+  landing zone can be cut through a drawn wood. A copse left standing inside a
+  clearing needs the clearing split around it.
+
+Drawn areas are axis-aligned rectangles. The solver paints samples outward from
+the outline - from the sample at or below each lower edge to the sample at or
+above each upper edge - so a painted sample can lie up to one sample beyond the
+outline, and the ground the solver treats as covered reaches up to one and a half
+samples beyond it: about 45 m on a 15 km real-world area. A selected area shows
+that ground beside its outline, and its details state the size the solver
+actually uses.
+
+When both the old and the new terrain have a real-world location, drawn areas
+stay on the same ground by latitude and longitude, to within about a metre even
+after a jump to the far side of the world and back. Otherwise they keep their
+position in metres from the terrain's south-west corner. Areas left outside the
+new terrain are kept but have no effect, and *Delete Areas Outside This Terrain*
+removes them.
+
+Scenarios containing a clearing are written in scenario format 6. Builds that
+read drawn vegetation but predate clearings refuse to open them rather than
+misreading a clearing as a stand; builds older than drawn vegetation ignore drawn
+areas altogether.
 
 Three things about the imported data are worth knowing before you trust a
 number:
@@ -369,9 +404,9 @@ sudo apt-get install -y libgdal-dev    # then re-configure
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-A default configure registers 15 suites. Two more are conditional: GDAL adds
-`geotiff_tests`, and `-DRIDGELINE_GUI_TESTS=ON` adds `main_window_tests`, for
-17 with both.
+A default configure registers 16 suites. Three more are conditional: GDAL adds
+`geotiff_tests`, and `-DRIDGELINE_GUI_TESTS=ON` adds `main_window_tests` and
+`vegetation_gui_tests`, for 19 with both.
 
 `main_window_tests` is opt-in because it drives a real `MainWindow`, whose
 `QOpenGLWidget` needs a genuine GL context, so it cannot run on the offscreen

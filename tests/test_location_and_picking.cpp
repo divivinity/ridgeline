@@ -1,4 +1,5 @@
 #include "geo/Mgrs.h"
+#include "render/ScreenProjection.h"
 #include "render/TerrainRaycast.h"
 #include "sim/TerrainModel.h"
 
@@ -158,6 +159,68 @@ void testScreenRayRejectsSkyOutsideTerrain() {
                                       width - 1.0f, 0.0f, 2.5f, hit));
 }
 
+void testScreenProjectionRoundTrip() {
+    constexpr int width = 1000;
+    constexpr int height = 800;
+    constexpr float verticalScale = 2.5f;
+    const TerrainModel terrain = makeSlopedTerrain();
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(45.0f), static_cast<float>(width) / height, 1.0f, 10000.0f);
+    const glm::mat4 renderScale =
+        glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, verticalScale, 1.0f));
+
+    struct View { glm::vec3 eye; glm::vec3 target; };
+    const View views[] = {
+        {{1350.0f, 1450.0f, 1500.0f}, {500.0f, 150.0f, 500.0f}},   // oblique
+        {{500.0f, 2600.0f, 510.0f}, {500.0f, 150.0f, 500.0f}},     // nearly top-down
+    };
+    for (const View& view : views) {
+        const glm::mat4 viewProjection =
+            projection * glm::lookAt(view.eye, view.target, glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::vec3 point{310.0f, terrain.heightAtWorld(310.0f, 720.0f), 720.0f};
+        glm::vec2 px{0.0f};
+        CHECK(ScreenProjection::toScreen(viewProjection * renderScale, width, height, point, px));
+        // toScreen reports the point's position; fromScreen reads a pixel and
+        // adds half a pixel to reach its centre.
+        glm::vec3 hit{0.0f};
+        CHECK(TerrainRaycast::fromScreen(terrain, viewProjection, width, height,
+                                         px.x - 0.5f, px.y - 0.5f, verticalScale, hit));
+        CHECK_NEAR(hit.x, point.x, 0.25f);
+        CHECK_NEAR(hit.z, point.z, 0.25f);
+    }
+
+    const glm::mat4 lookingNorth = projection * glm::lookAt(
+        glm::vec3(500.0f, 500.0f, 1600.0f), glm::vec3(500.0f, 100.0f, 500.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec2 behind{0.0f};
+    CHECK(!ScreenProjection::toScreen(lookingNorth * renderScale, width, height,
+                                      glm::vec3(500.0f, 100.0f, 3000.0f), behind));
+}
+
+void testAnchorPlaneFallback() {
+    constexpr int width = 800;
+    constexpr int height = 600;
+    constexpr float verticalScale = 2.5f;
+    const TerrainModel terrain = makeSlopedTerrain();
+    // Standing off the terrain's southern edge and looking across it: the
+    // bottom of the screen sees open ground short of the terrain.
+    const glm::mat4 viewProjection =
+        glm::perspective(glm::radians(45.0f), static_cast<float>(width) / height, 1.0f, 10000.0f) *
+        glm::lookAt(glm::vec3(500.0f, 400.0f, 1600.0f), glm::vec3(500.0f, 100.0f, 500.0f),
+                    glm::vec3(0.0f, 1.0f, 0.0f));
+    const float bottom = static_cast<float>(height - 1);
+
+    glm::vec3 hit{0.0f};
+    CHECK(!TerrainRaycast::fromScreen(terrain, viewProjection, width, height,
+                                      400.0f, bottom, verticalScale, hit));
+    glm::vec2 plane{0.0f};
+    CHECK(TerrainRaycast::onHorizontalPlane(viewProjection, width, height, 400.0f, bottom,
+                                            verticalScale, 0.0f, plane));
+    CHECK(std::isfinite(plane.x) && std::isfinite(plane.y) && plane.y > 1000.0f);
+    CHECK(!TerrainRaycast::onHorizontalPlane(viewProjection, width, height, 400.0f, 0.0f,
+                                             verticalScale, 0.0f, plane));
+}
+
 } // namespace
 
 int main() {
@@ -166,6 +229,8 @@ int main() {
     testWgs84MgrsEncodingAndRoundTrip();
     testScreenRayHitsRenderedTerrain();
     testScreenRayRejectsSkyOutsideTerrain();
+    testScreenProjectionRoundTrip();
+    testAnchorPlaneFallback();
     if (failures == 0)
         std::cout << "Location and terrain-picking tests passed.\n";
     return failures == 0 ? 0 : 1;

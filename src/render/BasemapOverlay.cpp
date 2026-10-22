@@ -1,4 +1,5 @@
 #include "BasemapOverlay.h"
+#include "TerrainTriangulation.h"
 #include "map/TileProviders.h"
 #include "data/TileBatchDownloader.h"
 
@@ -289,7 +290,7 @@ void BasemapOverlay::build(const TerrainModel& terrain) {
             const unsigned int tr = tl + 1;
             const unsigned int bl = tl + terrain.width;
             const unsigned int br = bl + 1;
-            idx.insert(idx.end(), {tl, bl, tr, tr, bl, br});
+            TerrainTriangulation::appendCellIndices(idx, tl, tr, bl, br);
         }
     }
     m_indexCount = static_cast<int>(idx.size());

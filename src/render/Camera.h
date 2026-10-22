@@ -11,6 +11,9 @@ public:
     glm::mat4 view()       const;
     glm::mat4 projection(float aspect) const;
     glm::mat4 mvp(float aspect)        const;
+    // The camera position in rendered coordinates, where heights carry the
+    // viewport's vertical exaggeration.
+    glm::vec3 eye() const;
 
     void orbit(float dAz, float dEl);
     void pan(float dx, float dy);

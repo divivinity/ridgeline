@@ -7,6 +7,7 @@
 #include "ui/CalibrationPanel.h"
 #include "ui/OverlayToolbar.h"
 #include "ui/LayersPanel.h"
+#include "ui/VegetationAreaDialog.h"
 #include "map/LayerStack.h"
 #include "ui/ScenarioTree.h"
 #include "ui/WorkspaceTheme.h"
@@ -891,6 +892,74 @@ void testRuntimeAssetsIgnoreLaunchDirectory() {
 
 } // namespace
 
+void testVegetationAreaDialog() {
+    const VegetationArea stand{10.0f, 20.0f, 110.0f, 90.0f, 18.0f, "north wood"};
+    VegetationAreaDialog dialog(stand, "solves as 110 × 80 m (11 × 8 samples)", 12.0f);
+    auto* name = dialog.findChild<QLineEdit*>("VegetationAreaName");
+    auto* kind = dialog.findChild<QComboBox*>("VegetationAreaKind");
+    auto* height = dialog.findChild<QDoubleSpinBox*>("VegetationAreaHeight");
+    auto* effect = dialog.findChild<QLabel*>("VegetationAreaEffect");
+    CHECK(dialog.objectName() == "VegetationAreaDialog");
+    CHECK(name && kind && height && effect);
+    if (!name || !kind || !height || !effect) return;
+    CHECK(std::abs(height->maximum() - VegetationAreas::kMaxCanopyHeightM) < 1e-6);
+    CHECK(std::abs(height->minimum() - 0.5) < 1e-6);
+    CHECK(std::abs(height->value() - 18.0) < 1e-6);
+    CHECK(effect->text().contains("solves as"));
+
+    kind->setCurrentIndex(kind->findData(static_cast<int>(VegetationKind::Clearing)));
+    CHECK(!height->isEnabled());
+    const VegetationArea cleared = dialog.area();
+    CHECK(cleared.kind == VegetationKind::Clearing);
+    CHECK(cleared.canopyHeightM == 0.0f);
+    CHECK(cleared.minX == stand.minX && cleared.maxZ == stand.maxZ);
+
+    kind->setCurrentIndex(kind->findData(static_cast<int>(VegetationKind::Stand)));
+    CHECK(height->isEnabled() && std::abs(height->value() - 18.0) < 1e-6);
+
+    height->setValue(22.5);
+    name->setText("  south wood  ");
+    const VegetationArea edited = dialog.area();
+    CHECK(edited.name == "south wood");
+    CHECK(std::abs(edited.canopyHeightM - 22.5f) < 1e-4f);
+    name->setText("   ");
+    CHECK(dialog.area().name == "north wood");
+
+    // A clearing turned into a stand starts from the session's stand height,
+    // not from the zero a clearing carries.
+    const VegetationArea clearing{0.0f, 0.0f, 50.0f, 50.0f, 0.0f, "cut", VegetationKind::Clearing};
+    VegetationAreaDialog clearingDialog(clearing, "", 12.0f);
+    auto* clearingKind = clearingDialog.findChild<QComboBox*>("VegetationAreaKind");
+    auto* clearingHeight = clearingDialog.findChild<QDoubleSpinBox*>("VegetationAreaHeight");
+    CHECK(clearingKind && clearingHeight && !clearingHeight->isEnabled());
+    if (clearingKind && clearingHeight) {
+        clearingKind->setCurrentIndex(
+            clearingKind->findData(static_cast<int>(VegetationKind::Stand)));
+        CHECK(clearingHeight->isEnabled() && std::abs(clearingHeight->value() - 12.0) < 1e-6);
+    }
+    // An untouched dialog changes nothing, even for a stored height outside the
+    // spin box's range: OK must not rewrite it, rebuild the canopy or add an
+    // undo step. A real edit still wins.
+    for (const float stored : {0.3f, 150.0f}) {
+        const VegetationArea odd{0.0f, 0.0f, 50.0f, 50.0f, stored, "odd"};
+        VegetationAreaDialog oddDialog(odd, "", 12.0f);
+        auto* oddName = oddDialog.findChild<QLineEdit*>("VegetationAreaName");
+        auto* oddKind = oddDialog.findChild<QComboBox*>("VegetationAreaKind");
+        auto* oddHeight = oddDialog.findChild<QDoubleSpinBox*>("VegetationAreaHeight");
+        CHECK(oddName && oddKind && oddHeight);
+        if (!oddName || !oddKind || !oddHeight) continue;
+        CHECK(oddDialog.area().canopyHeightM == stored);
+        oddName->setText("renamed");
+        CHECK(oddDialog.area().canopyHeightM == stored);
+        oddKind->setCurrentIndex(oddKind->findData(static_cast<int>(VegetationKind::Clearing)));
+        oddKind->setCurrentIndex(oddKind->findData(static_cast<int>(VegetationKind::Stand)));
+        CHECK(oddDialog.area().canopyHeightM == stored);
+        oddHeight->setValue(40.0);
+        CHECK(std::abs(oddDialog.area().canopyHeightM - 40.0f) < 1e-4f);
+    }
+    capturePanel(dialog, "vegetation-area-dialog");
+}
+
 void testLayersPanelDrivesTheStack() {
     LayerStack stack;
     LayersPanel panel;
@@ -974,6 +1043,7 @@ int main(int argc, char** argv) {
 
     testCompactMapControls();
     testLayersPanelDrivesTheStack();
+    testVegetationAreaDialog();
     testSourceCardsPreserveSelection();
     testAdvancedPanelRemainsEditableAndCollapsible();
     testPreciseSourcePositionDialog();

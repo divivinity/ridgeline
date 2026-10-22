@@ -26,19 +26,22 @@ ShortcutsDialog::ShortcutsDialog(QWidget* parent) : QDialog(parent) {
             {"Ctrl+O", "Load terrain from a file"},
             {"Ctrl+Shift+O", "Open a scenario"},
             {"Ctrl+S", "Save the scenario"},
-            {"Ctrl+Z / Ctrl+Y", "Undo / redo a source edit"},
+            {"Ctrl+Z / Ctrl+Y", "Undo / redo a source or vegetation edit"},
         }},
         {"Analysis", {
             {"F5", "Run coverage"},
             {"M", "Measure distance between two points"},
-            {"Esc", "Leave measuring or source placement"},
+            {"Esc", "Cancel a drag, deselect, then leave drawing, measuring or source placement"},
+            {"Delete", "Remove the selected vegetation area (while drawing vegetation)"},
+            {"Enter", "Edit the selected vegetation area"},
         }},
         {"Map", {
             {"T", "Look straight down"},
             {"R", "Reset the view"},
             {"Arrow keys", "Orbit the camera"},
             {"Mouse wheel", "Zoom toward the cursor"},
-            {"Drag", "Orbit; drag a source to move it"},
+            {"Drag", "Orbit; drag a source to move it; while drawing vegetation, drag to outline an area"},
+            {"Right-drag", "Orbit while drawing vegetation"},
         }},
     };
 
