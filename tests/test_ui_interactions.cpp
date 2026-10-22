@@ -22,6 +22,7 @@
 #include "RuntimePaths.h"
 
 #include <QApplication>
+#include <QColor>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QElapsedTimer>
@@ -32,6 +33,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHostAddress>
+#include <QImage>
 #include <QLineEdit>
 #include <QKeyEvent>
 #include <QLabel>
@@ -366,6 +368,34 @@ void testPointAnalysisPanelShowsExplanation() {
         const QRect bounds(explanation->mapTo(scroll->viewport(), QPoint{}), explanation->size());
         CHECK(scroll->viewport()->rect().contains(bounds));
     }
+
+    // Foliage is named only when the path pays for it, and the canopy is drawn
+    // on the profile above the terrain.
+    auto* pathSummary = panel.findChild<QLabel*>("PointPathSummary");
+    auto* plot = panel.findChild<QWidget*>("LinkProfilePlot");
+    CHECK(pathSummary && plot);
+    if (!pathSummary || !plot) return;
+    CHECK(!pathSummary->text().contains("Foliage"));
+    auto canopyPixels = [plot] {
+        const QImage image = plot->grab().toImage();
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                if (c.green() > c.red() + 25 && c.green() > c.blue() + 50) ++count;
+            }
+        return count;
+    };
+    CHECK(canopyPixels() == 0);
+    analysis.foliageDepthM = 180.0f;
+    analysis.foliageLossDb = 9.4f;
+    analysis.canopyTopElevationM = {100.0f, 145.0f, 100.0f};
+    panel.setAnalysis(analysis, "35.0°, -80.0°", "Emitter 1 · 450 MHz", "Jammer 1");
+    CHECK(pathSummary->text().contains("Foliage: 180 m, 9.4 dB"));
+    CHECK(canopyPixels() > 50);
+    analysis.foliageDepthM = 0.0f;
+    analysis.foliageLossDb = 0.0f;
+    analysis.canopyTopElevationM.clear();
 
     analysis.servingSourceIndex = -1;
     analysis.strongestJammerIndex = 0;

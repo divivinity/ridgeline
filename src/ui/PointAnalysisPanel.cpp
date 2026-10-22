@@ -75,6 +75,8 @@ protected:
         }
         for (const float value : m_analysis.fresnel60LowerElevationM)
             minimum = std::min(minimum, value);
+        for (const float value : m_analysis.canopyTopElevationM)
+            maximum = std::max(maximum, value);
         const float padding = std::max(5.0f, (maximum - minimum) * 0.12f);
         minimum -= padding;
         maximum += padding;
@@ -99,6 +101,24 @@ protected:
                                         m_analysis.terrainElevationM[i]));
         terrainPath.lineTo(plot.right(), plot.bottom());
         terrainPath.closeSubpath();
+
+        // Canopy sits on the terrain: trace its top outward, then the ground
+        // back, so bare stretches collapse to nothing.
+        const std::size_t samples = m_analysis.profileDistanceM.size();
+        if (m_analysis.canopyTopElevationM.size() == samples) {
+            QPainterPath canopyPath;
+            for (std::size_t i = 0; i < samples; ++i) {
+                const QPointF top = pointFor(m_analysis.profileDistanceM[i],
+                                             m_analysis.canopyTopElevationM[i]);
+                if (i == 0) canopyPath.moveTo(top);
+                else canopyPath.lineTo(top);
+            }
+            for (std::size_t i = samples; i-- > 0;)
+                canopyPath.lineTo(pointFor(m_analysis.profileDistanceM[i],
+                                           m_analysis.terrainElevationM[i]));
+            canopyPath.closeSubpath();
+            painter.fillPath(canopyPath, QColor(101, 163, 13, 150));
+        }
         painter.fillPath(terrainPath, QColor(45, 75, 67, 225));
         painter.setPen(QPen(QColor("#86a98f"), 1.5));
         painter.drawPath(terrainPath);
@@ -229,7 +249,8 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     outer->addWidget(m_profile);
 
     auto* legend = new QLabel(
-        "Cyan: direct path   ·   Amber: 60% Fresnel boundary   ·   Green: terrain + effective Earth curvature");
+        "Cyan: direct path   ·   Amber: 60% Fresnel boundary   ·   Green: terrain + effective Earth curvature"
+        "   ·   Olive: canopy, when vegetation is loaded");
     legend->setWordWrap(true);
     legend->setStyleSheet("color: #a8b7ca; font-size: 12px;");
     outer->addWidget(legend);
@@ -279,13 +300,18 @@ void PointAnalysisPanel::setAnalysis(const PointAnalysisResult& analysis,
     m_sinr->setText(formatMetric(analysis.sinrDb));
     m_margin->setText(formatMetric(analysis.fadeMarginDb));
     if (analysis.servingSourceIndex >= 0) {
-        m_path->setText(QString("%1 · %2 · Fresnel clearance %3%4")
+        m_path->setText(QString("%1 · %2 · Fresnel clearance %3%4%5")
             .arg(analysis.distanceM >= 1000.0f
                     ? QString("%1 km").arg(analysis.distanceM / 1000.0f, 0, 'f', 2)
                     : QString("%1 m").arg(analysis.distanceM, 0, 'f', 0))
             .arg(losName(analysis.losStatus))
             .arg(QString("%1%").arg(
                 analysis.fresnelClearanceRatio * 100.0f, 0, 'f', 0))
+            .arg(analysis.foliageLossDb >= 0.1f
+                    ? QString("\nFoliage: %1 m, %2 dB")
+                          .arg(analysis.foliageDepthM, 0, 'f', 0)
+                          .arg(analysis.foliageLossDb, 0, 'f', 1)
+                    : QString{})
             .arg(strongestJammerName.isEmpty()
                     ? QString{} : QString("\nStrongest jammer: %1").arg(strongestJammerName)));
     } else {

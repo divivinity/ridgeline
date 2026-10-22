@@ -257,6 +257,50 @@ void testPointAnalysisExplainsSolvedCell() {
     NEAR(analysis.lineOfSightElevationM.front(), emitter.position.y, 0.001);
     NEAR(analysis.lineOfSightElevationM.back(), analysis.receiverPosition.y, 0.001);
     CHECK(!analysis.explanations.empty());
+    CHECK(analysis.canopyTopElevationM.empty());
+    CHECK(analysis.foliageDepthM == 0.0f);
+    CHECK(analysis.foliageLossDb == 0.0f);
+}
+
+// The inspector must charge a path exactly what the solver charged it, so the
+// explanation can never disagree with the map.
+void testPointAnalysisExplainsFoliageLoss() {
+    TerrainModel bare = flatTerrain(41, 41, 20.0f);
+    TerrainModel wooded = bare;
+    wooded.canopyHeightDm.assign(wooded.heights.size(), 200); // 20 m everywhere.
+    MaterialLibrary materials;
+    FastSolver solver;
+    solver.gridResolution = 40.0f;
+    solver.receiver.receiverHeightAglM = 2.0f;
+
+    Antenna emitter;
+    emitter.position = {100.0f, 10.0f, 400.0f};
+    emitter.frequencyMHz = 450.0f;
+    emitter.powerW = 10.0f;
+    const std::vector<Antenna> antennas{emitter};
+
+    const FieldGrid bareGrid = solver.solve(bare, antennas, materials);
+    const FieldGrid woodedGrid = solver.solve(wooded, antennas, materials);
+    const PointAnalysisResult open = analyzeFieldPoint(
+        bareGrid, bare, antennas, solver.receiver, 500.0f, 400.0f);
+    const PointAnalysisResult woods = analyzeFieldPoint(
+        woodedGrid, wooded, antennas, solver.receiver, 500.0f, 400.0f);
+    CHECK(open.valid && woods.valid);
+    CHECK(woods.servingSourceIndex == 0);
+
+    CHECK(woods.foliageDepthM > 300.0f);
+    NEAR(woods.foliageLossDb,
+         RFModels::vegetationLossDb(woods.foliageDepthM, emitter.frequencyMHz), 0.001);
+    CHECK(woods.foliageLossDb > 1.0f);
+    NEAR(open.desiredDbm - woods.desiredDbm, woods.foliageLossDb, 0.05);
+    CHECK(std::any_of(woods.explanations.begin(), woods.explanations.end(),
+        [](const std::string& text) { return text.find("vegetation") != std::string::npos; }));
+    CHECK(std::none_of(open.explanations.begin(), open.explanations.end(),
+        [](const std::string& text) { return text.find("vegetation") != std::string::npos; }));
+
+    CHECK(woods.canopyTopElevationM.size() == woods.terrainElevationM.size());
+    const std::size_t middle = woods.terrainElevationM.size() / 2;
+    NEAR(woods.canopyTopElevationM[middle] - woods.terrainElevationM[middle], 20.0, 0.001);
 }
 
 void testSolverContributorProvenance() {
@@ -842,6 +886,7 @@ int main() {
     testPatternImport();
     testFastSolverMetrics();
     testPointAnalysisExplainsSolvedCell();
+    testPointAnalysisExplainsFoliageLoss();
     testSolverContributorProvenance();
     testJammerOnlyPointExplanation();
     testPartialEdgeCellsUseTerrainBoundary();

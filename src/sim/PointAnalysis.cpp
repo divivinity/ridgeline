@@ -1,4 +1,5 @@
 #include "PointAnalysis.h"
+#include "RFModels.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -91,6 +92,14 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
         source.position, result.receiverPosition);
     result.fresnelClearanceRatio = terrain.fresnelClearanceRatio(
         source.position, result.receiverPosition, source.frequencyMHz);
+    // The same depth and loss the solvers charge for this path, so the
+    // explanation can never disagree with the number on the map.
+    if (terrain.hasVegetation()) {
+        result.foliageDepthM = terrain.foliageDepthM(
+            source.position, result.receiverPosition);
+        result.foliageLossDb = RFModels::vegetationLossDb(
+            result.foliageDepthM, source.frequencyMHz);
+    }
 
     if (result.inService) {
         result.explanations.emplace_back(
@@ -119,6 +128,13 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
         result.explanations.emplace_back(
             "The direct path is visible, but less than 60% of the first Fresnel zone is clear.");
     }
+    if (result.foliageLossDb >= 0.1f) {
+        char text[160]{};
+        std::snprintf(text, sizeof(text),
+                      "The direct path crosses %.0f m of vegetation, costing %.1f dB.",
+                      result.foliageDepthM, result.foliageLossDb);
+        result.explanations.emplace_back(text);
+    }
     if (std::isfinite(result.jammerDbm) && result.strongestJammerIndex >= 0) {
         result.explanations.emplace_back(
             "An in-band jammer contributes to the interference level.");
@@ -136,6 +152,7 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
     result.terrainElevationM.reserve(samples);
     result.lineOfSightElevationM.reserve(samples);
     result.fresnel60LowerElevationM.reserve(samples);
+    if (terrain.hasVegetation()) result.canopyTopElevationM.reserve(samples);
     const glm::vec3 delta = result.receiverPosition - source.position;
     const float pathM = std::max(result.distanceM, 1.0f);
     const float horizontalDistanceM = glm::distance(
@@ -156,6 +173,9 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
             terrain.heightAtWorld(point.x, point.z) + earthBulgeM);
         result.lineOfSightElevationM.push_back(point.y);
         result.fresnel60LowerElevationM.push_back(point.y - 0.6f * radiusM);
+        if (terrain.hasVegetation())
+            result.canopyTopElevationM.push_back(
+                terrain.canopyTopAtWorld(point.x, point.z) + earthBulgeM);
     }
     return result;
 }

@@ -27,6 +27,10 @@ struct PointAnalysisResult {
     float fadeMarginDb = 0.0f;
     float distanceM = 0.0f;
     float fresnelClearanceRatio = 0.0f;
+    // Metres of the serving path inside canopy, and the excess loss the solver
+    // charges for them. Both stay zero when the terrain carries no vegetation.
+    float foliageDepthM = 0.0f;
+    float foliageLossDb = 0.0f;
     TerrainModel::LOSStatus losStatus = TerrainModel::LOSStatus::Blocked;
     TerrainModel::PeakObstacle peakObstacle{0.0f, 0.5f};
 
@@ -38,6 +42,9 @@ struct PointAnalysisResult {
     std::vector<float> terrainElevationM;
     std::vector<float> lineOfSightElevationM;
     std::vector<float> fresnel60LowerElevationM;
+    // Canopy top along the profile, parallel to terrainElevationM. Empty when
+    // the terrain carries no vegetation.
+    std::vector<float> canopyTopElevationM;
     std::vector<std::string> explanations;
 };
 
