@@ -2,6 +2,8 @@
 #include "data/CanopyImportOptions.h"
 #include "data/RecoveryStore.h"
 #include "data/WorkspaceSettings.h"
+#include <nlohmann/json.hpp>
+#include <string>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
@@ -308,6 +310,115 @@ int main() {
             legacy.close();
             require(ScenarioIO::load(vegPath.toStdString()).vegetation.empty(),
                     "a scenario without vegetation loads with none");
+        }
+        {
+            // Format 6: clearings, and what older and newer readers do with them.
+            ScenarioDoc mixed;
+            const VegetationArea stand{100.0f, 100.0f, 300.0f, 300.0f, 18.0f, "north wood"};
+            const VegetationArea clearing{150.0f, 150.0f, 250.0f, 250.0f, 12.0f,
+                                          "landing zone", VegetationKind::Clearing};
+            mixed.vegetation = {stand, clearing};
+            const QString mixedPath = dir.filePath("clearings.json");
+            ScenarioIO::save(mixed, mixedPath.toStdString());
+            const ScenarioDoc back = ScenarioIO::load(mixedPath.toStdString());
+            require(back.vegetation.size() == 2 &&
+                    back.vegetation[0].kind == VegetationKind::Stand &&
+                    back.vegetation[1].kind == VegetationKind::Clearing,
+                    "stand and clearing kinds round-trip");
+            require(back.vegetation[1].name == "landing zone" &&
+                    std::abs(back.vegetation[1].minX - 150.0f) < 1e-4f &&
+                    std::abs(back.vegetation[1].maxZ - 250.0f) < 1e-4f,
+                    "a clearing's name and bounds round-trip");
+            require(back.vegetation[1].canopyHeightM == 0.0f,
+                    "a clearing comes back as bare ground");
+
+            const nlohmann::json raw = nlohmann::json::parse(read(mixedPath).toStdString());
+            require(raw.value("version", 0) == 6, "the file declares format 6");
+            require(raw.value("minReaderVersion", 0) == 6 && raw.contains("requires"),
+                    "a file with a clearing names the oldest reader that understands it");
+            require(raw["vegetation"][0]["kind"] == "stand" &&
+                    raw["vegetation"][0]["canopyHeightM"].is_number(),
+                    "a stand is written with its height");
+            require(raw["vegetation"][1]["kind"] == "clearing" &&
+                    raw["vegetation"][1]["canopyHeightM"].is_null(),
+                    "a clearing is written with a null height");
+
+            // The fail-safe for builds before clearings: they read this key with
+            // value<float>, which must throw so they refuse the file rather than
+            // drop the clearing or plant a stand where the trees were felled.
+            bool olderReaderRefuses = false;
+            try {
+                (void)raw["vegetation"][1].value("canopyHeightM", 0.0f);
+            } catch (const nlohmann::json::type_error&) {
+                olderReaderRefuses = true;
+            }
+            require(olderReaderRefuses, "an older reader's height lookup throws on a clearing");
+
+            ScenarioDoc standsOnly;
+            standsOnly.vegetation = {stand};
+            ScenarioIO::save(standsOnly, mixedPath.toStdString());
+            const nlohmann::json rawStands = nlohmann::json::parse(read(mixedPath).toStdString());
+            bool standsReadable = true;
+            try {
+                for (const auto& entry : rawStands["vegetation"])
+                    (void)entry.value("canopyHeightM", 0.0f);
+            } catch (const nlohmann::json::exception&) {
+                standsReadable = false;
+            }
+            require(!rawStands.contains("minReaderVersion") && !rawStands.contains("requires") &&
+                        standsReadable,
+                    "a file with only stands stays readable by builds before clearings");
+
+            const auto writeRaw = [&mixedPath](const char* text) {
+                QFile file(mixedPath);
+                require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "rewrite fixture");
+                file.write(text);
+            };
+            const auto loadError = [&mixedPath]() -> std::string {
+                try {
+                    ScenarioIO::load(mixedPath.toStdString());
+                } catch (const std::exception& e) {
+                    return e.what();
+                }
+                return {};
+            };
+
+            writeRaw("{\"vegetation\":[{\"minX\":0,\"minZ\":0,\"maxX\":10,\"maxZ\":10,"
+                     "\"canopyHeightM\":7.5}]}");
+            const ScenarioDoc legacy = ScenarioIO::load(mixedPath.toStdString());
+            require(legacy.vegetation.size() == 1 &&
+                    legacy.vegetation[0].kind == VegetationKind::Stand &&
+                    std::abs(legacy.vegetation[0].canopyHeightM - 7.5f) < 1e-4f,
+                    "an entry written before kinds existed loads as a stand");
+
+            writeRaw("{\"vegetation\":[{\"kind\":\"polygon\",\"minX\":0,\"minZ\":0,"
+                     "\"maxX\":10,\"maxZ\":10,\"canopyHeightM\":7.5}]}");
+            const std::string unknownKind = loadError();
+            require(unknownKind.find("polygon") != std::string::npos &&
+                        unknownKind.find("parse error") == std::string::npos,
+                    "an unknown vegetation kind refuses the file, naming the kind");
+
+            writeRaw("{\"minReaderVersion\":7,\"vegetation\":[]}");
+            require(loadError().find("newer") != std::string::npos,
+                    "a file needing a newer reader is refused with a message saying so");
+
+            writeRaw("{\"vegetation\":[{\"kind\":\"clearing\",\"minX\":10,\"minZ\":0,"
+                     "\"maxX\":0,\"maxZ\":10,\"canopyHeightM\":null},"
+                     "{\"minX\":0,\"minZ\":0,\"maxX\":1e39,\"maxZ\":10,\"canopyHeightM\":5}]}");
+            require(ScenarioIO::load(mixedPath.toStdString()).vegetation.empty(),
+                    "an inverted clearing and an infinite bound are both dropped");
+
+            const QString stateDir = dir.filePath("clearing-recovery");
+            require(QDir().mkpath(stateDir), "create a recovery state directory");
+            qputenv("RIDGELINE_STATE_DIR", stateDir.toUtf8());
+            require(RecoveryStore::write(mixed),
+                    "a workspace containing a clearing is written for recovery");
+            const ScenarioDoc recovered = RecoveryStore::read();
+            require(recovered.vegetation.size() == 2 &&
+                        recovered.vegetation[1].kind == VegetationKind::Clearing,
+                    "a recovery copy preserves a clearing");
+            RecoveryStore::clear();
+            qunsetenv("RIDGELINE_STATE_DIR");
         }
         std::cout << "Scenario save checks passed\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

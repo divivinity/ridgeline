@@ -45,6 +45,9 @@
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QUndoCommand>
+#include "SnapshotCommand.h"
+#include "VegetationAreaDialog.h"
+#include "map/VegetationGeometry.h"
 #include <QUndoStack>
 #include <QCloseEvent>
 #include <QScopeGuard>
@@ -63,51 +66,11 @@
 
 namespace {
 
-class SourceStateCommand final : public QUndoCommand {
-public:
-    using Apply = std::function<void(const std::vector<Antenna>&, int)>;
-
-    SourceStateCommand(std::vector<Antenna> before,
-                       int selectedBefore,
-                       std::vector<Antenna> after,
-                       int selectedAfter,
-                       QString description,
-                       int mergeId,
-                       Apply apply)
-        : QUndoCommand(std::move(description)),
-          m_before(std::move(before)),
-          m_after(std::move(after)),
-          m_selectedBefore(selectedBefore),
-          m_selectedAfter(selectedAfter),
-          m_mergeId(mergeId),
-          m_timestampMs(QDateTime::currentMSecsSinceEpoch()),
-          m_apply(std::move(apply)) {}
-
-    void undo() override { m_apply(m_before, m_selectedBefore); }
-    void redo() override { m_apply(m_after, m_selectedAfter); }
-    int id() const override { return m_mergeId; }
-
-    bool mergeWith(const QUndoCommand* other) override {
-        const auto* newer = dynamic_cast<const SourceStateCommand*>(other);
-        if (!newer || m_mergeId < 0 || newer->m_mergeId != m_mergeId ||
-            newer->m_timestampMs - m_timestampMs > 900) {
-            return false;
-        }
-        m_after = newer->m_after;
-        m_selectedAfter = newer->m_selectedAfter;
-        m_timestampMs = newer->m_timestampMs;
-        return true;
-    }
-
-private:
-    std::vector<Antenna> m_before;
-    std::vector<Antenna> m_after;
-    int m_selectedBefore = -1;
-    int m_selectedAfter = -1;
-    int m_mergeId = -1;
-    qint64 m_timestampMs = 0;
-    Apply m_apply;
-};
+// Whole-state snapshots for both editable lists. One template, so sources and
+// drawn vegetation share merge rules, and a command of one kind can never
+// merge into the other.
+using SourceStateCommand = SnapshotCommand<std::vector<Antenna>>;
+using VegetationStateCommand = SnapshotCommand<std::vector<VegetationArea>>;
 
 } // namespace
 
@@ -203,6 +166,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QAction* canopyOptionsAct = vegetationMenu->addAction("Canopy &Options…");
     canopyOptionsAct->setObjectName("CanopyOptionsAction");
     connect(canopyOptionsAct, &QAction::triggered, this, &MainWindow::onCanopyOptions);
+    vegetationMenu->addSeparator();
+    // Drawing is available anywhere, including terrain with no real-world
+    // location, which makes it the only route to vegetation outside LANDFIRE's
+    // coverage. No shortcuts: a window-wide Delete would fire while the source
+    // list has focus, and single letters are taken by the map.
+    m_drawStandsAct = vegetationMenu->addAction("Draw &Stands");
+    m_drawStandsAct->setObjectName("DrawVegetationStandsAction");
+    m_drawStandsAct->setCheckable(true);
+    m_drawClearingsAct = vegetationMenu->addAction("Draw C&learings");
+    m_drawClearingsAct->setObjectName("DrawVegetationClearingsAction");
+    m_drawClearingsAct->setCheckable(true);
+    m_editVegetationAct = vegetationMenu->addAction("Vegetation Area &Properties…");
+    m_editVegetationAct->setObjectName("EditVegetationAreaAction");
+    connect(m_editVegetationAct, &QAction::triggered, this, &MainWindow::onEditVegetationArea);
+    m_deleteVegetationAct = vegetationMenu->addAction("&Delete Vegetation Area");
+    m_deleteVegetationAct->setObjectName("DeleteVegetationAreaAction");
+    connect(m_deleteVegetationAct, &QAction::triggered, this, &MainWindow::onDeleteVegetationArea);
+    m_deleteOffTerrainVegetationAct =
+        vegetationMenu->addAction("Delete Areas &Outside This Terrain");
+    m_deleteOffTerrainVegetationAct->setObjectName("DeleteOffTerrainVegetationAction");
+    connect(m_deleteOffTerrainVegetationAct, &QAction::triggered,
+            this, &MainWindow::onDeleteOffTerrainVegetation);
     vegetationMenu->addSeparator();
     // A permanently disabled entry, used as a label: what is loaded should be
     // readable without opening a dialog, and there is nowhere else in this menu
@@ -440,6 +425,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_viewport, &ViewportWidget::measurementChanged, this, [this](const QString& text) {
         if (!text.isEmpty()) m_statusLabel->setText("  " + text);
     });
+    connect(m_drawStandsAct, &QAction::toggled, this, [this](bool on) {
+        if (on)
+            m_viewport->setVegetationDrawMode(true, VegetationKind::Stand);
+        else if (m_viewport->vegetationDrawMode() &&
+                 m_viewport->vegetationDrawKind() == VegetationKind::Stand)
+            m_viewport->setVegetationDrawMode(false);
+    });
+    connect(m_drawClearingsAct, &QAction::toggled, this, [this](bool on) {
+        if (on)
+            m_viewport->setVegetationDrawMode(true, VegetationKind::Clearing);
+        else if (m_viewport->vegetationDrawMode() &&
+                 m_viewport->vegetationDrawKind() == VegetationKind::Clearing)
+            m_viewport->setVegetationDrawMode(false);
+    });
+    connect(m_viewport, &ViewportWidget::vegetationDrawModeChanged,
+            this, &MainWindow::onVegetationDrawModeChanged);
+    connect(m_viewport, &ViewportWidget::vegetationAreaDrawn,
+            this, &MainWindow::onVegetationAreaDrawn);
+    connect(m_viewport, &ViewportWidget::vegetationAreaReshaped,
+            this, &MainWindow::onVegetationAreaReshaped);
+    connect(m_viewport, &ViewportWidget::vegetationAreaClicked,
+            this, &MainWindow::onVegetationAreaClicked);
+    connect(m_viewport, &ViewportWidget::vegetationDeleteRequested,
+            this, &MainWindow::onDeleteVegetationArea);
+    connect(m_viewport, &ViewportWidget::vegetationEditRequested,
+            this, &MainWindow::onEditVegetationArea);
+    connect(m_viewport, &ViewportWidget::vegetationGestureRejected,
+            this, [this](const QString& reason) { m_statusLabel->setText("  " + reason); });
     connect(m_overlayBar, &OverlayToolbar::resetViewRequested,
             m_viewport, &ViewportWidget::resetView);
     connect(m_overlayBar, &OverlayToolbar::topViewRequested,
@@ -522,6 +535,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Nothing is imported yet, so Clear starts disabled and the status line in
     // the vegetation menu says so rather than being blank.
     refreshCanopyActions();
+    refreshVegetationActions();
 
     QTimer::singleShot(0, this, [this] {
         // Captured before any stored layout is applied, so Reset always returns
@@ -540,6 +554,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_autosaveTimer->setInterval(120000);
     connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::autosaveTick);
     m_autosaveTimer->start();
+
+    // Coalesces map-texture rebuilds after vegetation edits, so holding Ctrl+Z
+    // costs one rebuild rather than one per step.
+    m_vegetationWashTimer = new QTimer(this);
+    m_vegetationWashTimer->setObjectName("VegetationWashTimer");
+    m_vegetationWashTimer->setSingleShot(true);
+    m_vegetationWashTimer->setInterval(120);
+    connect(m_vegetationWashTimer, &QTimer::timeout, this, &MainWindow::flushVegetationWash);
 
     // Queued so the window is visible before any recovery prompt appears over it.
     QTimer::singleShot(0, this, [this] { offerRecovery(); });
@@ -828,7 +850,12 @@ QString MainWindow::canopySummary() const {
 
 void MainWindow::refreshCanopyActions() {
     if (m_clearCanopyAct) m_clearCanopyAct->setEnabled(static_cast<bool>(m_canopy));
-    if (m_canopyStatusAct) m_canopyStatusAct->setText(canopySummary());
+    if (m_canopyStatusAct) {
+        QString text = canopySummary();
+        const std::size_t drawn = m_engine.vegetation().size();
+        if (drawn > 0) text += QString(" · %1 drawn area(s)").arg(drawn);
+        m_canopyStatusAct->setText(text);
+    }
 }
 
 void MainWindow::installCanopy(CanopyRaster raster) {
@@ -873,7 +900,9 @@ void MainWindow::onLoadCanopy() {
         QMessageBox::information(this, "Canopy needs real-world terrain",
             "Vegetation is fetched for the ground the terrain covers, so the "
             "terrain has to know where it is. Choose a location first, then "
-            "load canopy for it.");
+            "load canopy for it.\n\nAnywhere, including terrain without a real-world "
+            "location, you can draw stands and clearings by hand: Analysis ▸ "
+            "Vegetation ▸ Draw Stands.");
         return;
     }
 
@@ -911,10 +940,14 @@ void MainWindow::onLoadCanopy() {
     }
     if (!result.ok()) {
         m_statusLabel->setText("  Canopy not loaded · Existing vegetation kept");
+        // This is the moment an operator outside LANDFIRE's coverage learns
+        // import will not help, so it says what will.
+        const QString reason = result.error.isEmpty()
+            ? QStringLiteral("The canopy layer came back unusable.") : result.error;
         QMessageBox::warning(this, "Could not load canopy",
-                             result.error.isEmpty()
-                                 ? QStringLiteral("The canopy layer came back unusable.")
-                                 : result.error);
+                             reason + QStringLiteral("\n\nYou can draw stands and clearings "
+                                                     "by hand instead: Analysis ▸ Vegetation "
+                                                     "▸ Draw Stands."));
         return;
     }
 
@@ -1087,6 +1120,337 @@ void MainWindow::restoreCanopyImport(const CanopyImport& record) {
     setWindowModified(isScenarioDirty());
 }
 
+// ---------------------------------------------------------------------------
+// Drawn vegetation
+// ---------------------------------------------------------------------------
+
+QString MainWindow::vegetationToolHint(VegetationKind kind) const {
+    return kind == VegetationKind::Clearing
+        ? QStringLiteral("  Drawing clearings · drag to mark felled ground · a clearing removes "
+                         "any stand or imported canopy beneath it · click an area to select it "
+                         "· right-drag orbits · Esc stops")
+        : QStringLiteral("  Drawing stands · drag on the map to outline one · click an area to "
+                         "select it · right-drag orbits · Esc stops");
+}
+
+void MainWindow::refreshVegetationActions() {
+    const auto& areas = m_engine.vegetation();
+    const bool haveSelection = m_selectedVegetationIndex >= 0 &&
+        m_selectedVegetationIndex < static_cast<int>(areas.size());
+    if (m_editVegetationAct) m_editVegetationAct->setEnabled(haveSelection);
+    if (m_deleteVegetationAct) m_deleteVegetationAct->setEnabled(haveSelection);
+    if (m_deleteOffTerrainVegetationAct)
+        m_deleteOffTerrainVegetationAct->setEnabled(
+            VegetationAreas::countOutside(m_engine.terrain(), areas) > 0);
+}
+
+void MainWindow::scheduleVegetationWashRefresh() {
+    if (m_vegetationWashTimer)
+        m_vegetationWashTimer->start();   // restarts, so a burst costs one rebuild
+    else if (m_viewport)
+        m_viewport->refreshLayers();
+}
+
+void MainWindow::flushVegetationWash() {
+    if (m_vegetationWashTimer) m_vegetationWashTimer->stop();
+    if (m_solveInProgress || m_terrainLoadInProgress) {
+        // Try again once the running operation has finished rather than
+        // rebuilding the map texture underneath it.
+        if (m_vegetationWashTimer) m_vegetationWashTimer->start();
+        return;
+    }
+    if (m_viewport) m_viewport->refreshLayers();
+}
+
+QString MainWindow::vegetationEffectSummary(const VegetationArea& area) const {
+    const VegetationAreas::Footprint fp =
+        VegetationAreas::footprint(m_engine.terrain(), area);
+    if (fp.empty) return QStringLiteral("lies outside this terrain and has no effect");
+    // The ground the solver paints, which rounds outward from the outline.
+    return QStringLiteral("solves as %1 × %2 m (%3 × %4 samples)")
+        .arg(static_cast<double>(fp.maxX - fp.minX), 0, 'f', 0)
+        .arg(static_cast<double>(fp.maxZ - fp.minZ), 0, 'f', 0)
+        .arg(fp.x1 - fp.x0 + 1)
+        .arg(fp.z1 - fp.z0 + 1);
+}
+
+float MainWindow::defaultStandHeightM(const VegetationArea& area, bool& fromImport) const {
+    fromImport = false;
+    std::vector<std::uint16_t> heights;
+    std::vector<std::uint8_t> covers;
+    if (m_engine.hasImportedCanopy() && m_engine.sampleImportedCanopy(heights, covers)) {
+        const VegetationAreas::ImportedUnder under =
+            VegetationAreas::importedHeightUnder(m_engine.terrain(), area, heights);
+        if (under.samples > 0 && under.vegetated * 2 >= under.samples) {
+            fromImport = true;
+            return std::clamp(std::round(under.medianM * 2.0f) / 2.0f, 0.5f,
+                              VegetationAreas::kMaxCanopyHeightM);
+        }
+    }
+    return m_lastStandHeightM;
+}
+
+std::string MainWindow::nextVegetationName(VegetationKind kind) const {
+    const std::string stem = kind == VegetationKind::Clearing ? "Clearing" : "Stand";
+    const auto& areas = m_engine.vegetation();
+    for (int n = 1;; ++n) {
+        const std::string candidate = stem + " " + std::to_string(n);
+        const bool taken = std::any_of(areas.begin(), areas.end(),
+            [&candidate](const VegetationArea& area) { return area.name == candidate; });
+        if (!taken) return candidate;
+    }
+}
+
+void MainWindow::applyVegetationState(const std::vector<VegetationArea>& areas, int selected) {
+    const std::uint64_t revisionBefore = m_engine.canopyRevision();
+    // The solver reads the canopy grid, not the area list, so a result survives
+    // any change that leaves the grid identical: a rename, which the engine does
+    // not even rebuild for, or deleting areas that lie off this terrain and paint
+    // nothing, which it does rebuild for. Anything that changes a single sample
+    // clears it.
+    const auto heightsBefore = m_engine.terrain().canopyHeightDm;
+    const auto coverBefore = m_engine.terrain().canopyCoverPct;
+    m_engine.setVegetation(areas);
+    const bool rebuilt = m_engine.canopyRevision() != revisionBefore;
+    const bool canopyChanged = rebuilt &&
+        (m_engine.terrain().canopyHeightDm != heightsBefore ||
+         m_engine.terrain().canopyCoverPct != coverBefore);
+    // The map texture is keyed on the revision, so it follows every rebuild.
+    if (rebuilt) scheduleVegetationWashRefresh();
+    if (canopyChanged) {
+        m_engine.setFieldGrid({});
+        m_solvedSignature.clear();
+        invalidateScenarioComparisonCurrent();
+        invalidateCalibrationCurrent();
+        if (m_pointPanel) m_pointPanel->clear();
+        if (m_pointDock) m_pointDock->hide();
+        if (m_viewport) {
+            m_viewport->clearAnalysisPoint();
+            // Without this the old coverage texture keeps drawing.
+            m_viewport->refreshOverlays();
+        }
+    }
+
+    const int count = static_cast<int>(m_engine.vegetation().size());
+    m_selectedVegetationIndex =
+        (m_viewport && m_viewport->vegetationDrawMode() && selected >= 0 && selected < count)
+        ? selected : -1;
+    if (m_viewport) {
+        m_viewport->setVegetationSelection(m_selectedVegetationIndex);
+        // Also cancels any gesture, which is what makes an undo mid-drag safe.
+        m_viewport->refreshVegetationAreas();
+    }
+    refreshVegetationActions();
+    refreshCanopyActions();
+}
+
+void MainWindow::pushVegetationChange(std::vector<VegetationArea> after, int selectedAfter,
+                                      const QString& description) {
+    if (m_solveInProgress || m_terrainLoadInProgress) {
+        if (m_statusLabel)
+            m_statusLabel->setText(
+                "  Wait for the current operation to finish before changing vegetation");
+        return;
+    }
+    if (!m_undoStack) {
+        applyVegetationState(after, selectedAfter);
+        return;
+    }
+    // No merging: every vegetation change is one discrete commit, so an index
+    // shifted by a delete can never fold an edit into a different area.
+    m_undoStack->push(new VegetationStateCommand(
+        m_engine.vegetation(), m_selectedVegetationIndex, std::move(after), selectedAfter,
+        description, -1,
+        [this](const std::vector<VegetationArea>& state, int selected) {
+            applyVegetationState(state, selected);
+        }));
+}
+
+void MainWindow::onVegetationDrawModeChanged(bool active, int kind) {
+    const bool stands = active && kind == static_cast<int>(VegetationKind::Stand);
+    const bool clearings = active && kind == static_cast<int>(VegetationKind::Clearing);
+    if (m_drawStandsAct && m_drawStandsAct->isChecked() != stands) {
+        const QSignalBlocker blocker(m_drawStandsAct);
+        m_drawStandsAct->setChecked(stands);
+    }
+    if (m_drawClearingsAct && m_drawClearingsAct->isChecked() != clearings) {
+        const QSignalBlocker blocker(m_drawClearingsAct);
+        m_drawClearingsAct->setChecked(clearings);
+    }
+    if (!active) {
+        m_selectedVegetationIndex = -1;
+        refreshVegetationActions();
+        // Measuring or placement taking over writes its own status afterwards;
+        // a load in progress owns the status line.
+        if (!m_terrainLoadInProgress && m_statusLabel) m_statusLabel->setText("  Ready");
+        return;
+    }
+    if (m_statusLabel)
+        m_statusLabel->setText(vegetationToolHint(static_cast<VegetationKind>(kind)));
+}
+
+void MainWindow::onVegetationAreaDrawn(float minX, float minZ, float maxX, float maxZ) {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
+    if (!m_viewport || !m_viewport->vegetationDrawMode()) return;
+    const TerrainModel& terrain = m_engine.terrain();
+    const glm::vec3 world = terrain.worldSize();
+    const VegetationGeometry::Rect rect = VegetationGeometry::fromCorners(
+        {minX, minZ}, {maxX, maxZ}, {world.x, world.z});
+    if (!VegetationGeometry::coversACell(rect, terrain)) {
+        m_statusLabel->setText(QString("  Area not drawn · smaller than one %1 m terrain cell")
+            .arg(static_cast<double>(std::max(terrain.metersPerCellX(), terrain.metersPerCellZ())),
+                 0, 'f', 0));
+        return;
+    }
+
+    VegetationArea area;
+    area.minX = rect.minX;
+    area.minZ = rect.minZ;
+    area.maxX = rect.maxX;
+    area.maxZ = rect.maxZ;
+    area.kind = m_viewport->vegetationDrawKind();
+    area.name = nextVegetationName(area.kind);
+    bool fromImport = false;
+    area.canopyHeightM = area.kind == VegetationKind::Clearing
+        ? 0.0f : defaultStandHeightM(area, fromImport);
+    const VegetationAreas::Footprint fp = VegetationAreas::footprint(terrain, area);
+
+    std::vector<VegetationArea> after = m_engine.vegetation();
+    after.push_back(area);
+    const int selectedAfter = static_cast<int>(after.size()) - 1;
+    pushVegetationChange(std::move(after), selectedAfter,
+                         area.kind == VegetationKind::Clearing ? "Draw clearing" : "Draw stand");
+
+    if (area.kind == VegetationKind::Clearing) {
+        m_statusLabel->setText(QString("  Clearing drawn · clears %1 × %2 samples · Ctrl+Z undoes")
+            .arg(fp.x1 - fp.x0 + 1).arg(fp.z1 - fp.z0 + 1));
+    } else if (fromImport) {
+        m_statusLabel->setText(QString("  Stand drawn · %1 m, the median imported canopy under "
+                                       "it · Enter changes it · Ctrl+Z undoes")
+            .arg(static_cast<double>(area.canopyHeightM), 0, 'f', 1));
+    } else {
+        // Said out loud, because a solve run on this number rests on an
+        // assumption the operator has not yet confirmed.
+        m_statusLabel->setText(QString("  Stand drawn · %1 m assumed, not measured · Enter sets "
+                                       "its height · Ctrl+Z undoes")
+            .arg(static_cast<double>(area.canopyHeightM), 0, 'f', 1));
+    }
+}
+
+void MainWindow::onVegetationAreaReshaped(int index, float minX, float minZ, float maxX,
+                                          float maxZ, bool resized) {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
+    const auto& areas = m_engine.vegetation();
+    if (index != m_selectedVegetationIndex || index < 0 ||
+        index >= static_cast<int>(areas.size()))
+        return;
+    const TerrainModel& terrain = m_engine.terrain();
+    const VegetationGeometry::Rect rect{std::min(minX, maxX), std::min(minZ, maxZ),
+                                        std::max(minX, maxX), std::max(minZ, maxZ)};
+    if (!VegetationGeometry::coversACell(rect, terrain)) {
+        m_statusLabel->setText(QString("  Not changed · smaller than one %1 m terrain cell")
+            .arg(static_cast<double>(std::max(terrain.metersPerCellX(), terrain.metersPerCellZ())),
+                 0, 'f', 0));
+        return;
+    }
+    const VegetationArea& current = areas[static_cast<std::size_t>(index)];
+    const auto moved = [](float a, float b) { return std::abs(a - b) > 1.0e-3f; };
+    if (!moved(rect.minX, current.minX) && !moved(rect.minZ, current.minZ) &&
+        !moved(rect.maxX, current.maxX) && !moved(rect.maxZ, current.maxZ))
+        return;
+
+    std::vector<VegetationArea> after = areas;
+    VegetationArea& changed = after[static_cast<std::size_t>(index)];
+    changed.minX = rect.minX;
+    changed.minZ = rect.minZ;
+    changed.maxX = rect.maxX;
+    changed.maxZ = rect.maxZ;
+    pushVegetationChange(std::move(after), index,
+                         resized ? "Resize vegetation area" : "Move vegetation area");
+    onVegetationAreaClicked(index);
+}
+
+void MainWindow::onVegetationAreaClicked(int index) {
+    const auto& areas = m_engine.vegetation();
+    if (index < 0 || index >= static_cast<int>(areas.size())) index = -1;
+    m_selectedVegetationIndex = index;
+    if (m_viewport) m_viewport->setVegetationSelection(index);
+    refreshVegetationActions();
+    if (!m_statusLabel) return;
+    if (index < 0) {
+        if (m_viewport && m_viewport->vegetationDrawMode())
+            m_statusLabel->setText(vegetationToolHint(m_viewport->vegetationDrawKind()));
+        return;
+    }
+    const VegetationArea& area = areas[static_cast<std::size_t>(index)];
+    const QString kindText = area.kind == VegetationKind::Clearing
+        ? QStringLiteral("clearing")
+        : QStringLiteral("stand %1 m").arg(static_cast<double>(area.canopyHeightM), 0, 'f', 1);
+    m_statusLabel->setText(
+        QString("  %1 · %2 · %3 · drag the middle to move, a corner to resize · Enter edits "
+                "· Delete removes")
+            .arg(QString::fromStdString(area.name), kindText, vegetationEffectSummary(area)));
+}
+
+void MainWindow::onDeleteVegetationArea() {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
+    const auto& areas = m_engine.vegetation();
+    const int index = m_selectedVegetationIndex;
+    if (index < 0 || index >= static_cast<int>(areas.size())) return;
+    const QString name = QString::fromStdString(areas[static_cast<std::size_t>(index)].name);
+    std::vector<VegetationArea> after = areas;
+    after.erase(after.begin() + index);
+    pushVegetationChange(std::move(after), -1, "Delete vegetation area");
+    m_statusLabel->setText(QString("  %1 deleted · Ctrl+Z restores it").arg(name));
+}
+
+void MainWindow::onEditVegetationArea() {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
+    const int index = m_selectedVegetationIndex;
+    if (index < 0 || index >= static_cast<int>(m_engine.vegetation().size())) return;
+    const VegetationArea original = m_engine.vegetation()[static_cast<std::size_t>(index)];
+
+    // On the stack and gone when exec returns, so it never lingers as a second
+    // spin box under the main window.
+    VegetationAreaDialog dialog(original, vegetationEffectSummary(original),
+                                m_lastStandHeightM, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    if (index >= static_cast<int>(m_engine.vegetation().size())) return;
+
+    const VegetationArea edited = dialog.area();
+    const bool changed = edited.name != original.name || edited.kind != original.kind ||
+        std::lround(edited.canopyHeightM * 10.0f) != std::lround(original.canopyHeightM * 10.0f);
+    if (!changed) return;
+    // Clamped: a renamed stand can keep a stored height outside what a new one
+    // should start from.
+    if (edited.kind == VegetationKind::Stand)
+        m_lastStandHeightM = std::clamp(edited.canopyHeightM, 0.5f, VegetationAreas::kMaxCanopyHeightM);
+
+    std::vector<VegetationArea> after = m_engine.vegetation();
+    after[static_cast<std::size_t>(index)] = edited;
+    pushVegetationChange(std::move(after), index, "Edit vegetation area");
+    onVegetationAreaClicked(index);
+}
+
+void MainWindow::onDeleteOffTerrainVegetation() {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
+    const TerrainModel& terrain = m_engine.terrain();
+    std::vector<VegetationArea> after;
+    int removed = 0;
+    for (const VegetationArea& area : m_engine.vegetation()) {
+        if (area.valid() && VegetationAreas::footprint(terrain, area).empty) {
+            ++removed;
+            continue;
+        }
+        after.push_back(area);
+    }
+    if (removed == 0) return;
+    pushVegetationChange(std::move(after), -1, "Delete off-terrain vegetation areas");
+    m_statusLabel->setText(
+        QString("  %1 drawn area(s) outside this terrain deleted · Ctrl+Z restores them")
+            .arg(removed));
+}
+
 void MainWindow::handleCalibrationTerrainChange() {
     if (m_measurements.empty()) {
         invalidateCalibrationCurrent();
@@ -1152,6 +1516,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
     try {
         m_placementActive = false;
         if (m_viewport) m_viewport->setPlacementMode(false);
+        if (m_viewport) m_viewport->setVegetationDrawMode(false);
 
         auto terrainProgress = [&loadProgress](int completed, int total) {
             loadProgress.setRange(0, std::max(total, 1));
@@ -1199,6 +1564,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                     loadProgress.setLabelText(QString("Satellite imagery · %1 / %2")
                         .arg(completed).arg(total));
                 }, cancelLoad);
+            if (m_vegetationWashTimer) m_vegetationWashTimer->stop();
             m_viewport->reloadTerrain();
             m_viewport->setBasemapLoadCallbacks({}, {});
         }
@@ -1214,6 +1580,7 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                 .arg(latitude, 0, 'f', 4).arg(longitude, 0, 'f', 4)
             : QString("Ridgeline — %1[*]").arg(m_locationName.section(',', 0, 0)));
 
+        refreshVegetationActions();
         const auto world = m_engine.terrain().worldSize();
         const int outside = static_cast<int>(std::count_if(
             m_engine.antennas().begin(), m_engine.antennas().end(),
@@ -1243,6 +1610,14 @@ void MainWindow::loadGlobalLocation(double latitude, double longitude,
                 ? QString(" · %1 source(s) remain outside this analysis area")
                     .arg(outside)
                 : QStringLiteral(" · Sources preserved");
+            // Drawn areas follow the ground, so a new footprint can leave some
+            // outside it: kept and saved, but with no effect and nothing on the
+            // map to show them.
+            const int drawnOutside = VegetationAreas::countOutside(
+                m_engine.terrain(), m_engine.vegetation());
+            if (drawnOutside > 0)
+                status += QString(" · %1 drawn vegetation area(s) lie outside this analysis area")
+                              .arg(drawnOutside);
             m_statusLabel->setText(status);
         }
     } catch (const std::runtime_error& e) {
@@ -1426,6 +1801,7 @@ void MainWindow::loadTerrain(const QString& path) {
                        : ((ext == "tif" || ext == "tiff")
                           ? TerrainLoader::fromGeoTIFF(path.toStdString())
                           : TerrainLoader::fromDTED(path.toStdString()));
+        if (m_viewport) m_viewport->setVegetationDrawMode(false);
         m_engine.setTerrain(std::move(t));
         terrainInstalled = true;
         markScenarioDirty();
@@ -1459,6 +1835,7 @@ void MainWindow::loadTerrain(const QString& path) {
             updateLocationSummary();
         }
         placeDefaultAntennas();
+        if (m_vegetationWashTimer) m_vegetationWashTimer->stop();
         if (m_viewport) m_viewport->reloadTerrain();
         m_selectedIndex = m_engine.antennas().empty() ? -1 : 0;
         refreshTree();
@@ -1467,7 +1844,15 @@ void MainWindow::loadTerrain(const QString& path) {
         refreshBottomBar();
         markScenarioDirty();
         setWindowTitle(QString("Ridgeline — %1[*]").arg(QFileInfo(path).fileName()));
-        m_statusLabel->setText("  Terrain loaded · Existing georeferenced sources preserved");
+        refreshVegetationActions();
+        QString terrainStatus =
+            QStringLiteral("  Terrain loaded · Existing georeferenced sources preserved");
+        const int drawnOutside =
+            VegetationAreas::countOutside(m_engine.terrain(), m_engine.vegetation());
+        if (drawnOutside > 0)
+            terrainStatus += QString(" · %1 drawn vegetation area(s) lie outside this terrain")
+                                 .arg(drawnOutside);
+        m_statusLabel->setText(terrainStatus);
     } catch (const std::exception& e) {
         m_statusLabel->setText(terrainInstalled
             ? "  Terrain loaded · Map display failed"
@@ -2129,6 +2514,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     terrainInstalled = true;
     m_placementActive = false;
     if (m_viewport) m_viewport->setPlacementMode(false);
+    if (m_viewport) m_viewport->setVegetationDrawMode(false);
     markScenarioDirty();
     m_engine.setFieldGrid({});
     m_solvedSignature.clear();
@@ -2181,6 +2567,7 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
     }
 
     m_selectedIndex = -1;
+    m_selectedVegetationIndex = -1;
     if (m_viewport) {
         progress.setLabelText("Loading satellite imagery · Scenario settings loaded");
         progress.setRange(0, 0);
@@ -2190,12 +2577,14 @@ void MainWindow::applyScenarioDoc(const ScenarioDoc& doc, QProgressDialog& progr
             progress.setRange(0, std::max(total, 1));
             progress.setValue(completed);
         }, cancelLoad);
+        if (m_vegetationWashTimer) m_vegetationWashTimer->stop();
         m_viewport->reloadTerrain();
         m_viewport->setBasemapLoadCallbacks({}, {});
     }
     refreshTree();
     refreshPropsPanel();
     refreshBottomBar();
+    refreshVegetationActions();
 }
 
 void MainWindow::onTerrainClicked(float worldX, float worldZ) {
@@ -2290,6 +2679,9 @@ void MainWindow::onExportPng() {
     if (path.isEmpty()) return;
     // QWidget::grab includes the OpenGL viewport and its child widgets,
     // preserving the selected overlays, legend, and provider attribution.
+    // A pending vegetation rebuild would otherwise leave the exported map
+    // showing the canopy as it was before the last edit.
+    if (m_vegetationWashTimer && m_vegetationWashTimer->isActive()) flushVegetationWash();
     const QPixmap map = m_viewport->grab();
     if (Exporter::savePng(map.toImage(), path.toStdString()))
         m_statusLabel->setText("  Map PNG exported with current view and overlays");

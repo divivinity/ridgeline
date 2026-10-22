@@ -2,6 +2,7 @@
 // these run on every platform and in the default (non-GUI) configure.
 #include "map/LayerStack.h"
 #include "map/CanopyShade.h"
+#include "sim/VegetationAreas.h"
 #include "map/Hillshade.h"
 #include "map/TileProviders.h"
 #include "map/MapMeasure.h"
@@ -67,6 +68,20 @@ void testCanopyShade() {
     emptyGrid.canopyHeightDm.assign(emptyGrid.heights.size(), 0);
     check(CanopyShade::render(emptyGrid).isNull(),
           "a canopy grid that is present but entirely bare renders nothing");
+}
+
+void testCanopyShadeShowsClearingAsHole() {
+    TerrainModel terrain = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    const std::vector<std::uint16_t> base(terrain.heights.size(), 200);
+    const VegetationArea cut{0.0f, 0.0f, 20.0f, 20.0f, 0.0f, "cut", VegetationKind::Clearing};
+    VegetationAreas::apply(terrain, {cut}, base, {});
+    const QImage wash = CanopyShade::render(terrain);
+    // Image row 0 is the north edge; terrain row 0 is the south edge.
+    const int top = terrain.height - 1;
+    check(!wash.isNull() && wash.pixelColor(1, top - 1).alpha() == 0,
+          "a clearing over imported canopy shows as a hole in the wash");
+    check(!wash.isNull() && wash.pixelColor(6, top - 6).alpha() > 0,
+          "canopy outside the clearing is still painted");
 }
 
 void testDefaults() {
@@ -368,6 +383,7 @@ void testScaleBar() {
 int main() {
     testDefaults();
     testCanopyShade();
+    testCanopyShadeShowsClearingAsHole();
     testVisibilityAndOpacity();
     testReorder();
     testVisibleOfKind();
