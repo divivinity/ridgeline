@@ -1,4 +1,5 @@
 #include "WorkspaceSettings.h"
+#include "AntennaJson.h"
 
 #include <QDir>
 #include <algorithm>
@@ -82,6 +83,65 @@ void WorkspaceSettings::addRecentLocation(const RecentLocation& location) {
     settings.endArray();
 }
 
+std::vector<WorkspaceSettings::EquipmentPreset> WorkspaceSettings::equipmentPresets() {
+    // One JSON document rather than a settings array: the equipment's fields
+    // and their defaults are AntennaJson's, and stay so.
+    const QByteArray stored = store().value("presets/equipment").toByteArray();
+    std::vector<EquipmentPreset> presets;
+    if (stored.isEmpty()) return presets;
+    const nlohmann::json list = nlohmann::json::parse(
+        stored.constData(), stored.constData() + stored.size(), nullptr, false);
+    if (!list.is_array()) return presets;
+    for (const auto& entry : list) {
+        if (!entry.is_object() || !entry.contains("name") || !entry["name"].is_string())
+            continue;
+        EquipmentPreset preset;
+        preset.name = QString::fromStdString(entry["name"].get<std::string>());
+        try {
+            AntennaJson::readEquipment(entry, preset.equipment);
+        } catch (const nlohmann::json::exception&) {
+            continue; // a damaged entry is skipped, not allowed to hide the rest
+        }
+        if (!preset.name.trimmed().isEmpty()) presets.push_back(std::move(preset));
+    }
+    std::sort(presets.begin(), presets.end(), [](const auto& a, const auto& b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return presets;
+}
+
+namespace {
+void storeEquipmentPresets(const std::vector<WorkspaceSettings::EquipmentPreset>& presets) {
+    nlohmann::json list = nlohmann::json::array();
+    for (const auto& preset : presets) {
+        nlohmann::json entry;
+        entry["name"] = preset.name.toStdString();
+        AntennaJson::writeEquipment(entry, preset.equipment);
+        list.push_back(std::move(entry));
+    }
+    store().setValue("presets/equipment", QByteArray::fromStdString(list.dump()));
+}
+} // namespace
+
+void WorkspaceSettings::saveEquipmentPreset(const QString& name, const Antenna& equipment) {
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) return;
+    std::vector<EquipmentPreset> presets = equipmentPresets();
+    presets.erase(std::remove_if(presets.begin(), presets.end(),
+                      [&](const auto& p) { return p.name == trimmed; }),
+                  presets.end());
+    presets.push_back({trimmed, equipment});
+    storeEquipmentPresets(presets);
+}
+
+void WorkspaceSettings::removeEquipmentPreset(const QString& name) {
+    std::vector<EquipmentPreset> presets = equipmentPresets();
+    presets.erase(std::remove_if(presets.begin(), presets.end(),
+                      [&](const auto& p) { return p.name == name; }),
+                  presets.end());
+    storeEquipmentPresets(presets);
+}
+
 void WorkspaceSettings::saveLayout(const QByteArray& geometry, const QByteArray& state) {
     QSettings settings = store();
     settings.setValue("layout/geometry", geometry);
@@ -100,4 +160,5 @@ void WorkspaceSettings::clear() {
     QSettings settings = store();
     settings.remove("recent");
     settings.remove("layout");
+    settings.remove("presets");
 }

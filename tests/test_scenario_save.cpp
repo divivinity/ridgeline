@@ -2,11 +2,13 @@
 #include "data/CanopyImportOptions.h"
 #include "data/RecoveryStore.h"
 #include "data/WorkspaceSettings.h"
+#include "data/AntennaJson.h"
 #include <nlohmann/json.hpp>
 #include <string>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
+#include <QSettings>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -268,11 +270,92 @@ int main() {
             require(WorkspaceSettings::layoutGeometry() == QByteArray("geo"), "layout geometry persists");
             require(WorkspaceSettings::layoutState() == QByteArray("state"), "layout state persists");
 
+            // Equipment presets keep the radio and antenna, listed by name.
+            require(WorkspaceSettings::equipmentPresets().empty(), "a fresh profile has no presets");
+            Antenna yagi;
+            yagi.frequencyMHz = 433.5f;
+            yagi.powerW = 5.0f;
+            yagi.gainDbi = 11.0f;
+            yagi.antennaType = "yagi";
+            yagi.azimuthDeg = 270.0f;
+            yagi.downtiltDeg = 2.0f;
+            yagi.horizontalBeamwidthDeg = 40.0f;
+            yagi.verticalBeamwidthDeg = 35.0f;
+            yagi.frontToBackDb = 18.0f;
+            yagi.cableLossDb = 1.5f;
+            yagi.polarization = "horizontal";
+            yagi.azimuthPatternDb = {0.0f, -3.0f, -20.0f, -3.0f};
+            yagi.patternSource = "yagi.csv";
+            WorkspaceSettings::saveEquipmentPreset("  Yagi 433  ", yagi);
+            WorkspaceSettings::saveEquipmentPreset("base station", Antenna{});
+            WorkspaceSettings::saveEquipmentPreset("", yagi);
+            auto presets = WorkspaceSettings::equipmentPresets();
+            require(presets.size() == 2, "a blank name is not saved");
+            require(presets[0].name == "base station" && presets[1].name == "Yagi 433",
+                    "presets are listed by name, case-insensitively, with names trimmed");
+            const Antenna& kept = presets[1].equipment;
+            require(kept.frequencyMHz == 433.5f && kept.powerW == 5.0f && kept.gainDbi == 11.0f &&
+                        kept.antennaType == "yagi" && kept.azimuthDeg == 270.0f &&
+                        kept.downtiltDeg == 2.0f && kept.horizontalBeamwidthDeg == 40.0f &&
+                        kept.verticalBeamwidthDeg == 35.0f && kept.frontToBackDb == 18.0f &&
+                        kept.cableLossDb == 1.5f && kept.polarization == "horizontal" &&
+                        kept.azimuthPatternDb == yagi.azimuthPatternDb &&
+                        kept.patternSource == "yagi.csv",
+                    "every equipment field round-trips through a preset");
+
+            yagi.powerW = 25.0f;
+            WorkspaceSettings::saveEquipmentPreset("Yagi 433", yagi);
+            presets = WorkspaceSettings::equipmentPresets();
+            require(presets.size() == 2 && presets[1].equipment.powerW == 25.0f,
+                    "saving under an existing name replaces that preset");
+            WorkspaceSettings::removeEquipmentPreset("base station");
+            require(WorkspaceSettings::equipmentPresets().size() == 1, "a preset can be deleted");
+
+            // Applying equipment changes the radio, never the site or the role,
+            // and a preset with no measured pattern removes the target's.
+            Antenna site;
+            site.position = {120.0f, 340.0f, 560.0f};
+            site.isJammer = true;
+            site.hasGeoPosition = true;
+            site.latitudeDeg = 35.1;
+            site.longitudeDeg = -82.4;
+            site.heightAglM = 30.0f;
+            site.elevationPatternDb = {0.0f, -6.0f};
+            const Antenna applied = AntennaJson::withEquipment(site, Antenna{});
+            require(applied.position == site.position && applied.isJammer &&
+                        applied.hasGeoPosition && applied.latitudeDeg == 35.1 &&
+                        applied.heightAglM == 30.0f,
+                    "a preset keeps the target's position, height and role");
+            require(applied.elevationPatternDb.empty() && applied.frequencyMHz == Antenna{}.frequencyMHz,
+                    "a preset replaces the target's equipment wholesale");
+
+            // A damaged entry is skipped without hiding the good ones, and
+            // stored text that is not JSON at all reads as no presets.
+            {
+                QSettings raw(QDir(settingsDir.path()).filePath("workspace.ini"),
+                              QSettings::IniFormat);
+                raw.setValue("presets/equipment", QByteArray(
+                    R"([{"name":"good","power_w":2},{"name":5},)"
+                    R"({"name":"bad","power_w":"high"},"text"])"));
+            }
+            presets = WorkspaceSettings::equipmentPresets();
+            require(presets.size() == 1 && presets[0].name == "good" &&
+                        presets[0].equipment.powerW == 2.0f,
+                    "damaged preset entries are skipped, not fatal");
+            {
+                QSettings raw(QDir(settingsDir.path()).filePath("workspace.ini"),
+                              QSettings::IniFormat);
+                raw.setValue("presets/equipment", QByteArray("not json"));
+            }
+            require(WorkspaceSettings::equipmentPresets().empty(),
+                    "unreadable preset storage reads as no presets");
+
             WorkspaceSettings::clear();
             require(WorkspaceSettings::recentScenarios().isEmpty() &&
                         WorkspaceSettings::recentLocations().empty() &&
-                        WorkspaceSettings::layoutGeometry().isEmpty(),
-                    "clearing forgets history and layout together");
+                        WorkspaceSettings::layoutGeometry().isEmpty() &&
+                        WorkspaceSettings::equipmentPresets().empty(),
+                    "clearing forgets history, layout and presets together");
             qunsetenv("RIDGELINE_STATE_DIR");
         }
         {

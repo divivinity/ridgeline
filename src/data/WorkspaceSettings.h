@@ -4,6 +4,8 @@
 #include <QStringList>
 #include <vector>
 
+#include "sim/Types.h"
+
 // Things the workspace should remember between runs: where you have been, and
 // how you had the panels arranged.
 //
@@ -29,6 +31,18 @@ void addRecentScenario(const QString& path);
 
 std::vector<RecentLocation> recentLocations();
 void addRecentLocation(const RecentLocation& location);
+
+// Named radio-and-antenna configurations, kept per installation so the same
+// equipment can be set on any source in any scenario. Only equipment is kept:
+// a preset carries no position, height above ground or role. Listed by name;
+// saving under an existing name replaces it.
+struct EquipmentPreset {
+    QString name;
+    Antenna equipment;
+};
+std::vector<EquipmentPreset> equipmentPresets();
+void saveEquipmentPreset(const QString& name, const Antenna& equipment);
+void removeEquipmentPreset(const QString& name);
 
 // Panel arrangement and window size, as QMainWindow hands them over.
 void saveLayout(const QByteArray& geometry, const QByteArray& state);

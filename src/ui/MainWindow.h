@@ -69,6 +69,10 @@ private slots:
     void onDeleteVegetationArea();
     void onEditVegetationArea();
     void onDeleteOffTerrainVegetation();
+    void onSaveEquipmentPreset();
+    // The named-preset steps behind the menus, separate from their dialogs.
+    void saveSelectedAsPreset(const QString& name);
+    void applyEquipmentPreset(const QString& name);
 
 private:
     SimEngine        m_engine;
@@ -153,6 +157,10 @@ private:
     QTimer* m_autosaveTimer = nullptr;
     class QMenu* m_recentScenariosMenu = nullptr;
     class QMenu* m_recentLocationsMenu = nullptr;
+    class QMenu* m_applyPresetMenu = nullptr;
+    class QMenu* m_deletePresetMenu = nullptr;
+    // Rebuilt whenever the presets change, like the history menus.
+    void refreshPresetMenus();
     // Rebuilt whenever the history changes, so the menus never show a stale list.
     void refreshRecentMenus();
     void openScenarioPath(const QString& path);
