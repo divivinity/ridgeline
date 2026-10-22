@@ -57,10 +57,46 @@ jobs:
           # which can contain slashes that are not legal in a filename.
           $version = "${{ github.ref_name }}" -replace '[^A-Za-z0-9._-]', '-'
           $zip = "ridgeline-windows-$version.zip"
+          # A successful build is not sufficient if runtime deployment was skipped.
+          $required = @('ridgeline.exe', 'Qt6Core.dll', 'Qt6Gui.dll',
+                        'Qt6Widgets.dll', 'Qt6Network.dll', 'Qt6OpenGL.dll',
+                        'Qt6OpenGLWidgets.dll', 'platforms/qwindows.dll',
+                        'assets/materials.json', 'assets/antennas.json')
+          foreach ($relative in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path './build/Release' $relative) -PathType Leaf)) {
+              throw "required package file missing: $relative"
+            }
+          }
+          $assetRoot = (Resolve-Path './assets').Path
+          foreach ($asset in Get-ChildItem -LiteralPath $assetRoot -File -Recurse) {
+            $relative = [IO.Path]::GetRelativePath($assetRoot, $asset.FullName)
+            $copied = Join-Path './build/Release/assets' $relative
+            if (-not (Test-Path -LiteralPath $copied -PathType Leaf)) {
+              throw "asset missing from package staging: $relative"
+            }
+            if ((Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $copied -Algorithm SHA256).Hash) {
+              throw "asset differs from source: $relative"
+            }
+          }
           # Switches are quoted: PowerShell splits an unquoted -xr!*.pdb at the
           # dot, which hands 7-Zip a bare -xr!* that excludes everything.
-          7z a -tzip $zip '.\build\Release\*' '-xr!ridgeline_*_tests.exe' '-xr!*.pdb'
+          7z a -tzip $zip '.\build\Release\*' '-xr!ridgeline_tests.exe' '-xr!ridgeline_*_tests.exe' '-xr!*.pdb'
           if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
+          7z t $zip
+          if ($LASTEXITCODE -ne 0) { throw "package integrity test failed" }
+          $listing = 7z l -slt $zip
+          if ($LASTEXITCODE -ne 0) { throw "cannot inspect package" }
+          $archivePaths = @($listing | Where-Object { $_ -like 'Path = *' } |
+                            ForEach-Object { $_.Substring(7).Replace('\', '/') })
+          foreach ($relative in $required) {
+            if ($archivePaths -notcontains $relative) {
+              throw "required file missing from archive: $relative"
+            }
+          }
+          if ($listing | Select-String -Pattern '^Path = (.*[\\/])?ridgeline(?:_.*)?_tests\.exe$|^Path = .*\.pdb$') {
+            throw "package contains test binaries or debug symbols"
+          }
           $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
           echo "PACKAGE=$zip" >> $env:GITHUB_ENV
           echo "### Package: ``$zip`` ($mb MB)" >> $env:GITHUB_STEP_SUMMARY
