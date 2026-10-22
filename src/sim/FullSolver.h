@@ -38,5 +38,6 @@ private:
                                             glm::vec3 to,
                                             float frequencyMHz,
                                             const Material& material,
-                                            const Antenna& antenna);
+                                            const Antenna& antenna,
+                                            PathModel& model);
 };
