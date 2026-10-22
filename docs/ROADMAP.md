@@ -3,6 +3,67 @@
 Priority order agreed September 6, 2026. Specter integration follows a polished
 standalone release. This is a work list, not a claim that these features exist.
 
+## Current state — October 22, 2026
+
+v1.0.0 was released on October 19. Everything below this section, from
+September, is the historical record of how it got there; where a September note
+calls something pending or the current handoff, this section supersedes it.
+
+**Landed since v1.0.0**
+
+- Canopy reload consistency and release-package verification (#9). Canopy
+  options persist only once a replacement is installed. The release workflow
+  checks staged runtime files and asset hashes, tests the archive, and rejects
+  test binaries and PDBs. These checks have not yet run on a real release tag.
+- Vegetation editing (#10), roadmap item 13. Stands and clearings are drawn,
+  moved and resized on the map, are undoable, and use scenario format 6.
+  Design: `docs/design/specs/2026-09-13-vegetation-editing-design.md`.
+- Result clarity, roadmap item 5:
+  - the inspector shows the crown depth and foliage loss on the serving path,
+    and draws canopy on the link profile (#11);
+  - it names the propagation model behind each cell, and why ITM fell back
+    when it did (#12).
+- Exports, roadmap item 8: *Coverage GeoTIFF* writes desired signal as a
+  WGS 84 float32 raster, verified by the built-in reader and, on CI, by
+  GDAL (#13).
+- Physics fix (#14): the ground-reflected component now pays foliage loss.
+  Before, under 20 m of canopy, 16.5 dB of direct-path loss moved the solved
+  signal by only 3.9 dB, in High accuracy mode under 1 km.
+- Planning conveniences, roadmap item 9: *Duplicate Source* (`Ctrl+D`) (#15),
+  and equipment presets that carry a radio and antenna between sources and
+  scenarios, kept per installation (#16).
+- CI: the build is capped at four jobs. An unbounded `--parallel` let the
+  Ubuntu runner run out of memory once two GUI suites each compiled the whole
+  application.
+
+**Next, in priority order**
+
+1. Result clarity (5): failure explanations for whole-solve errors, and a
+   profile view for the strongest jammer as well as the serving source.
+2. Exports (8): SINR, fade margin and service as GeoTIFF bands. The
+   built-in reader handles one band, so verification needs it extended or
+   separate files. Also metadata and a printable report.
+3. Planning conveniences (9): grouping, bulk editing, bookmarks and scenario
+   templates.
+4. Performance and offline (10), Windows release follow-through (11), and
+   advanced analysis (14). Item 11 still lacks a clean-machine smoke test
+   of the packaged build.
+5. Foliage follow-ups: sample-centre rasterisation, polygon and strip areas,
+   a vegetation list panel, shrub heights.
+6. Specter (15-16) stays deferred until the standalone bar is met.
+
+**Engineering follow-ups**
+
+- The GUI suites compile every application source again, once per
+  executable. Building the application as a library once would roughly halve
+  CI time and memory.
+- A calibration fitted in High accuracy mode over vegetation predates #14
+  and is worth re-fitting.
+- On Windows, `<windows.h>` defines `NEAR` as an empty macro. A test that
+  pulls in Qt or Windows headers must not use a `NEAR(a, b, t)` check: it
+  compiles to nothing. The three suites that define their own were checked
+  and are unaffected.
+
 ## Archive verification gates completed locally — September 14
 
 - Deploy-checklist follow-up added 7-Zip integrity testing and required-file
@@ -337,7 +398,7 @@ standalone release. This is a work list, not a claim that these features exist.
   than repeating export-helper checks. Native OS file-picker interaction remains
   distinct from the owned Qt dialog driven by the test.
 
-## Current handoff — September 14 (HEAD 94f8c8e plus local polish changes)
+## Handoff as of September 14 (historical; see Current state above)
 
 - Latest verified application is **build2/isolated-qa**, not the primary build2
   executable. Latest full verification passed all 16 suites in 48.61 seconds,
