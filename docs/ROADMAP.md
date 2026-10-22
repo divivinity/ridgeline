@@ -3,10 +3,347 @@
 Priority order agreed September 6, 2026. Specter integration follows a polished
 standalone release. This is a work list, not a claim that these features exist.
 
-## Current handoff — September 9, 18:08 UTC (updated after commit 61c18fa)
+## Archive verification gates completed locally — September 14
+
+- Deploy-checklist follow-up added 7-Zip integrity testing and required-file
+  checks inside the archive, beyond the earlier staging-only presence checks.
+  PowerShell block parsing and slash-normalized archive-path checks pass.
+  Corrected README's stale default suite count from 13 to 15 against CMake.
+- Actual 7-Zip execution remains unverified: neither PATH nor the two standard
+  Program Files install locations expose it. No tool was installed, no workflow
+  dispatched and no release published. These are locally edited release gates,
+  not a completed archive test or a clean-machine certification.
+- Avoid adding more speculative packaging gates; next meaningful work is
+  execution of the package workflow or native visual/runtime verification when
+  the necessary tooling/desktop authorization is available.
+
+## Combined release verification — September 14
+
+- All 16 locally configured suites pass together in 51.26 seconds, including
+  successful window canopy installation and failed/cancelled replacement.
+- Deploy-checklist follow-up parsed the actual Package PowerShell block after
+  substituting a harmless version literal: no syntax errors. This is not a YAML
+  schema validation or execution of 7-Zip/the hosted release workflow.
+- No runtime or workflow changes this turn. Remaining release gates are actual
+  archive verification, clean-machine runtime, notices and native visual QA.
+
+## Staged asset integrity verified — September 14
+
+- Deploy-checklist review added a release staging gate comparing each source
+  asset with its deployed copy by relative path and SHA-256. Missing or changed
+  terrain/assets now fail packaging instead of silently shipping an incomplete
+  dataset. This checks source assets; it does not reject unexpected extra files.
+- Ran the same comparison locally: all 51 staged assets match, including all
+  36 HGT tiles (933,638,472 bytes total). No assets were modified or deleted.
+  Diff whitespace check passed; no CI dispatch, archive or publication occurred.
+- Actual archive integrity and clean-machine runtime testing remain pending,
+  along with notices and native visual QA. Matching source bytes is not a claim
+  of terrain accuracy or release readiness.
+
+## Release runtime presence gate — September 14
+
+- Deploy-checklist review added a pre-package gate for the application, seven
+  Qt runtime/plugin files and both JSON asset libraries. A skipped windeployqt
+  step must not silently produce an archive missing these essentials.
+- The same ten-file check passes against build2/isolated-qa. This is presence
+  validation, not complete transitive dependency or clean-machine testing. No
+  workflow was dispatched and nothing was published; diff whitespace check passed.
+- 7z is not on this session's PATH, so archive creation/listing was not exercised
+  locally. Release runner archive validation, compiler runtime compatibility,
+  terrain asset completeness and bundled third-party notices remain open gates.
+
+## Release archive exclusion corrected — September 14
+
+- Deploy-checklist review found the release archive excluded named test suites
+  but missed ridgeline_tests.exe (the physics executable). Added its explicit
+  exclusion and a post-package archive listing check that rejects test binaries
+  or PDB debug symbols before the existing publish step can run.
+- Exercised the PowerShell rejection pattern against six representative entries:
+  physics/named/nested test executables and PDB rejected; app and Qt DLL allowed.
+  Diff whitespace check passed. Workflow was edited locally only; no CI run,
+  package publication, tag or push was performed. Actual archive validation and
+  clean-machine execution remain release gates, not completed checks.
+- Remaining release checklist: fresh full tests, native visual QA when desktop
+  control resumes, package runtime/assets/licences inspection, clean-machine
+  smoke test and rollback to a preserved previous build if a key workflow fails.
+
+## Loaded canopy replacement cancellation verified — September 14
+
+- Testing-strategy-guided window regression now also accepts modified options,
+  cancels the replacement when its local connection starts, then verifies
+  recovery still records the enabled original import, policy, height and
+  retrieval timestamp. The successful install and failed-replacement checks
+  remain in the same workflow; no public provider or desktop input is used.
+- Rebuilt native target; MainWindow suite passed in 45.28 seconds. No production
+  changes in this increment; diff whitespace check passed. Direct rendered-raster
+  identity and visual QA remain separate from these metadata checks.
+- Core canopy install/failure/cancellation workflows now have window coverage.
+  Move beyond these narrow cases to remaining standalone release/packaging QA;
+  do not repeatedly extend this same fixture without a specific uncovered risk.
+
+## Loaded canopy replacement failure verified — September 14
+
+- After the successful window install, the integration test accepts changed
+  canopy policy/height and forces an offline cache miss in a separate empty
+  cache. The error is reported; subsequent recovery keeps the enabled import,
+  original policy/height and original retrieval timestamp. The valid fixture
+  cache is not deleted or overwritten.
+- Testing-strategy guidance focused this test on the full dialog/reload/recovery
+  path. Rebuilt native target; MainWindow suite passed in 46.86 seconds. No
+  production changes or desktop input. Diff whitespace check passed.
+- Active cancellation of replacement and direct rendered-raster comparison are
+  still separate checks; this verifies retained import metadata/options rather
+  than pixel identity. Visual QA and broader release validation remain pending.
+
+## Successful window canopy installation fixed — September 14
+
+- The first successful MainWindow fixture exposed a real bug: closing the
+  progress dialog sets its cancellation state, so checking wasCanceled after
+  close discarded a successful download. Capture cancellation before closing.
+- Native integration now fetches three synthetic TIFF layers through the actual
+  canopy action, installs them and confirms recovery records the enabled import
+  with the matching assume policy and 10 m height. Existing real cancellation
+  and autosave/close guard checks continue to pass. Testing-strategy guidance
+  drove this end-to-end check rather than another loader-only assertion.
+- Isolated application/native tests rebuilt; MainWindow suite passed in 48.44
+  seconds after the fix. This was a targeted run, not a fresh full-suite run.
+  No public provider, user files or desktop controls were used.
+- Next: failed/cancelled replacement of this installed canopy through options,
+  confirming saved options remain matched to the retained raster. Visual QA and
+  broader release verification remain incomplete; Specter is still deferred.
+
+## Successful canopy loader fixture — September 14
+
+- Shared TIFF writer now supplies three georeferenced local HTTP responses.
+  Loader regression verifies an installable raster, all 25 developed samples at
+  the declared 10 m assumption, 45% cover, and identical cached heights with no
+  further requests. Testing-strategy guidance focused on data/cache integration.
+- Initial fixture used sample-centre bounds and was correctly rejected; corrected
+  its georeference to include the requested half-cell border. Rebuilt native
+  tests and passed MainWindow suite in 45.49 seconds. Production code unchanged.
+- This verifies successful loader output/cache reuse, not installation through
+  MainWindow. That and failed replacement remain next; visual QA is pending.
+
+## Shared canopy TIFF test fixture — September 14
+
+- Extracted the existing synthetic TIFF writer unchanged into
+  tests/CanopyTiffFixture.h for reuse by decoder and forthcoming window tests.
+  Internal linkage keeps fixture helpers local to test translation units.
+  This avoids adding a second byte writer or fetching new provider fixtures.
+- Testing-strategy guidance informed this preparation for a successful local
+  canopy install test. Rebuilt canopy target and passed canopy_tests; diff
+  whitespace check passed. Production code and runtime behavior are unchanged.
+- Next: use the shared writer for CH/CC/VH responses in the local HTTP fixture,
+  then exercise successful install and replacement through MainWindow. This
+  preparatory extraction does not claim those workflows are already covered.
+
+## Canopy window guard integration verified — September 14
+
+- Testing-strategy-guided integration now loads a synthetic georeferenced HGT
+  into MainWindow, begins a canopy request against a local server, and verifies
+  close is refused and the real autosave timer does not write recovery state.
+  Cancelling through the owned progress dialog returns control; the same timer
+  then writes recovery successfully, proving the load guard was released.
+- Temporary terrain/cache/state directories isolate the test from user data;
+  no public provider or desktop automation is used. Rebuilt native test target
+  and passed MainWindow suite in 44.21 seconds. Diff whitespace check passed.
+- This closes the direct guard-test gap noted below. Existing imported-raster
+  replacement and successful TIFF installation remain unverified at window
+  level; visual QA remains pending. No production change in this increment.
+
+## Canopy nested-event-loop guard — September 14
+
+- Canopy requests now hold the existing scene-load guard with scope-based reset.
+  This makes autosave, close and scene operations that already check that guard
+  wait while the loader's nested network event loop is active. Canopy options
+  also refuse re-entry while a solve/load is active. Close guidance now mentions
+  canopy as well as terrain loads.
+- Testing-strategy review identified the autosave overlap risk following option
+  rollback work. Rebuilt the isolated app/native test target; existing MainWindow
+  suite passed in 43.30 seconds and diff whitespace check passed. No new direct
+  assertion of autosave during a MainWindow canopy request was added this turn;
+  that integration test remains necessary before calling this path fully verified.
+- Desktop input remains stopped. Successful local TIFF window install,
+  replacement/cancellation and visual QA remain next substantive checks.
+
+## Canopy options rollback — September 14
+
+- Existing-canopy option edits now commit only when onLoadCanopy installs a new
+  raster. Failure, cancellation or a no-op restores the previous policy/height;
+  exceptions also roll back the options. A shared-pointer comparison retains the
+  previous raster during the check. Canopy action summaries refresh afterwards.
+  With no imported canopy, accepting options still saves them without a fetch.
+- Testing-strategy-guided tests exercise the production transaction helper:
+  proposed settings during reload, both fields restored on false/exception and
+  both committed on success. This is not yet a loaded MainWindow end-to-end test.
+- Rebuilt all configured targets and passed all 16 suites in 51.03 seconds in
+  build2/isolated-qa. Diff whitespace check passed. No desktop input resumed.
+- Remaining: local TIFF successful install and failed replacement through the
+  actual window, including autosave/reentrancy while the network loop runs;
+  native visual QA, packaging and broader standalone validation remain pending.
+
+## Malformed canopy cache retry fixed — September 14
+
+- A 200 response containing non-TIFF bytes was persisted by the downloader and
+  reused on every retry. CanopyLoader now evicts only the specific undecodable
+  layer's cache entry, permitting the next attempt to fetch it again. Other
+  cached layers remain untouched. No user cache was cleared during this work;
+  verification used disposable local HTTP responses and a temporary cache.
+- Testing-strategy-guided regression checks a second attempt after malformed
+  data makes one fresh request rather than replaying the bad cached layer.
+  Isolated app and native tests rebuilt; MainWindow suite passed in 43.14 seconds.
+  This is not a full-suite rerun. Visual QA remains pending.
+- Separate issue found during tracing: onCanopyOptions changes live options
+  before reloading an existing canopy. Failure/cancellation keeps old raster but
+  new options, which snapshotScenario then serializes. Next production fix needs
+  transactional option rollback with loaded-canopy regression coverage.
+- Valid TIFFs with mismatched geographic metadata and unwritable cache eviction
+  remain separate error cases; successful install/replacement tests are pending.
+
+## Active canopy request cancellation — September 14
+
+- Added a testing-strategy-guided local HTTP fixture with an isolated temporary
+  cache. Cancelling after the first request reaches the server stops subsequent
+  layers; retry makes all three requests and rejects malformed TIFF bodies.
+  Existing elevation, canopy heights and cover remain unchanged. Five-second
+  cancellation deadlines bound the test; no public provider is contacted.
+- Rebuilt native MainWindow tests; suite passed in 41.59 seconds. This is
+  loader-level active network cancellation/error/retry coverage, not a successful
+  canopy install or MainWindow replacement test. Production code is unchanged.
+- Next canopy check: successful local TIFF install followed by failed/cancelled
+  replacement through MainWindow. Desktop visual QA is still pending and desktop
+  control was not resumed. Previous full 16-suite run remains the latest full run.
+
+## Canopy rejection/cancellation regression — September 14
+
+- Testing-strategy-guided loader checks now cover ungeoreferenced terrain,
+  terrain outside provider coverage and an already-cancelled request. Each
+  returns a failure and preserves existing elevation, canopy height and cover.
+  These paths do not download data. No desktop input was resumed.
+- Rebuilt MainWindow test target (corrected a missing Qt network include during
+  compilation); native suite passed in 43.69 seconds. No production changes in
+  this increment. Previous full 16-suite run remains the latest full verification.
+- These checks are not mid-download cancellation or MainWindow loaded-canopy
+  replacement tests. Next meaningful coverage should exercise those with local
+  HTTP/TIFF fixtures, not add more preflight-only cases. Visual QA remains pending.
+
+## Zero-height canopy restoration fixed — September 13
+
+- MainWindow now reconstructs canopy options through canopyOptionsForImport,
+  independently of previous scene settings. Valid heights from 0 through 60 m
+  are retained, including zero. Negative, over-range and nonfinite heights use
+  the documented 10 m default; unknown policies use the default assume policy.
+- Testing-strategy guidance shaped direct tests of the production conversion
+  after file round-trip for all policies and height boundaries, plus invalid
+  numeric/policy cases. No download is needed to verify the conversion.
+- All configured targets rebuilt in build2/isolated-qa; all 16 suites passed in
+  57.67 seconds. Diff whitespace check passed. This resolves the zero-height
+  defect noted below; it does not establish end-to-end cached canopy restoration
+  or loaded-canopy reload failure behavior. Those and visual QA remain pending.
+
+## Canopy persistence checkpoint — September 13
+
+- Added testing-strategy-guided file/recovery checks for all three canopy
+  policies, heights 0/12.5/60 m, source ID, retrieval timestamp, and disabled
+  imports. Recovery also preserves an enabled import with zero assumed height.
+  Scenario-save target rebuilt and its suite passed in 0.89 seconds; diff
+  whitespace check passed. These are persistence checks, not canopy downloads.
+- Found a separate restoration defect while tracing the saved values:
+  MainWindow::restoreCanopyImport only assigns heights greater than zero even
+  though the options dialog accepts zero. The file preserves zero correctly,
+  but restoring the live options can keep a previous/default height instead.
+  Next increment should fix and regression-test this application restoration
+  boundary, including invalid/nonfinite saved values, without real downloads.
+- No desktop input resumed. Windows visual QA and the earlier loaded-canopy
+  failure/cancellation checks remain outstanding.
+
+## Canopy options interaction checkpoint — September 13
+
+- Added explicit accessible policy and height-with-units names to the canopy
+  options controls. Native dialog regression now checks all three policies,
+  enables assumed height only for the assumption policy, rejects edits without
+  retaining them, and retains accepted policy/height when the dialog reopens.
+- Used testing-strategy guidance for this interaction test on synthetic terrain
+  with no canopy loaded; no network download or desktop input was required.
+  Rebuilt the isolated app and MainWindow test target; native suite passed in
+  43.31 seconds. Diff whitespace check passed. The previous full 16-suite run
+  remains the latest full run, not a claim that all suites were rerun here.
+- Remaining canopy QA: loaded-canopy reload failures/cancellation, actual
+  Windows accessibility output and visual layout. These dialog checks do not
+  validate measured canopy accuracy, provider data, or scenario restoration.
+
+## Layer accessibility verification — September 13
+
+- Completed the interrupted layer-row fix: accessible list names and shown/hidden
+  plus opacity descriptions now track initial state, external stack updates and
+  checkbox/slider changes. External opacity updates also refresh the tooltip,
+  including when signals are blocked. Row widgets are updated in place.
+- Testing-strategy guidance focused the regression on those synchronization
+  paths. Built every configured target in build2/isolated-qa and passed all 16
+  suites in 51.50 seconds (native MainWindow suite: 43.06 seconds).
+- Previous desktop inspection found unnamed layer rows; Windows accessibility
+  tree reinspection and canopy visual QA remain pending. No desktop input was
+  resumed after the user's Escape interruption. No Ridgeline process was running
+  when this build began, so no open executable or user scenario was replaced.
+- Next: verify corrected names in Windows accessibility and inspect canopy
+  controls visually when desktop control is authorized again. GDAL coverage,
+  clean-machine packaging and standalone release validation remain incomplete;
+  Specter stays deferred. Existing local changes are preserved and uncommitted.
+
+## Camera cancellation verification — September 12
+
+- Placement restart/undo follow-up: cancellation now starts via onAddAntenna,
+  not merely viewport mode. Restart through that action, click terrain in top
+  view, verify exactly one source is added, click again without another addition,
+  and undo back to the original count. Rebuilt native suite passed in 44.55
+  seconds; diff whitespace check passed. Testing-strategy skill guided this
+  integration test. Precise placed coordinates and physical focus remain separate
+  checks; no production behavior or visual styling changed.
+
+- Placement follow-up: start placement, press the mouse, send Escape, release
+  the mouse, then send Escape again. Assert one cancellation notification, no
+  placement/move signals and unchanged source count. Native MainWindow suite
+  rebuilt and passed in 43.68 seconds; diff whitespace check passed. Test-only
+  change guided by the testing-strategy skill. Physical focus/pointer behavior
+  and successful placement geometry remain separate checks.
+
+- Pan/tilt follow-up: keyboard elevation change and middle-button drag must
+  each change the framebuffer. After cancelling terrain selection, the entire
+  framebuffer must equal its immediate pre-picker baseline with layers off and
+  on. This compares within one run, not a hardware-dependent golden screenshot.
+  Rebuilt native MainWindow target and passed its suite in 43.42 seconds.
+  Test-only change; physical pointer/focus behavior is still not audited.
+
+- Broader follow-up: built every configured target in build2/isolated-qa and
+  passed all **16** suites in **49.77 seconds**, including layer/canopy tests
+  and the updated camera-cancellation regression, at HEAD 94f8c8e plus local
+  test changes. This supersedes the old 14-suite count for this configuration.
+  GDAL GeoTIFF tests remain absent in this local build; a green run does not
+  establish field accuracy or complete the release checklist.
+
+- Current commits already include export-dialog, map-layer, recovery and canopy
+  work beyond the older handoff. Preserved those changes; this increment is
+  test-only. Do not treat the old handoff's pending list as current inventory.
+- The terrain-picker regression now orbits with a Right-key event and zooms
+  with a wheel event, verifies both changed the displayed orientation/scale,
+  then checks cancellation retains both with layers off and on. It reads the
+  existing north indicator and scale bar without test-only camera accessors.
+  Pan target/elevation rendering is covered by the follow-up above.
+- Rebuilt the isolated application and native MainWindow target at HEAD
+  94f8c8e plus this test change. MainWindow suite passed in 44.83 seconds.
+  This was a targeted run, not a rerun of every newly added suite. No styling
+  or production logic changed. Diff whitespace check passed before verification.
+- The testing-strategy skill guided coverage of this cancellation path rather
+  than repeating export-helper checks. Native OS file-picker interaction remains
+  distinct from the owned Qt dialog driven by the test.
+
+## Current handoff — September 14 (HEAD 94f8c8e plus local polish changes)
 
 - Latest verified application is **build2/isolated-qa**, not the primary build2
-  executable. Last full build succeeded and all 14 suites passed in 35.20 seconds.
+  executable. Latest full verification passed all 16 suites in 48.61 seconds,
+  including the new canopy window guard integration. No source changes were
+  made during this full-suite follow-up. Testing-strategy guidance informed the
+  combined regression verification after the recent targeted runs.
   Preserve any open user workspace; do not replace its executable or discard work.
 - Completed increments: shared dark palette, compact source/analysis layouts,
   visible numeric step controls, accessible numeric names, unsaved-state guards,
@@ -17,17 +354,24 @@ standalone release. This is a work list, not a claim that these features exist.
   (see "Export dialog verification checkpoint"). Exports now go through the
   application's own dialogs in test, with content, cancel, failure and retry
   covered on isolated synthetic data.
-- Next focused workflow: map interaction and project protection — navigation
-  and placement checks, recovery/autosave, and reproducible saved-terrain
-  provenance. Camera/zoom preservation across the terrain picker is already
-  named as pending above and is a reasonable entry point.
-- After that, return to map interaction and project-protection items below:
-  navigation/placement checks, recovery/autosave and reproducible saved terrain
-  provenance. Do not keep repeating already-passing export-helper tests unless
-  production code changes or a new failure mode warrants them.
-- Outstanding broader scope still includes map-type selection, higher-resolution
-  provider work, LiDAR, foliage and Windows release packaging. Keep the original
-  priority list; none of these is implicitly completed by the recent polish.
+- Camera orbit/zoom, pan/tilt cancellation, placement restart/undo and canopy
+  close/autosave guards are covered above. Recent production fixes include layer
+  accessibility metadata, canopy zero-height restoration, malformed cache retry
+  and option rollback. Do not repeat their existing narrow regression cases.
+- Next substantive workflow is successful local TIFF installation through
+  MainWindow followed by failed/cancelled replacement and saved-option checks.
+  Native visual QA of layers and canopy controls remains pending; desktop input
+  has not resumed after the user's Escape interruption. Preserve user work.
+- Autosave/recovery, recent history and layout restoration are implemented;
+  see "Project protection: autosave, recovery, history and layout" for remaining
+  limits, including actual process-kill recovery verification. Do not rebuild
+  those features from the older handoff's pending list.
+- Map layers, topo/hillshade, terrain-resolution reporting, LiDAR-derived DEM
+  support and canopy ingestion have implementation checkpoints below. These
+  are not blanket completion of all original map/LiDAR/foliage requirements.
+  Review their documented limits before selecting the next feature increment.
+- Windows packaging/clean-machine verification and broader validation remain.
+  Do not repeat passing export-helper tests without changed code or a new risk.
 - Remaining QA limitations: real native file-dialog/title-bar checks, focus and
   screen-reader audit, GDAL GeoTIFF coverage (GDAL absent), disk-full injection,
   broader terrain references and vertical-datum handling. Do not fill the host
@@ -35,8 +379,9 @@ standalone release. This is a work list, not a claim that these features exist.
 - Local Qwen was last unavailable (localhost:8080 connection refused). Recent
   changes were independently verified, not delegated. No unattended helper is
   active. Check availability before claiming future helper work.
-- Usage check: weekly window 97% consumed; no credits redeemed or purchased.
-  Existing heartbeat should retry after limits reset if execution is exhausted.
+- Read live usage at each follow-up; the September 9 quota figures are obsolete.
+  No credits redeemed or purchased. The existing heartbeat retries after resets
+  when execution is exhausted; Specter remains deferred until standalone polish.
 
 ## Original priority order
 
