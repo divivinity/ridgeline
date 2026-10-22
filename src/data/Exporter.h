@@ -19,4 +19,8 @@ public:
     static bool exportCsv(const FieldGrid& grid, const std::string& path);
     static bool exportCsv(const FieldGrid& grid, const TerrainModel& terrain,
                           const std::string& path);
+    // Atomic GeoTIFF of desired signal (see CoverageGeoTiff). Fails, leaving
+    // the target untouched, when the terrain has no real-world location.
+    static bool exportGeoTiff(const FieldGrid& grid, const TerrainModel& terrain,
+                              const std::string& path);
 };

@@ -49,6 +49,7 @@ private slots:
     void onImportMeasurements();
     void onExportPng();
     void onExportCsv();
+    void onExportGeoTiff();
     void onAddAntenna();
     void onAddJammer();
     void onRemoveAntenna(int index);

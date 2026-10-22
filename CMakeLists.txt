@@ -279,7 +279,9 @@ add_executable(ridgeline_ui_interaction_tests
     src/sim/TerrainModel.cpp
     src/data/AntennaLibrary.cpp
     src/data/AntennaPatternIO.cpp
-    src/data/Exporter.cpp)
+    src/data/Exporter.cpp
+    src/data/CoverageGeoTiff.cpp
+    src/data/RasterTiff.cpp)
 target_include_directories(ridgeline_ui_interaction_tests PRIVATE src)
 target_link_libraries(ridgeline_ui_interaction_tests
     Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network glm::glm nlohmann_json::nlohmann_json)
@@ -295,7 +297,8 @@ endif()
 
 if(GDAL_FOUND)
     add_executable(ridgeline_geotiff_tests
-        tests/test_geotiff.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
+        tests/test_geotiff.cpp src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp
+        src/data/CoverageGeoTiff.cpp)
     target_include_directories(ridgeline_geotiff_tests PRIVATE src ${GDAL_INCLUDE_DIRS})
     target_compile_definitions(ridgeline_geotiff_tests PRIVATE HAVE_GDAL)
     target_link_libraries(ridgeline_geotiff_tests

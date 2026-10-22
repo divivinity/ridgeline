@@ -1,4 +1,5 @@
 #include "Exporter.h"
+#include "CoverageGeoTiff.h"
 #include <QImage>
 #include <QString>
 #include <QSaveFile>
@@ -58,6 +59,19 @@ bool Exporter::exportPng(const FieldGrid& grid, const std::string& path) {
         }
     }
     return savePng(img, path);
+}
+
+bool Exporter::exportGeoTiff(const FieldGrid& grid, const TerrainModel& terrain,
+                             const std::string& path) {
+    const std::vector<std::uint8_t> bytes = CoverageGeoTiff::encode(grid, terrain);
+    if (bytes.empty()) return false;
+    QSaveFile output(QString::fromStdString(path));
+    output.setDirectWriteFallback(false);
+    if (!output.open(QIODevice::WriteOnly)) return false;
+    const auto size = static_cast<qint64>(bytes.size());
+    if (output.write(reinterpret_cast<const char*>(bytes.data()), size) != size)
+        return false;
+    return output.commit();
 }
 
 bool Exporter::exportCsv(const FieldGrid& grid, const std::string& path) {

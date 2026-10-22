@@ -15,6 +15,7 @@
 #include "sim/SolveSignature.h"
 #include "data/MeasurementIO.h"
 #include "data/Exporter.h"
+#include "data/CoverageGeoTiff.h"
 #include "data/AntennaLibrary.h"
 #include "LocationDialog.h"
 #include "ReceiverDialog.h"
@@ -164,6 +165,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(exportPngAct, &QAction::triggered, this, &MainWindow::onExportPng);
     QAction* exportCsvAct = exportMenu->addAction("Coverage &CSV…");
     connect(exportCsvAct, &QAction::triggered, this, &MainWindow::onExportCsv);
+    QAction* exportGeoTiffAct = exportMenu->addAction("Coverage &GeoTIFF…");
+    exportGeoTiffAct->setObjectName("ExportGeoTiffAction");
+    connect(exportGeoTiffAct, &QAction::triggered, this, &MainWindow::onExportGeoTiff);
 
     QMenu* editMenu = menuBar()->addMenu("&Edit");
     QAction* undoAction = m_undoStack->createUndoAction(this, "&Undo");
@@ -2307,6 +2311,25 @@ void MainWindow::onExportCsv() {
     if (Exporter::exportCsv(m_engine.fieldGrid(), m_engine.terrain(), path.toStdString()))
         m_statusLabel->setText("  RF metrics CSV exported");
     else QMessageBox::critical(this, "Export failed", "Could not write CSV file.");
+}
+
+void MainWindow::onExportGeoTiff() {
+    if (!m_engine.fieldGrid().valid()) {
+        QMessageBox::information(this, "No data", "Run Solve first to generate a coverage field.");
+        return;
+    }
+    if (!CoverageGeoTiff::canEncode(m_engine.fieldGrid(), m_engine.terrain())) {
+        QMessageBox::information(this, "No real-world location",
+            "A GeoTIFF needs terrain with a real-world location. This terrain has "
+            "none, so export the CSV, which gives positions in metres.");
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export Coverage GeoTIFF", {}, "GeoTIFF (*.tif *.tiff);;All files (*)");
+    if (path.isEmpty()) return;
+    if (Exporter::exportGeoTiff(m_engine.fieldGrid(), m_engine.terrain(), path.toStdString()))
+        m_statusLabel->setText("  Signal GeoTIFF exported (WGS 84, dBm)");
+    else QMessageBox::critical(this, "Export failed", "Could not write GeoTIFF file.");
 }
 
 void MainWindow::applyTheme() {
