@@ -29,6 +29,10 @@ one WGS84 coordinate system.
    **Edit → Duplicate Source** (`Ctrl+D`) copies the selected source with all
    its settings and sets it down beside the original, at the same height above
    ground, ready to move.
+   **Edit → Save Source as Preset** keeps the selected source's radio and
+   antenna under a name, and **Edit → Apply Preset** puts them on any source in
+   any scenario. A preset is equipment only, never position, height or role,
+   and is kept per installation rather than in the scenario.
 6. Use **Analysis → Receiver / Service Criteria** to set receiver sensitivity,
    bandwidth, noise figure, required SINR, fade-margin target, and receive
    polarization.

@@ -1,4 +1,5 @@
 #include "ScenarioIO.h"
+#include "AntennaJson.h"
 #include <nlohmann/json.hpp>
 #include <QFile>
 #include <stdexcept>
@@ -105,21 +106,8 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
         ja["y"] = a.position.y;
         ja["z"] = a.position.z;
         ja["height_msl"] = a.position.y;
-        ja["freq_mhz"] = a.frequencyMHz;
-        ja["power_w"] = a.powerW;
-        ja["gain_dbi"] = a.gainDbi;
         ja["is_jammer"] = a.isJammer;
-        ja["antenna_type"] = a.antennaType;
-        ja["azimuth_deg"] = a.azimuthDeg;
-        ja["downtilt_deg"] = a.downtiltDeg;
-        ja["horizontal_beamwidth_deg"] = a.horizontalBeamwidthDeg;
-        ja["vertical_beamwidth_deg"] = a.verticalBeamwidthDeg;
-        ja["front_to_back_db"] = a.frontToBackDb;
-        ja["cable_loss_db"] = a.cableLossDb;
-        ja["polarization"] = a.polarization;
-        if (!a.azimuthPatternDb.empty()) ja["azimuth_pattern_db"] = a.azimuthPatternDb;
-        if (!a.elevationPatternDb.empty()) ja["elevation_pattern_db"] = a.elevationPatternDb;
-        if (!a.patternSource.empty()) ja["pattern_source"] = a.patternSource;
+        AntennaJson::writeEquipment(ja, a);
         if (a.hasGeoPosition) {
             ja["latitude"] = a.latitudeDeg;
             ja["longitude"] = a.longitudeDeg;
@@ -328,23 +316,8 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
                 a.position.x = ja.value("x", 0.0f);
                 a.position.y = ja.value("y", ja.value("height_msl", 0.0f));
                 a.position.z = ja.value("z", 0.0f);
-                a.frequencyMHz = ja.value("freq_mhz", 150.0f);
-                a.powerW = ja.value("power_w", 50.0f);
-                a.gainDbi = ja.value("gain_dbi", 3.0f);
                 a.isJammer = ja.value("is_jammer", false);
-                a.antennaType = ja.value("antenna_type", std::string{"omni"});
-                a.azimuthDeg = ja.value("azimuth_deg", 0.0f);
-                a.downtiltDeg = ja.value("downtilt_deg", 0.0f);
-                a.horizontalBeamwidthDeg = ja.value("horizontal_beamwidth_deg", 360.0f);
-                a.verticalBeamwidthDeg = ja.value("vertical_beamwidth_deg", 90.0f);
-                a.frontToBackDb = ja.value("front_to_back_db", 30.0f);
-                a.cableLossDb = ja.value("cable_loss_db", 0.0f);
-                a.polarization = ja.value("polarization", std::string{"vertical"});
-                if (ja.contains("azimuth_pattern_db"))
-                    a.azimuthPatternDb = ja["azimuth_pattern_db"].get<std::vector<float>>();
-                if (ja.contains("elevation_pattern_db"))
-                    a.elevationPatternDb = ja["elevation_pattern_db"].get<std::vector<float>>();
-                a.patternSource = ja.value("pattern_source", std::string{});
+                AntennaJson::readEquipment(ja, a);
                 if (ja.contains("latitude") && ja.contains("longitude")) {
                     a.hasGeoPosition = true;
                     a.latitudeDeg = ja.value("latitude", 0.0);

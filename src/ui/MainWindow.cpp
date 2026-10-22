@@ -12,6 +12,7 @@
 #include "data/ScenarioIO.h"
 #include "data/RecoveryStore.h"
 #include "data/WorkspaceSettings.h"
+#include "data/AntennaJson.h"
 #include "sim/SolveSignature.h"
 #include "data/MeasurementIO.h"
 #include "data/Exporter.h"
@@ -31,6 +32,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QInputDialog>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -146,6 +148,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     duplicateAct->setObjectName("DuplicateSourceAction");
     duplicateAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_D));
     connect(duplicateAct, &QAction::triggered, this, &MainWindow::onDuplicateAntenna);
+    editMenu->addSeparator();
+    QAction* savePresetAct = editMenu->addAction("Save Source as &Preset…");
+    savePresetAct->setObjectName("SaveEquipmentPresetAction");
+    connect(savePresetAct, &QAction::triggered, this, &MainWindow::onSaveEquipmentPreset);
+    m_applyPresetMenu = editMenu->addMenu("&Apply Preset");
+    m_applyPresetMenu->setObjectName("ApplyEquipmentPresetMenu");
+    m_deletePresetMenu = editMenu->addMenu("De&lete Preset");
+    m_deletePresetMenu->setObjectName("DeleteEquipmentPresetMenu");
+    refreshPresetMenus();
 
     QMenu* analysisMenu = menuBar()->addMenu("&Analysis");
     // Running coverage is the point of the application, and until now it lived
@@ -2088,6 +2099,90 @@ void MainWindow::onDuplicateAntenna() {
         ? QString("  Source duplicated %1 m %2 · Undo is available from Edit or Ctrl+Z")
               .arg(offsetM, 0, 'f', 0).arg(direction)
         : QStringLiteral("  Source duplicated in place · Undo is available from Edit or Ctrl+Z"));
+}
+
+void MainWindow::refreshPresetMenus() {
+    if (!m_applyPresetMenu || !m_deletePresetMenu) return;
+    m_applyPresetMenu->clear();
+    m_deletePresetMenu->clear();
+    const auto presets = WorkspaceSettings::equipmentPresets();
+    for (const auto& preset : presets) {
+        const QString name = preset.name;
+        // Names are the user's text: keep an ampersand from becoming a mnemonic.
+        const QString label = QString(name).replace('&', "&&");
+        QAction* apply = m_applyPresetMenu->addAction(label);
+        apply->setData(name);
+        connect(apply, &QAction::triggered, this, [this, name] { applyEquipmentPreset(name); });
+        QAction* remove = m_deletePresetMenu->addAction(label);
+        remove->setData(name);
+        connect(remove, &QAction::triggered, this, [this, name] {
+            if (QMessageBox::question(this, "Delete Preset",
+                    QString("Delete the preset \"%1\"? Sources already using it keep "
+                            "their settings.").arg(name)) != QMessageBox::Yes)
+                return;
+            WorkspaceSettings::removeEquipmentPreset(name);
+            refreshPresetMenus();
+            m_statusLabel->setText(QString("  Preset \"%1\" deleted").arg(name));
+        });
+    }
+    m_applyPresetMenu->setEnabled(!presets.empty());
+    m_deletePresetMenu->setEnabled(!presets.empty());
+}
+
+void MainWindow::onSaveEquipmentPreset() {
+    if (m_selectedIndex < 0 ||
+        m_selectedIndex >= static_cast<int>(m_engine.antennas().size())) {
+        m_statusLabel->setText("  Select a source to save its equipment as a preset");
+        return;
+    }
+    const Antenna& source = m_engine.antennas()[m_selectedIndex];
+    const QString suggested = QString("%1 MHz %2 %3 W")
+        .arg(source.frequencyMHz, 0, 'g', 6)
+        .arg(QString::fromStdString(source.antennaType))
+        .arg(source.powerW, 0, 'g', 4);
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, "Save Equipment Preset",
+        "Name for this radio and antenna. Position, height and role are not saved.",
+        QLineEdit::Normal, suggested, &accepted).trimmed();
+    if (!accepted || name.isEmpty()) return;
+    saveSelectedAsPreset(name);
+}
+
+void MainWindow::saveSelectedAsPreset(const QString& name) {
+    if (m_selectedIndex < 0 ||
+        m_selectedIndex >= static_cast<int>(m_engine.antennas().size()) ||
+        name.trimmed().isEmpty())
+        return;
+    const auto existing = WorkspaceSettings::equipmentPresets();
+    const bool replacing = std::any_of(existing.begin(), existing.end(),
+        [&](const auto& preset) { return preset.name == name.trimmed(); });
+    WorkspaceSettings::saveEquipmentPreset(name, m_engine.antennas()[m_selectedIndex]);
+    refreshPresetMenus();
+    m_statusLabel->setText(QString(replacing ? "  Preset \"%1\" replaced"
+                                             : "  Preset \"%1\" saved")
+                               .arg(name.trimmed()));
+}
+
+void MainWindow::applyEquipmentPreset(const QString& name) {
+    if (m_selectedIndex < 0 ||
+        m_selectedIndex >= static_cast<int>(m_engine.antennas().size())) {
+        m_statusLabel->setText("  Select a source to apply a preset to");
+        return;
+    }
+    const auto presets = WorkspaceSettings::equipmentPresets();
+    const auto found = std::find_if(presets.begin(), presets.end(),
+        [&](const auto& preset) { return preset.name == name; });
+    if (found == presets.end()) {
+        refreshPresetMenus();
+        m_statusLabel->setText(QString("  Preset \"%1\" no longer exists").arg(name));
+        return;
+    }
+    std::vector<Antenna> after = m_engine.antennas();
+    after[m_selectedIndex] = AntennaJson::withEquipment(after[m_selectedIndex], found->equipment);
+    pushSourceChange(std::move(after), m_selectedIndex, "Apply preset");
+    m_statusLabel->setText(QString("  Preset \"%1\" applied · position and height kept")
+                               .arg(name));
 }
 
 void MainWindow::onAntennaSelected(int index) {

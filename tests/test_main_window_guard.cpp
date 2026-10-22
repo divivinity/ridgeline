@@ -227,6 +227,74 @@ void testDuplicateSourceLandsBesideOriginal() {
     withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
 
+// A preset carries a radio and antenna onto the selected source, as one
+// undoable edit that leaves the source where it stands, and presets saved in
+// the window reach the menus at once.
+void testEquipmentPresetsCarryEquipmentNotPosition() {
+    QTemporaryDir state;
+    check(state.isValid(), "preset state directory exists");
+    const auto oldState = qgetenv("RIDGELINE_STATE_DIR");
+    const auto restore = qScopeGuard([&] { qputenv("RIDGELINE_STATE_DIR", oldState); });
+    qputenv("RIDGELINE_STATE_DIR", state.path().toUtf8());
+    Antenna handheld;
+    handheld.frequencyMHz = 434.0f;
+    handheld.powerW = 5.0f;
+    handheld.antennaType = "yagi";
+    WorkspaceSettings::saveEquipmentPreset("Handheld", handheld);
+
+    MainWindow window;
+    window.show();
+    settle();
+    auto* list = window.findChild<QListWidget*>("SourceList");
+    auto* summary = window.findChild<QLabel*>("SourcePositionSummary");
+    auto* status = window.findChild<QLabel*>("WorkspaceStatus");
+    auto* applyMenu = window.findChild<QMenu*>("ApplyEquipmentPresetMenu");
+    auto* deleteMenu = window.findChild<QMenu*>("DeleteEquipmentPresetMenu");
+    auto* undo = window.findChild<QUndoStack*>();
+    if (!list || !summary || !status || !applyMenu || !deleteMenu || !undo ||
+        list->count() == 0) {
+        check(false, "preset fixture controls exist"); return;
+    }
+    check(applyMenu->isEnabled() && applyMenu->actions().size() == 1 &&
+              deleteMenu->actions().size() == 1,
+          "a stored preset is offered when the window opens");
+    if (applyMenu->actions().isEmpty()) return;
+
+    // The equipment line of a source row, "<freq> MHz · <power> W".
+    auto equipmentLine = [list](int row) { return list->item(row)->text().section('\n', 1); };
+    const QString ownEquipment = equipmentLine(0);
+    check(ownEquipment != QStringLiteral("434 MHz · 5 W"), "the demo source starts elsewhere");
+
+    list->setCurrentRow(0);
+    qApp->processEvents();
+    const QString position = summary->text();
+    applyMenu->actions()[0]->trigger();
+    qApp->processEvents();
+    check(equipmentLine(0) == QStringLiteral("434 MHz · 5 W"),
+          "the source takes the preset's equipment");
+    check(summary->text() == position, "the source keeps its position and height");
+    check(status->text().contains("applied"), "applying a preset is reported");
+    check(window.isWindowModified(), "applying a preset is an unsaved edit");
+
+    undo->undo();
+    qApp->processEvents();
+    check(equipmentLine(0) == ownEquipment && !window.isWindowModified(),
+          "one undo restores the source's own equipment");
+
+    QMetaObject::invokeMethod(&window, "saveSelectedAsPreset",
+                              Q_ARG(QString, QStringLiteral("Site A & radio")));
+    check(status->text().contains("saved"), "saving a preset is reported");
+    check(applyMenu->actions().size() == 2 && deleteMenu->actions().size() == 2,
+          "a preset saved in the window reaches both menus at once");
+    check(!window.isWindowModified(), "saving a preset does not touch the scenario");
+    if (applyMenu->actions().size() == 2)
+        check(applyMenu->actions()[0]->text() == "Handheld" &&
+                  applyMenu->actions()[1]->text() == "Site A && radio",
+              "presets are listed by name, and shown literally rather than as mnemonics");
+
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
 void testSavingUpdatesModifiedIndicator() {
     QTemporaryDir folder;
     check(folder.isValid(), "save-indicator fixture directory exists");
@@ -2082,6 +2150,7 @@ int main(int argc, char** argv) {
     testScenarioOpeningProgressAndRecovery();
     testExportsThroughApplicationDialogs();
     testDuplicateSourceLandsBesideOriginal();
+    testEquipmentPresetsCarryEquipmentNotPosition();
     testAutosaveAndRecovery();
     testDisplayedResultsAlwaysMatchTheirInputs();
     testRecentHistoryAndLayoutPersist();
