@@ -9,9 +9,13 @@
 // Private widgets are reached through Qt's object tree, so nothing here
 // requires MainWindow to expose test hooks.
 #include "ui/MainWindow.h"
+#include <QWheelEvent>
+#include <QMouseEvent>
 #include "ui/WorkspaceTheme.h"
 #include "ui/MapFurniture.h"
 #include "ui/LocationDialog.h"
+#include "ui/LayersPanel.h"
+#include "map/LayerStack.h"
 
 #include <QAbstractButton>
 #include <QAction>
@@ -34,6 +38,7 @@
 #include <QTemporaryDir>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QNetworkAccessManager>
 #include <QScopeGuard>
 #include <QFileDialog>
 #include <QFile>
@@ -47,6 +52,9 @@
 #include "data/TileBatchDownloader.h"
 #include "data/RecoveryStore.h"
 #include "data/WorkspaceSettings.h"
+#include "data/CanopyLoader.h"
+#include "CanopyTiffFixture.h"
+#include "data/TerrainLoader.h"
 
 #include <cmath>
 #include <iostream>
@@ -349,7 +357,362 @@ void testCloseIsRefusedDuringASolve() {
 // links them, so they can drift into a state where a layer draws while its box
 // reads unchecked — the user would then have to check and uncheck it to hide it.
 // They agree today; this pins that, since only a test can keep them in step.
+void testCanopyOptionsCommitAndCancel() {
+    MainWindow window;
+    // Synthetic terrain, no loaded canopy: exercising options needs no network.
+    auto visit = [&](int expectedPolicy, double expectedHeight, bool accept) {
+        bool handled = false;
+        QTimer timer;
+        QObject::connect(&timer, &QTimer::timeout, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "CanopyOptionsDialog") return;
+            timer.stop();
+            handled = true;
+            auto* policy = dialog->findChild<QComboBox*>("DevelopedCanopyPolicy");
+            auto* height = dialog->findChild<QDoubleSpinBox*>("AssumedCanopyHeight");
+            check(policy && height, "canopy options controls are identifiable");
+            if (policy && height) {
+                check(policy->currentIndex() == expectedPolicy &&
+                          std::abs(height->value() - expectedHeight) < 0.01,
+                      "canopy options retain accepted values, not cancelled edits");
+                check(!policy->accessibleName().isEmpty() &&
+                          height->accessibleName().contains("metres"),
+                      "canopy controls expose policy and height units");
+                for (int index : {1, 2, 0}) {
+                    policy->setCurrentIndex(index);
+                    check(height->isEnabled() == (index == 0),
+                          "assumed height is editable only for the assumption policy");
+                }
+                height->setValue(12.5);
+                policy->setCurrentIndex(2);
+            }
+            if (accept) dialog->accept(); else dialog->reject();
+        });
+        timer.start(10);
+        check(QMetaObject::invokeMethod(&window, "onCanopyOptions"),
+              "canopy options action opens");
+        check(handled, "canopy options dialog was exercised");
+    };
+    visit(0, 10.0, false);
+    visit(0, 10.0, true);
+    visit(2, 12.5, false);
+}
+
+void testCanopyRejectedAndCancelledLoadsKeepTerrain() {
+    QNetworkAccessManager network;
+    auto terrain = TerrainLoader::makeFlat(5, 5, 30.0f, 100.0f);
+    terrain.canopyHeightDm.assign(25, 125);
+    terrain.canopyCoverPct.assign(25, 60);
+    const auto heights = terrain.heights;
+    const auto canopy = terrain.canopyHeightDm;
+    const auto cover = terrain.canopyCoverPct;
+    const auto unchanged = [&] {
+        check(terrain.heights == heights && terrain.canopyHeightDm == canopy &&
+                  terrain.canopyCoverPct == cover,
+              "unsuccessful canopy load preserves existing terrain and vegetation");
+    };
+    auto result = CanopyLoader::loadForTerrain(network, terrain, {});
+    check(!result.ok() && result.error.contains("geographic reference"),
+          "canopy loader rejects ungeoreferenced terrain before requesting data");
+    unchanged();
+    terrain.setGeoReference(48.8, 2.3, 0.001, 0.001);
+    result = CanopyLoader::loadForTerrain(network, terrain, {});
+    check(!result.ok() && result.error.contains("outside"),
+          "canopy loader rejects terrain outside provider coverage");
+    unchanged();
+    terrain.setGeoReference(35.0, -78.0, 0.001, 0.001);
+    result = CanopyLoader::loadForTerrain(network, terrain, {}, {}, [] { return true; });
+    check(!result.ok() && result.error.contains("cancelled"),
+          "pre-cancelled canopy request returns no installable result");
+    unchanged();
+}
+
+void testCanopyNetworkCancellationAndMalformedResponse() {
+    QTemporaryDir cache;
+    check(cache.isValid(), "isolated canopy network cache exists");
+    if (!cache.isValid()) return;
+    const auto oldCache = qgetenv("RIDGELINE_CACHE_DIR");
+    const auto oldUrl = qgetenv("RIDGELINE_CANOPY_URL");
+    const auto restore = qScopeGuard([&] {
+        if (oldCache.isNull()) qunsetenv("RIDGELINE_CACHE_DIR");
+        else qputenv("RIDGELINE_CACHE_DIR", oldCache);
+        if (oldUrl.isNull()) qunsetenv("RIDGELINE_CANOPY_URL");
+        else qputenv("RIDGELINE_CANOPY_URL", oldUrl);
+    });
+    qputenv("RIDGELINE_CACHE_DIR", cache.path().toUtf8());
+    QTcpServer server;
+    check(server.listen(QHostAddress::LocalHost, 0), "local canopy fixture listens");
+    if (!server.isListening()) return;
+    qputenv("RIDGELINE_CANOPY_URL",
+            QString("http://127.0.0.1:%1").arg(server.serverPort()).toUtf8());
+    bool cancel = false;
+    bool stalled = true;
+    bool validTiffs = false;
+    int requests = 0;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+        while (auto* socket = server.nextPendingConnection()) {
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [&, socket] {
+                if (socket->property("answered").toBool()) return;
+                socket->setProperty("answered", true);
+                socket->readAll();
+                ++requests;
+                if (stalled) { cancel = true; return; }
+                QByteArray body("nope");
+                if (validTiffs) {
+                    TiffBuilder tiff;
+                    tiff.width = tiff.height = 5;
+                    tiff.geo = true;
+                    // Request bounds include the half-cell border around the
+                    // terrain's sample centres.
+                    tiff.westLon = -78.0005;
+                    tiff.northLat = 35.0045;
+                    tiff.step = 0.001;
+                    tiff.samples.assign(25, requests == 1 ? 390 : requests == 2 ? 45 : 13);
+                    const auto bytes = tiff.build();
+                    body = QByteArray(reinterpret_cast<const char*>(bytes.data()),
+                                      static_cast<qsizetype>(bytes.size()));
+                }
+                socket->write("HTTP/1.1 200 OK\r\nContent-Length: " +
+                              QByteArray::number(body.size()) +
+                              "\r\nConnection: close\r\n\r\n" + body);
+                socket->disconnectFromHost();
+            });
+        }
+    });
+    QNetworkAccessManager network;
+    auto terrain = TerrainLoader::makeFlat(5, 5, 30.0f, 100.0f);
+    terrain.setGeoReference(35.0, -78.0, 0.001, 0.001);
+    terrain.canopyHeightDm.assign(25, 125);
+    terrain.canopyCoverPct.assign(25, 60);
+    const auto original = terrain;
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    bool timedOut = false;
+    QObject::connect(&deadline, &QTimer::timeout, [&] { timedOut = true; cancel = true; });
+    deadline.start(5000);
+    auto result = CanopyLoader::loadForTerrain(network, terrain, {}, {}, [&] { return cancel; });
+    check(!timedOut && requests == 1 && !result.ok() && result.error.contains("cancelled"),
+          "cancelling an active canopy request stops the remaining downloads");
+    stalled = false;
+    cancel = false;
+    requests = 0;
+    deadline.start(5000);
+    result = CanopyLoader::loadForTerrain(network, terrain, {}, {}, [&] { return cancel; });
+    deadline.stop();
+    check(!timedOut && requests == 3 && !result.ok() && result.error.contains("could not be read"),
+          "retry reaches all layers and rejects malformed TIFF responses");
+    requests = 0;
+    deadline.start(5000);
+    result = CanopyLoader::loadForTerrain(network, terrain, {}, {}, [&] { return cancel; });
+    deadline.stop();
+    check(!timedOut && requests == 1 && !result.ok(),
+          "malformed layer is fetched again instead of permanently poisoning the cache");
+    check(terrain.heights == original.heights &&
+              terrain.canopyHeightDm == original.canopyHeightDm &&
+              terrain.canopyCoverPct == original.canopyCoverPct,
+          "network cancellation and malformed data leave existing vegetation intact");
+    validTiffs = true;
+    requests = 0;
+    qputenv("RIDGELINE_CANOPY_URL",
+            QString("http://127.0.0.1:%1/valid").arg(server.serverPort()).toUtf8());
+    deadline.start(5000);
+    result = CanopyLoader::loadForTerrain(network, terrain, {}, {}, [&] { return cancel; });
+    deadline.stop();
+    check(!timedOut && requests == 3 && result.ok(),
+          "three local TIFF layers produce an installable canopy");
+    if (!result.ok()) std::cerr << result.error.toStdString() << '\n';
+    if (result.ok()) {
+        check(result.canopy.heightDm.size() == 25 && result.canopy.heightDm[0] == 100 &&
+                  result.canopy.coverPct[0] == 45 && result.canopy.coverage.assignedHeight == 25,
+              "successful load applies the declared height assumption and cover");
+        const auto savedHeights = result.canopy.heightDm;
+        requests = 0;
+        result = CanopyLoader::loadForTerrain(network, terrain, {}, {}, [&] { return cancel; });
+        check(result.ok() && requests == 0 && result.canopy.heightDm == savedHeights,
+              "cached canopy reload reproduces heights without additional HTTP requests");
+    }
+}
+
+void testCanopyWindowBlocksCloseAndAutosave() {
+    QTemporaryDir fixture;
+    check(fixture.isValid(), "canopy window fixture directory exists");
+    if (!fixture.isValid()) return;
+    const auto oldUrl = qgetenv("RIDGELINE_CANOPY_URL");
+    const auto oldCache = qgetenv("RIDGELINE_CACHE_DIR");
+    const auto oldState = qgetenv("RIDGELINE_STATE_DIR");
+    const auto oldOffline = qgetenv("RIDGELINE_OFFLINE");
+    const auto restore = qScopeGuard([&] {
+        qputenv("RIDGELINE_CANOPY_URL", oldUrl);
+        qputenv("RIDGELINE_CACHE_DIR", oldCache);
+        qputenv("RIDGELINE_STATE_DIR", oldState);
+        qputenv("RIDGELINE_OFFLINE", oldOffline);
+    });
+    qputenv("RIDGELINE_CACHE_DIR", fixture.filePath("cache").toUtf8());
+    qputenv("RIDGELINE_STATE_DIR", fixture.filePath("state").toUtf8());
+    qputenv("RIDGELINE_OFFLINE", "1");
+    QFile hgt(fixture.filePath("N35W078.hgt"));
+    check(hgt.open(QIODevice::WriteOnly), "canopy terrain fixture opens");
+    const QByteArray flat(1201 * 1201 * 2, '\0');
+    check(hgt.write(flat) == flat.size(), "canopy terrain fixture is complete");
+    hgt.close();
+    MainWindow window;
+    window.show();
+    window.loadTerrain(hgt.fileName());
+    QTcpServer server;
+    check(server.listen(QHostAddress::LocalHost, 0), "canopy window server listens");
+    if (!server.isListening()) return;
+    qputenv("RIDGELINE_CANOPY_URL",
+            QString("http://127.0.0.1:%1").arg(server.serverPort()).toUtf8());
+    qputenv("RIDGELINE_OFFLINE", "0");
+    bool exercised = false;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+        auto* progress = window.findChild<QProgressDialog*>();
+        check(progress != nullptr, "active canopy request has progress dialog");
+        if (!progress) return;
+        exercised = true;
+        check(!window.close() && window.isVisible(), "close is refused during canopy download");
+        auto* timer = window.findChild<QTimer*>("AutosaveTimer");
+        check(timer != nullptr, "autosave timer exists during canopy download");
+        if (timer) QMetaObject::invokeMethod(timer, "timeout");
+        check(!RecoveryStore::exists(), "autosave skips an in-progress canopy load");
+        progress->cancel();
+    });
+    QTimer deadline;
+    QObject::connect(&deadline, &QTimer::timeout, [&] {
+        if (auto* progress = window.findChild<QProgressDialog*>()) progress->cancel();
+    });
+    deadline.start(5000);
+    QMetaObject::invokeMethod(&window, "onLoadCanopy");
+    deadline.stop();
+    check(exercised, "window guard checked during actual local network request");
+    if (auto* timer = window.findChild<QTimer*>("AutosaveTimer"))
+        QMetaObject::invokeMethod(timer, "timeout");
+    check(RecoveryStore::exists(), "autosave resumes after canopy cancellation");
+    QObject::disconnect(&server, &QTcpServer::newConnection, &server, nullptr);
+    while (auto* socket = server.nextPendingConnection()) socket->deleteLater();
+    int canopyRequests = 0;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+        while (auto* socket = server.nextPendingConnection()) {
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [&, socket] {
+                if (socket->property("answered").toBool()) return;
+                socket->setProperty("answered", true);
+                socket->readAll();
+                ++canopyRequests;
+                TiffBuilder tiff;
+                tiff.width = tiff.height = 5;
+                tiff.samples.assign(25, canopyRequests == 1 ? 390 : canopyRequests == 2 ? 45 : 13);
+                const auto bytes = tiff.build();
+                const QByteArray body(reinterpret_cast<const char*>(bytes.data()),
+                                      static_cast<qsizetype>(bytes.size()));
+                socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) +
+                              "\r\nConnection: close\r\n\r\n" + body);
+                socket->disconnectFromHost();
+            });
+        }
+    });
+    deadline.start(5000);
+    withModalAnswer(QMessageBox::Ok, [&] { QMetaObject::invokeMethod(&window, "onLoadCanopy"); });
+    deadline.stop();
+    check(canopyRequests == 3, "window canopy install fetches three fixture layers");
+    if (auto* timer = window.findChild<QTimer*>("AutosaveTimer"))
+        QMetaObject::invokeMethod(timer, "timeout");
+    const auto installed = RecoveryStore::read();
+    check(installed.canopyImport.enabled && installed.canopyImport.developedPolicy == "assume" &&
+              installed.canopyImport.assumedDevelopedCanopyM == 10.0f,
+          "window installation records imported canopy and matching options in recovery");
+    // Force a replacement failure without modifying the valid cached import.
+    qputenv("RIDGELINE_CACHE_DIR", fixture.filePath("empty-replacement-cache").toUtf8());
+    qputenv("RIDGELINE_OFFLINE", "1");
+    bool optionsEdited = false;
+    QTimer editOptions;
+    QObject::connect(&editOptions, &QTimer::timeout, [&] {
+        auto* dialog = window.findChild<QDialog*>("CanopyOptionsDialog");
+        if (!dialog || !dialog->isVisible()) return;
+        editOptions.stop();
+        auto* policy = dialog->findChild<QComboBox*>("DevelopedCanopyPolicy");
+        auto* height = dialog->findChild<QDoubleSpinBox*>("AssumedCanopyHeight");
+        check(policy && height, "loaded-canopy options are editable");
+        if (policy && height) {
+            policy->setCurrentIndex(2);
+            height->setValue(20.0);
+            optionsEdited = true;
+        }
+        dialog->accept();
+    });
+    editOptions.start(10);
+    withModalAnswer(QMessageBox::Ok, [&] {
+        QMetaObject::invokeMethod(&window, "onCanopyOptions");
+    });
+    editOptions.stop();
+    check(optionsEdited && sawPrompt, "replacement failure is reported after accepting changed options");
+    if (auto* timer = window.findChild<QTimer*>("AutosaveTimer"))
+        QMetaObject::invokeMethod(timer, "timeout");
+    const auto retained = RecoveryStore::read();
+    check(retained.canopyImport.enabled &&
+              retained.canopyImport.developedPolicy == installed.canopyImport.developedPolicy &&
+              retained.canopyImport.assumedDevelopedCanopyM == installed.canopyImport.assumedDevelopedCanopyM &&
+              retained.canopyImport.retrievedUtc == installed.canopyImport.retrievedUtc,
+          "failed replacement keeps the installed import and original options in recovery");
+    qputenv("RIDGELINE_OFFLINE", "0");
+    QObject::disconnect(&server, &QTcpServer::newConnection, &server, nullptr);
+    bool replacementCancelled = false;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
+        while (auto* socket = server.nextPendingConnection()) socket->deleteLater();
+        if (auto* progress = window.findChild<QProgressDialog*>()) {
+            replacementCancelled = true;
+            progress->cancel();
+        }
+    });
+    optionsEdited = false;
+    editOptions.start(10);
+    deadline.start(5000);
+    QMetaObject::invokeMethod(&window, "onCanopyOptions");
+    deadline.stop();
+    editOptions.stop();
+    check(optionsEdited && replacementCancelled,
+          "changed canopy options can be cancelled during replacement download");
+    if (auto* timer = window.findChild<QTimer*>("AutosaveTimer"))
+        QMetaObject::invokeMethod(timer, "timeout");
+    const auto afterCancel = RecoveryStore::read();
+    check(afterCancel.canopyImport.enabled &&
+              afterCancel.canopyImport.developedPolicy == installed.canopyImport.developedPolicy &&
+              afterCancel.canopyImport.assumedDevelopedCanopyM == installed.canopyImport.assumedDevelopedCanopyM &&
+              afterCancel.canopyImport.retrievedUtc == installed.canopyImport.retrievedUtc,
+          "cancelled replacement keeps original imported canopy settings in recovery");
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
+}
+
 void testOverlayCheckboxesMatchWhatTheViewportDraws() {
+    // Custom row widgets do not supply the list item's accessible text.
+    // Check initial, external and control-originated changes without rebuilding.
+    {
+        LayerStack stack;
+        LayersPanel panel;
+        panel.setStack(&stack);
+        auto* list = panel.findChild<QListWidget*>("LayerList");
+        QListWidgetItem* coverage = nullptr;
+        for (int i = 0; list && i < list->count(); ++i) {
+            auto* item = list->item(i);
+            check(!item->data(Qt::AccessibleTextRole).toString().isEmpty(),
+                  "each layer row exposes an accessible name");
+            if (item->data(Qt::UserRole).toString() == "coverage") coverage = item;
+        }
+        auto* slider = panel.findChild<QSlider*>("LayerOpacitycoverage");
+        auto* box = panel.findChild<QCheckBox*>("LayerVisiblecoverage");
+        check(coverage && slider && box, "coverage accessibility controls exist");
+        if (coverage && slider && box) {
+            stack.setOpacity("coverage", 0.37f);
+            stack.setVisible("coverage", false);
+            check(slider->value() == 37 && slider->toolTip() == "Coverage opacity: 37%",
+                  "external layer updates keep opacity tooltip current");
+            check(coverage->data(Qt::AccessibleDescriptionRole).toString() == "Hidden; opacity 37%",
+                  "external layer updates keep accessible state current");
+            box->setChecked(true);
+            slider->setValue(62);
+            check(coverage->data(Qt::AccessibleDescriptionRole).toString() == "Shown; opacity 62%",
+                  "control changes keep accessible state current without replacing rows");
+        }
+    }
     MainWindow window;
     window.resize(1050, 700);
     window.show();
@@ -476,6 +839,55 @@ void testOverlayCheckboxesMatchWhatTheViewportDraws() {
               "turning the ruler off unchecks the toolbar toggle");
         check(viewport->measurementSummary().isEmpty(),
               "leaving the ruler clears its measurement");
+    }
+
+    if (viewport) {
+        auto* sources = window.findChild<QListWidget*>("SourceList");
+        const int sourceCount = sources ? sources->count() : -1;
+        int cancelled = 0, placements = 0, moves = 0;
+        const auto cancelConnection = QObject::connect(viewport, &ViewportWidget::placementCancelled,
+            [&] { ++cancelled; });
+        const auto placementConnection = QObject::connect(viewport, &ViewportWidget::terrainClicked,
+            [&](float, float) { ++placements; });
+        const auto moveConnection = QObject::connect(viewport, &ViewportWidget::antennaMoveRequested,
+            [&](int, float, float) { ++moves; });
+        check(QMetaObject::invokeMethod(&window, "onAddAntenna"),
+              "placement cancellation starts through the main-window action");
+        const QPointF center(viewport->rect().center());
+        QMouseEvent press(QEvent::MouseButtonPress, center, viewport->mapToGlobal(center.toPoint()),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &press);
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &escape);
+        QMouseEvent release(QEvent::MouseButtonRelease, center, viewport->mapToGlobal(center.toPoint()),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &release);
+        QApplication::sendEvent(viewport, &escape);
+        settle(60);
+        check(cancelled == 1, "Escape cancels active placement exactly once");
+        check(placements == 0 && moves == 0 && sources && sources->count() == sourceCount,
+              "release after cancelled placement cannot add or move a source");
+        viewport->topView();
+        settle(80);
+        check(QMetaObject::invokeMethod(&window, "onAddAntenna"), "placement can restart after Escape");
+        QApplication::sendEvent(viewport, &press);
+        QApplication::sendEvent(viewport, &release);
+        settle(60);
+        check(placements == 1 && sources && sources->count() == sourceCount + 1,
+              "restarted placement adds exactly one source on terrain");
+        QApplication::sendEvent(viewport, &press);
+        QApplication::sendEvent(viewport, &release);
+        settle(60);
+        check(placements == 1 && sources && sources->count() == sourceCount + 1,
+              "completed placement returns to selection instead of adding repeatedly");
+        if (auto* history = window.findChild<QUndoStack*>()) {
+            history->undo();
+            check(sources && sources->count() == sourceCount, "placement is undoable");
+        } else check(false, "placement exposes its undo history");
+        viewport->resetView();
+        QObject::disconnect(cancelConnection);
+        QObject::disconnect(placementConnection);
+        QObject::disconnect(moveConnection);
     }
 
     // The cursor readout exists and starts hidden: it must never report a
@@ -785,6 +1197,44 @@ void testTerrainFailureAndCancellationPreserveWorkspace() {
     auto* terrainViewport = window.findChild<ViewportWidget*>();
     check(terrainViewport != nullptr, "terrain picker fixture exposes its viewport");
     if (terrainViewport) {
+        auto* north = terrainViewport->findChild<NorthIndicator*>();
+        auto* scale = terrainViewport->findChild<MapScaleBar*>();
+        check(north && scale, "camera cancellation fixture exposes map orientation and scale");
+        const double originalAzimuth = north ? north->cameraAzimuth() : 0.0;
+        const double originalScale = scale ? scale->metresPerPixel() : 0.0;
+        QKeyEvent orbit(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QApplication::sendEvent(terrainViewport, &orbit);
+        const QPointF center(terrainViewport->rect().center());
+        QWheelEvent zoom(center, terrainViewport->mapToGlobal(center.toPoint()),
+                         QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                         Qt::NoScrollPhase, false);
+        QApplication::sendEvent(terrainViewport, &zoom);
+        settle(80);
+        const double changedAzimuth = north ? north->cameraAzimuth() : 0.0;
+        const double changedScale = scale ? scale->metresPerPixel() : 0.0;
+        check(north && std::abs(changedAzimuth - originalAzimuth) > 1.0,
+              "fixture orbits away from the initial view");
+        check(scale && changedScale > 0.0 && changedScale < originalScale,
+              "fixture zooms away from the initial scale");
+        const QImage beforeTilt = terrainViewport->grabFramebuffer();
+        QKeyEvent tilt(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+        QApplication::sendEvent(terrainViewport, &tilt);
+        settle(80);
+        const QImage afterTilt = terrainViewport->grabFramebuffer();
+        check(!beforeTilt.isNull() && afterTilt != beforeTilt,
+              "view elevation input changes the rendered scene");
+        const auto mouse = [&](QEvent::Type type, QPointF point,
+                               Qt::MouseButton button, Qt::MouseButtons buttons) {
+            QMouseEvent event(type, point, terrainViewport->mapToGlobal(point.toPoint()),
+                              button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(terrainViewport, &event);
+        };
+        mouse(QEvent::MouseButtonPress, center, Qt::MiddleButton, Qt::MiddleButton);
+        mouse(QEvent::MouseMove, center + QPointF(45, 25), Qt::NoButton, Qt::MiddleButton);
+        mouse(QEvent::MouseButtonRelease, center + QPointF(45, 25), Qt::MiddleButton, Qt::NoButton);
+        settle(80);
+        check(terrainViewport->grabFramebuffer() != afterTilt,
+              "middle-button pan changes the rendered scene");
         // Exercise both settings for each layer, so a reset to defaults cannot
         // pass merely because the test started with those same defaults.
         for (bool visible : {false, true}) {
@@ -795,7 +1245,16 @@ void testTerrainFailureAndCancellationPreserveWorkspace() {
                     box->setChecked(visible);
             }
             settle(80);
+            const QImage beforePicker = terrainViewport->grabFramebuffer();
+            check(!beforePicker.isNull(), "camera preservation has a rendered baseline");
             pickTerrain(true);
+            settle(80);
+            check(terrainViewport->grabFramebuffer() == beforePicker,
+                  "terrain picker cancellation preserves the panned and tilted render");
+            check(north && std::abs(north->cameraAzimuth() - changedAzimuth) < 1e-6,
+                  "terrain picker cancellation preserves camera orientation");
+            check(scale && std::abs(scale->metresPerPixel() - changedScale) < 1e-6,
+                  "terrain picker cancellation preserves zoom scale");
             for (const char* id : {"satellite", "usgs-topo", "hillshade", "vegetation",
                                    "coverage", "comparison", "los", "pattern",
                                    "jamming", "fresnel"}) {
@@ -1550,6 +2009,10 @@ int main(int argc, char** argv) {
     testSavingUpdatesModifiedIndicator();
     testModeChangePromptsViaDirtyFlag();
     testCloseIsRefusedDuringASolve();
+    testCanopyOptionsCommitAndCancel();
+    testCanopyRejectedAndCancelledLoadsKeepTerrain();
+    testCanopyNetworkCancellationAndMalformedResponse();
+    testCanopyWindowBlocksCloseAndAutosave();
     testOverlayCheckboxesMatchWhatTheViewportDraws();
     testTerrainFailureAndCancellationPreserveWorkspace();
     testScenarioOpeningProgressAndRecovery();

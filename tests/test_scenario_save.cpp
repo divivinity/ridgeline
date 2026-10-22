@@ -1,4 +1,5 @@
 #include "data/ScenarioIO.h"
+#include "data/CanopyImportOptions.h"
 #include "data/RecoveryStore.h"
 #include "data/WorkspaceSettings.h"
 #include <QTemporaryDir>
@@ -27,6 +28,37 @@ int main() {
         QTemporaryDir dir;
         require(dir.isValid(), "temporary directory");
         const QString path = dir.filePath("scenario.json");
+        {
+            landfire::Options current;
+            landfire::Options proposed;
+            proposed.developed = landfire::DevelopedPolicy::TreatAsBare;
+            proposed.assumedDevelopedCanopyM = 0.0f;
+            const auto observesProposed = [&] {
+                require(current.developed == proposed.developed &&
+                            current.assumedDevelopedCanopyM == 0.0f,
+                        "reload observes proposed canopy options");
+            };
+            require(!replaceCanopyOptions(current, proposed, [&] {
+                        observesProposed(); return false;
+                    }), "failed or cancelled replacement reports no commit");
+            require(current.developed == landfire::DevelopedPolicy::AssumeHeight &&
+                        current.assumedDevelopedCanopyM == 10.0f,
+                    "failed replacement preserves options matching the old raster");
+            bool threw = false;
+            try {
+                replaceCanopyOptions(current, proposed, [&]() -> bool {
+                    observesProposed(); throw std::runtime_error("fixture failure");
+                });
+            } catch (const std::runtime_error&) { threw = true; }
+            require(threw && current.assumedDevelopedCanopyM == 10.0f &&
+                        current.developed == landfire::DevelopedPolicy::AssumeHeight,
+                    "exception also rolls back both option fields");
+            require(replaceCanopyOptions(current, proposed, [&] {
+                        observesProposed(); return true;
+                    }) && current.assumedDevelopedCanopyM == 0.0f &&
+                        current.developed == landfire::DevelopedPolicy::TreatAsBare,
+                    "successful replacement commits both option fields");
+        }
         ScenarioDoc doc;
         doc.calibrationSourceName = "original";
         ScenarioIO::save(doc, path.toStdString());
@@ -85,6 +117,52 @@ int main() {
                     "a scenario without a layers key loads with no layer state");
         }
         {
+            const QString canopyPath = dir.filePath("canopy.json");
+            for (const char* policy : {"assume", "source", "bare"}) {
+                for (float height : {0.0f, 12.5f, 60.0f}) {
+                    ScenarioDoc canopy;
+                    canopy.canopyImport.enabled = true;
+                    canopy.canopyImport.sourceId = "landfire-fixture";
+                    canopy.canopyImport.developedPolicy = policy;
+                    canopy.canopyImport.assumedDevelopedCanopyM = height;
+                    canopy.canopyImport.retrievedUtc = "2026-09-13T12:00:00Z";
+                    ScenarioIO::save(canopy, canopyPath.toStdString());
+                    const auto back = ScenarioIO::load(canopyPath.toStdString()).canopyImport;
+                    const auto options = canopyOptionsForImport(back);
+                    require(options.assumedDevelopedCanopyM == height,
+                            "live import options restore boundary heights including zero");
+                    const auto expectedPolicy = std::string(policy) == "source"
+                        ? landfire::DevelopedPolicy::UseSourceValue
+                        : std::string(policy) == "bare"
+                            ? landfire::DevelopedPolicy::TreatAsBare
+                            : landfire::DevelopedPolicy::AssumeHeight;
+                    require(options.developed == expectedPolicy,
+                            "live import options restore the recorded policy");
+                    require(back.enabled && back.sourceId == "landfire-fixture" &&
+                                back.developedPolicy == policy &&
+                                std::abs(back.assumedDevelopedCanopyM - height) < 1e-6f &&
+                                back.retrievedUtc == "2026-09-13T12:00:00Z",
+                            "canopy policy, boundary height and provenance survive saving");
+                }
+            }
+            ScenarioDoc disabled;
+            for (float invalid : {-1.0f, 60.1f,
+                                  std::numeric_limits<float>::infinity(),
+                                  std::numeric_limits<float>::quiet_NaN()}) {
+                CanopyImport record;
+                record.developedPolicy = "unknown";
+                record.assumedDevelopedCanopyM = invalid;
+                const auto options = canopyOptionsForImport(record);
+                require(options.assumedDevelopedCanopyM == 10.0f &&
+                            options.developed == landfire::DevelopedPolicy::AssumeHeight,
+                        "invalid import options use defaults, not previous scene state");
+            }
+            disabled.canopyImport.sourceId = "stale-provider";
+            ScenarioIO::save(disabled, canopyPath.toStdString());
+            require(!ScenarioIO::load(canopyPath.toStdString()).canopyImport.enabled,
+                    "disabled canopy does not become an import on reopening");
+        }
+        {
             // Recovery store: a crash-safe copy of unsaved work, kept outside
             // the process holding it.
             QTemporaryDir stateDir;
@@ -96,6 +174,10 @@ int main() {
             ScenarioDoc unsaved;
             unsaved.calibrationSourceName = "unsaved work";
             unsaved.layers = {{"hillshade", true, 0.5f}};
+            unsaved.canopyImport.enabled = true;
+            unsaved.canopyImport.sourceId = "recovery-canopy-fixture";
+            unsaved.canopyImport.developedPolicy = "bare";
+            unsaved.canopyImport.assumedDevelopedCanopyM = 0.0f;
             require(RecoveryStore::write(unsaved), "autosave writes a recovery copy");
             require(RecoveryStore::exists(), "the recovery copy is found afterwards");
             require(RecoveryStore::savedAt().isValid(), "the recovery copy is timestamped");
@@ -105,6 +187,11 @@ int main() {
                     "recovered work round-trips through the same format");
             require(recovered.layers.size() == 1 && recovered.layers[0].visible,
                     "recovered work keeps its layer state");
+            require(recovered.canopyImport.enabled &&
+                        recovered.canopyImport.sourceId == "recovery-canopy-fixture" &&
+                        recovered.canopyImport.developedPolicy == "bare" &&
+                        recovered.canopyImport.assumedDevelopedCanopyM == 0.0f,
+                    "recovery preserves canopy import choices including zero height");
 
             // Writing again must replace, not accumulate.
             ScenarioDoc later;

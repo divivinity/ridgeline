@@ -364,9 +364,9 @@ sudo apt-get install -y libgdal-dev    # then re-configure
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-A default configure registers 13 suites. Two more are conditional: GDAL adds
+A default configure registers 15 suites. Two more are conditional: GDAL adds
 `geotiff_tests`, and `-DRIDGELINE_GUI_TESTS=ON` adds `main_window_tests`, for
-15 with both.
+17 with both.
 
 `main_window_tests` is opt-in because it drives a real `MainWindow`, whose
 `QOpenGLWidget` needs a genuine GL context, so it cannot run on the offscreen
