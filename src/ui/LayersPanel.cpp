@@ -86,14 +86,21 @@ void LayersPanel::syncRows() {
         const QString id = m_list->item(row)->data(Qt::UserRole).toString();
         const MapLayer* layer = m_stack->find(id);
         if (!layer) continue;
+        const int percent = static_cast<int>(layer->opacity * 100.0f + 0.5f);
+        m_list->item(row)->setData(Qt::AccessibleTextRole, layer->displayName);
+        m_list->item(row)->setData(Qt::AccessibleDescriptionRole,
+            QString("%1; opacity %2%")
+                .arg(layer->visible ? "Shown" : "Hidden").arg(percent));
         if (auto* box = findChild<QCheckBox*>("LayerVisible" + id)) {
             const QSignalBlocker blocker(box);
             box->setChecked(layer->visible);
         }
         if (auto* slider = findChild<QSlider*>("LayerOpacity" + id)) {
             const QSignalBlocker blocker(slider);
-            slider->setValue(static_cast<int>(layer->opacity * 100.0f + 0.5f));
+            slider->setValue(percent);
             slider->setEnabled(layer->visible);
+            slider->setToolTip(QString("%1 opacity: %2%")
+                                   .arg(layer->displayName).arg(percent));
         }
     }
     m_updating = false;
@@ -133,6 +140,7 @@ void LayersPanel::rebuildRows() {
             // place rather than rebuilding the list from inside this signal.
             if (auto* slider = opacityFor->findChild<QSlider*>("LayerOpacity" + id))
                 slider->setEnabled(on);
+            syncRows();
         });
         rowLayout->addWidget(visible, 1);
 
@@ -154,6 +162,7 @@ void LayersPanel::rebuildRows() {
             m_updating = true;
             m_stack->setOpacity(id, static_cast<float>(value) / 100.0f);
             m_updating = false;
+            syncRows();
         });
         rowLayout->addWidget(opacity);
 
@@ -163,6 +172,7 @@ void LayersPanel::rebuildRows() {
         m_list->setItemWidget(item, row);
     }
     m_updating = false;
+    syncRows();
 }
 
 void LayersPanel::applyRowOrder() {

@@ -4,6 +4,8 @@
 #include "TileBatchDownloader.h"
 
 #include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QStringList>
 #include <QUrl>
 
@@ -124,6 +126,10 @@ CanopyLoader::Result CanopyLoader::loadForTerrain(
             decoded[i] = RasterTiff::decode(
                 std::vector<std::uint8_t>(begin, begin + responses[i].bytes.size()));
         } catch (const std::exception& e) {
+            // A successful HTTP response may still be an error page. Do not
+            // let those cached bytes make every later retry fail offline.
+            QFile::remove(QDir(TileBatchDownloader::cacheRoot()).filePath(
+                requests[i].cacheRelativePath));
             // A service that answers with an error page rather than a raster
             // lands here, which is the right place for it: the decoder said
             // exactly what it could not read.

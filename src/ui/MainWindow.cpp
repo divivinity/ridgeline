@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "data/CanopyImportOptions.h"
 #include "CompactLocationLabel.h"
 #include "WorkspaceTheme.h"
 #include "LayersPanel.h"
@@ -876,6 +877,11 @@ void MainWindow::onLoadCanopy() {
         return;
     }
 
+    // The downloader runs a nested event loop. Reuse the scene-load guard so
+    // autosave, close and other scene operations cannot observe a half-applied
+    // options/raster pair while the request is outstanding.
+    m_terrainLoadInProgress = true;
+    const auto loadingGuard = qScopeGuard([this] { m_terrainLoadInProgress = false; });
     QProgressDialog progress("Contacting the LANDFIRE image service…", "Cancel",
                              0, 0, this);
     progress.setWindowTitle("Loading canopy");
@@ -896,9 +902,10 @@ void MainWindow::onLoadCanopy() {
                                       .arg(completed).arg(total));
         },
         [&progress] { return progress.wasCanceled(); });
+    const bool cancelled = progress.wasCanceled();
     progress.close();
 
-    if (progress.wasCanceled()) {
+    if (cancelled) {
         m_statusLabel->setText("  Canopy loading cancelled");
         return;
     }
@@ -970,11 +977,15 @@ void MainWindow::onClearCanopy() {
 }
 
 void MainWindow::onCanopyOptions() {
+    if (m_solveInProgress || m_terrainLoadInProgress) return;
     QDialog dialog(this);
+    dialog.setObjectName("CanopyOptionsDialog");
     dialog.setWindowTitle("Canopy options");
     auto* form = new QFormLayout(&dialog);
 
     auto* policy = new QComboBox(&dialog);
+    policy->setObjectName("DevelopedCanopyPolicy");
+    policy->setAccessibleName("Developed land canopy policy");
     policy->addItem("Substitute an assumed height",
                     static_cast<int>(landfire::DevelopedPolicy::AssumeHeight));
     policy->addItem("Use the provider's value unchanged",
@@ -985,6 +996,8 @@ void MainWindow::onCanopyOptions() {
         static_cast<int>(m_canopyOptions.developed)));
 
     auto* assumed = new QDoubleSpinBox(&dialog);
+    assumed->setObjectName("AssumedCanopyHeight");
+    assumed->setAccessibleName("Assumed canopy height in metres");
     assumed->setRange(0.0, 60.0);
     assumed->setDecimals(1);
     assumed->setSingleStep(0.5);
@@ -1026,31 +1039,31 @@ void MainWindow::onCanopyOptions() {
         std::abs(chosenHeight - m_canopyOptions.assumedDevelopedCanopyM) < 1e-3f)
         return;
 
-    m_canopyOptions.developed = chosen;
-    m_canopyOptions.assumedDevelopedCanopyM = chosenHeight;
+    auto proposed = m_canopyOptions;
+    proposed.developed = chosen;
+    proposed.assumedDevelopedCanopyM = chosenHeight;
 
     // The policy is applied while decoding, so a loaded canopy has to be
     // rebuilt. The request is unchanged, so this is a cache read rather than a
     // second download.
     if (!m_canopy) {
+        m_canopyOptions = proposed;
         m_statusLabel->setText("  Canopy options saved");
         return;
     }
-    onLoadCanopy();
+    const auto previousCanopy = m_canopy;
+    replaceCanopyOptions(m_canopyOptions, proposed, [&] {
+        onLoadCanopy();
+        return m_canopy != previousCanopy;
+    });
+    refreshCanopyActions();
 }
 
 void MainWindow::restoreCanopyImport(const CanopyImport& record) {
     if (!record.enabled) return;
     if (!m_engine.terrain().hasGeoReference()) return;
 
-    if (record.developedPolicy == "source")
-        m_canopyOptions.developed = landfire::DevelopedPolicy::UseSourceValue;
-    else if (record.developedPolicy == "bare")
-        m_canopyOptions.developed = landfire::DevelopedPolicy::TreatAsBare;
-    else
-        m_canopyOptions.developed = landfire::DevelopedPolicy::AssumeHeight;
-    if (record.assumedDevelopedCanopyM > 0.0f)
-        m_canopyOptions.assumedDevelopedCanopyM = record.assumedDevelopedCanopyM;
+    m_canopyOptions = canopyOptionsForImport(record);
 
     QNetworkAccessManager network;
     const CanopyLoader::Result result =
@@ -1373,7 +1386,7 @@ bool MainWindow::confirmDiscardChanges() {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (m_terrainLoadInProgress) {
-        m_statusLabel->setText("  Cancel the terrain load before closing");
+        m_statusLabel->setText("  Cancel the terrain or canopy load before closing");
         event->ignore();
         return;
     }
