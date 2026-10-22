@@ -303,6 +303,41 @@ void testPointAnalysisExplainsFoliageLoss() {
     NEAR(woods.canopyTopElevationM[middle] - woods.terrainElevationM[middle], 20.0, 0.001);
 }
 
+// A path under a canopy must pay for it on every component the solver sums.
+// The ground-reflected component once paid rain but not foliage, so in High
+// accuracy mode under 1 km the reflection carried most of the power straight
+// through a wood and the drawn stand barely changed the map.
+void testGroundReflectionPaysFoliageLoss() {
+    TerrainModel bare = flatTerrain(41, 41, 20.0f);
+    TerrainModel wooded = bare;
+    wooded.canopyHeightDm.assign(wooded.heights.size(), 200); // 20 m everywhere.
+    MaterialLibrary materials;
+    FullSolver solver;
+    solver.gridResolution = 40.0f;
+    solver.enableItm = false;
+    solver.enableRain = false;
+    solver.enableFresnelPenalty = false;
+    solver.enableGroundReflection = true;
+    solver.receiver.receiverHeightAglM = 2.0f;
+
+    Antenna emitter;
+    emitter.position = {100.0f, 10.0f, 400.0f};
+    emitter.frequencyMHz = 450.0f;
+    emitter.powerW = 10.0f;
+    const std::vector<Antenna> antennas{emitter};
+
+    const FieldGrid bareGrid = solver.solve(bare, antennas, materials);
+    const FieldGrid woodedGrid = solver.solve(wooded, antennas, materials);
+    const PointAnalysisResult open = analyzeFieldPoint(
+        bareGrid, bare, antennas, solver.receiver, 500.0f, 400.0f);
+    const PointAnalysisResult woods = analyzeFieldPoint(
+        woodedGrid, wooded, antennas, solver.receiver, 500.0f, 400.0f);
+    CHECK(woods.foliageLossDb > 5.0f);
+    // Both components cross much the same crown, so the total drops by about
+    // the direct path's loss rather than by a fraction of it.
+    NEAR(open.desiredDbm - woods.desiredDbm, woods.foliageLossDb, 1.5);
+}
+
 void testSolverContributorProvenance() {
     TerrainModel terrain = flatTerrain(21, 21, 20.0f);
     MaterialLibrary materials;
@@ -887,6 +922,7 @@ int main() {
     testFastSolverMetrics();
     testPointAnalysisExplainsSolvedCell();
     testPointAnalysisExplainsFoliageLoss();
+    testGroundReflectionPaysFoliageLoss();
     testSolverContributorProvenance();
     testJammerOnlyPointExplanation();
     testPartialEdgeCellsUseTerrainBoundary();
