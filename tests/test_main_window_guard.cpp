@@ -19,6 +19,7 @@
 
 #include <QAbstractButton>
 #include <QAction>
+#include <QRegularExpression>
 #include <QToolButton>
 #include <QSurfaceFormat>
 #include <QApplication>
@@ -161,6 +162,69 @@ void testSourceEditPromptsViaUndoStack() {
     bool closedOnDiscard = false;
     withModalAnswer(QMessageBox::Discard, [&] { closedOnDiscard = window.close(); });
     check(closedOnDiscard, "Discard closes the window");
+}
+
+// Duplicate copies every setting of the selected source and sets the copy
+// down beside the original, at the same height above ground, as one undoable
+// step.
+void testDuplicateSourceLandsBesideOriginal() {
+    MainWindow window;
+    window.show();
+    settle();
+    auto* list = window.findChild<QListWidget*>("SourceList");
+    auto* summary = window.findChild<QLabel*>("SourcePositionSummary");
+    auto* status = window.findChild<QLabel*>("WorkspaceStatus");
+    auto* duplicate = window.findChild<QAction*>("DuplicateSourceAction");
+    auto* undo = window.findChild<QUndoStack*>();
+    if (!list || !summary || !status || !duplicate || !undo || list->count() == 0) {
+        check(false, "duplicate fixture controls exist"); return;
+    }
+    check(duplicate->shortcut() == QKeySequence("Ctrl+D"), "Duplicate carries Ctrl+D");
+
+    const QRegularExpression position(
+        QStringLiteral(R"(X ([-\d.]+) m · Z ([-\d.]+) m[\s\S]*?([\d.]+) m AGL)"));
+    auto read = [&](double& x, double& z, double& agl) {
+        const auto match = position.match(summary->text());
+        if (!match.hasMatch()) return false;
+        x = match.captured(1).toDouble();
+        z = match.captured(2).toDouble();
+        agl = match.captured(3).toDouble();
+        return true;
+    };
+
+    const int before = list->count();
+    list->setCurrentRow(0);
+    qApp->processEvents();
+    double x0 = 0, z0 = 0, agl0 = 0;
+    check(read(x0, z0, agl0), "the original's position is shown");
+    const QString originalRow = list->item(0)->text();
+
+    duplicate->trigger();
+    qApp->processEvents();
+    check(list->count() == before + 1, "Duplicate adds one source");
+    check(list->currentRow() == 1, "the copy, placed after the original, is selected");
+    double x1 = 0, z1 = 0, agl1 = 0;
+    check(read(x1, z1, agl1), "the copy's position is shown");
+    const double moved = std::hypot(x1 - x0, z1 - z0);
+    check(moved >= 24.9 && moved <= 250.1, "the copy lands beside the original, not on it");
+    check(std::abs(agl1 - agl0) < 0.15, "the copy keeps the original's height above ground");
+    check(status->text().contains("Source duplicated"), "the status line reports the copy");
+    check(window.isWindowModified(), "a duplicate is an unsaved edit");
+    check(list->item(0)->text() == originalRow, "the original is untouched");
+
+    undo->undo();
+    qApp->processEvents();
+    check(list->count() == before, "one undo removes the copy");
+    check(!window.isWindowModified(), "undo returns to the saved state");
+
+    list->setCurrentRow(-1);
+    list->clearSelection();
+    qApp->processEvents();
+    duplicate->trigger();
+    qApp->processEvents();
+    check(list->count() == before, "nothing is duplicated without a selection");
+
+    withModalAnswer(QMessageBox::Discard, [&] { window.close(); });
 }
 
 // A preset carries a radio and antenna onto the selected source, as one
@@ -2085,6 +2149,7 @@ int main(int argc, char** argv) {
     testTerrainFailureAndCancellationPreserveWorkspace();
     testScenarioOpeningProgressAndRecovery();
     testExportsThroughApplicationDialogs();
+    testDuplicateSourceLandsBesideOriginal();
     testEquipmentPresetsCarryEquipmentNotPosition();
     testAutosaveAndRecovery();
     testDisplayedResultsAlwaysMatchTheirInputs();

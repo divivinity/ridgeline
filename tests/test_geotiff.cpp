@@ -1,10 +1,13 @@
 #include "data/TerrainLoader.h"
+#include "data/CoverageGeoTiff.h"
 
 #include <gdal_priv.h>
 #include <ogr_spatialref.h>
 #include <cpl_conv.h>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <limits>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -79,9 +82,81 @@ void testRotatedRejected() {
 }
 }
 
+// A 3 x 2 result grid of 200 m cells on terrain whose samples are 100 m and
+// 0.001 degrees apart, so every expected coordinate is a round number.
+void geoTiffFixture(FieldGrid& grid, TerrainModel& terrain) {
+    terrain.width = 7;
+    terrain.height = 5;
+    terrain.setCellSpacing(100.0f, 100.0f);
+    terrain.heights.assign(35, 0.0f);
+    terrain.setGeoReference(35.0, -80.0, 0.001, 0.001);
+    grid.width = 3;
+    grid.height = 2;
+    grid.cellSize = 200.0f;
+    grid.originXZ = {100.0f, 100.0f};
+    grid.maxXZ = {600.0f, 400.0f};
+    const float none = -std::numeric_limits<float>::infinity();
+    grid.dbm = {-70.0f, -75.0f, -80.0f,   // south row
+                -85.0f, none, -90.0f};    // north row
+}
+
+// An independent reader: GDAL must place, label and mask the coverage export
+// exactly as Ridgeline means it.
+void testCoverageExportReadsInGdal() {
+    FieldGrid grid;
+    TerrainModel terrain;
+    geoTiffFixture(grid, terrain);
+    const std::vector<std::uint8_t> bytes = CoverageGeoTiff::encode(grid, terrain);
+    CHECK(!bytes.empty());
+    const std::string path = "test_coverage_export.tif";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        CHECK(out.good());
+    }
+
+    GDALAllRegister();
+    GDALDataset* ds = static_cast<GDALDataset*>(GDALOpen(path.c_str(), GA_ReadOnly));
+    CHECK(ds != nullptr);
+    if (!ds) return;
+    CHECK(ds->GetRasterXSize() == 3 && ds->GetRasterYSize() == 2);
+    double gt[6] = {};
+    CHECK(ds->GetGeoTransform(gt) == CE_None);
+    CHECK_NEAR(gt[0], -80.0, 1e-9);
+    CHECK_NEAR(gt[1], 0.002, 1e-12);
+    CHECK_NEAR(gt[2], 0.0, 0.0);
+    CHECK_NEAR(gt[3], 35.004, 1e-9);
+    CHECK_NEAR(gt[4], 0.0, 0.0);
+    CHECK_NEAR(gt[5], -0.002, 1e-12);
+    const OGRSpatialReference* srs = ds->GetSpatialRef();
+    CHECK(srs != nullptr);
+    if (srs) {
+        const char* code = srs->GetAuthorityCode(nullptr);
+        CHECK(srs->IsGeographic());
+        CHECK(code && std::string(code) == "4326");
+    }
+
+    GDALRasterBand* band = ds->GetRasterBand(1);
+    CHECK(band->GetRasterDataType() == GDT_Float32);
+    int hasNoData = 0;
+    CHECK(std::isnan(band->GetNoDataValue(&hasNoData)) && hasNoData);
+    CHECK(std::string(band->GetDescription()) == "Desired signal");
+    CHECK(std::string(band->GetUnitType()) == "dBm");
+    float values[6] = {};
+    CHECK(band->RasterIO(GF_Read, 0, 0, 3, 2, values, 3, 2, GDT_Float32, 0, 0, nullptr)
+          == CE_None);
+    CHECK_NEAR(values[0], -85.0, 1e-6);
+    CHECK(std::isnan(values[1]));
+    CHECK_NEAR(values[5], -80.0, 1e-6);
+    GDALClose(ds);
+    std::remove(path.c_str());
+}
+
 int main() {
     testNorthUpRectangular();
     testRotatedRejected();
+    testCoverageExportReadsInGdal();
     if (g_fail == 0) std::cout << "GeoTIFF regression tests passed.\n";
     return g_fail ? 1 : 0;
 }

@@ -26,6 +26,13 @@ one WGS84 coordinate system.
 5. Select a source to edit frequency, power, AGL height, antenna type, gain,
    azimuth, downtilt, horizontal/vertical beamwidth, front-to-back ratio, cable
    loss, polarization, or an imported measured pattern.
+   **Edit → Duplicate Source** (`Ctrl+D`) copies the selected source with all
+   its settings and sets it down beside the original, at the same height above
+   ground, ready to move.
+   **Edit → Save Source as Preset** keeps the selected source's radio and
+   antenna under a name, and **Edit → Apply Preset** puts them on any source in
+   any scenario. A preset is equipment only, never position, height or role,
+   and is kept per installation rather than in the scenario.
 6. Use **Analysis → Receiver / Service Criteria** to set receiver sensitivity,
    bandwidth, noise figure, required SINR, fade-margin target, and receive
    polarization.
@@ -72,6 +79,14 @@ The service contour requires all configured criteria to pass: receiver
 sensitivity, required SINR, and fade-margin target. CSV exports include these
 metrics together with WGS84 coordinates and terrain elevation when the terrain
 is georeferenced.
+
+*File ▸ Export ▸ Coverage GeoTIFF* writes desired signal as a GIS raster: one
+float32 band in dBm, one pixel per result cell, in WGS 84 longitude/latitude,
+with no-signal cells masked as no-data. QGIS, ArcGIS and GDAL open it directly.
+It needs terrain with a real-world location. Each pixel covers the area its cell
+stands for, so the last row and column can reach up to one partial cell past
+the terrain edge. *Coverage PNG* is different: it is a capture of the map as
+you see it, with overlays and legend, and carries no placement.
 
 ## Antenna patterns
 

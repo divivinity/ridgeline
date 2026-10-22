@@ -20,6 +20,8 @@
 #include "sim/ScenarioComparison.h"
 #include "sim/MeasurementCalibration.h"
 #include "data/Exporter.h"
+#include "data/RasterTiff.h"
+#include "data/CoverageGeoTiff.h"
 #include "RuntimePaths.h"
 
 #include <QApplication>
@@ -72,6 +74,10 @@ int failures = 0;
         ++failures; \
     } \
 } while (0)
+
+// Not NEAR: <windows.h> defines that as an empty macro.
+#define CHECK_NEAR(a, b, tolerance) \
+    CHECK(std::abs(static_cast<double>(a) - static_cast<double>(b)) <= (tolerance))
 
 // Optional offscreen QA artifacts, using only synthetic test data. A caller
 // supplies a new directory; never overwrite an existing capture.
@@ -677,6 +683,84 @@ void testCalibrationPanelStatesAndSignals() {
     }
 }
 
+// A 3 x 2 result grid of 200 m cells on terrain whose samples are 100 m and
+// 0.001 degrees apart, so every expected coordinate is a round number.
+void geoTiffFixture(FieldGrid& grid, TerrainModel& terrain) {
+    terrain.width = 7;
+    terrain.height = 5;
+    terrain.setCellSpacing(100.0f, 100.0f);
+    terrain.heights.assign(35, 0.0f);
+    terrain.setGeoReference(35.0, -80.0, 0.001, 0.001);
+    grid.width = 3;
+    grid.height = 2;
+    grid.cellSize = 200.0f;
+    grid.originXZ = {100.0f, 100.0f};
+    grid.maxXZ = {600.0f, 400.0f};
+    const float none = -std::numeric_limits<float>::infinity();
+    grid.dbm = {-70.0f, -75.0f, -80.0f,   // south row
+                -85.0f, none, -90.0f};    // north row
+}
+
+void testGeoTiffExportPlacesEachCell() {
+    FieldGrid grid;
+    TerrainModel terrain;
+    geoTiffFixture(grid, terrain);
+    QTemporaryDir directory;
+    CHECK(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("地形-coverage.tif"));
+    CHECK(Exporter::exportGeoTiff(grid, terrain, path.toStdString()));
+
+    QFile file(path);
+    CHECK(file.open(QIODevice::ReadOnly));
+    const QByteArray bytes = file.readAll();
+    file.close();
+    RasterTiff raster;
+    try {
+        raster = RasterTiff::decode(std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+    } catch (const std::exception& e) {
+        std::cerr << "GeoTIFF did not decode: " << e.what() << '\n';
+        CHECK(false);
+        return;
+    }
+    CHECK(raster.width == 3 && raster.height == 2);
+    CHECK(raster.bitsPerSample == 32 && raster.sampleFormat == RasterTiff::Sample::Float);
+    CHECK(raster.georeferenced);
+    CHECK_NEAR(raster.westLonDeg, -80.0, 1e-9);
+    CHECK_NEAR(raster.northLatDeg, 35.004, 1e-9);
+    CHECK_NEAR(raster.lonStepDeg, 0.002, 1e-12);
+    CHECK_NEAR(raster.latStepDeg, 0.002, 1e-12);
+
+    // North row first, and the empty cell is NaN rather than a number.
+    CHECK_NEAR(raster.at(0, 0), -85.0, 1e-6);
+    CHECK(std::isnan(raster.at(1, 0)));
+    CHECK_NEAR(raster.at(2, 0), -90.0, 1e-6);
+    CHECK_NEAR(raster.at(0, 1), -70.0, 1e-6);
+    CHECK_NEAR(raster.at(1, 1), -75.0, 1e-6);
+    CHECK_NEAR(raster.at(2, 1), -80.0, 1e-6);
+
+    // Each pixel's centre is where the solver sampled its cell.
+    for (int gz = 0; gz < grid.height; ++gz) {
+        for (int gx = 0; gx < grid.width; ++gx) {
+            const glm::vec2 centre = grid.cellCenter(gx, gz);
+            const auto expected = terrain.worldToLatLon(centre.x, centre.y);
+            const int row = grid.height - 1 - gz;
+            CHECK_NEAR(raster.westLonDeg + (gx + 0.5) * raster.lonStepDeg, expected.lonDeg, 1e-9);
+            CHECK_NEAR(raster.northLatDeg - (row + 0.5) * raster.latStepDeg, expected.latDeg, 1e-9);
+        }
+    }
+
+    // Terrain with no real-world location cannot be placed: refuse, and leave
+    // an existing file alone.
+    TerrainModel local = terrain;
+    local.georeferenced = false;
+    CHECK(!CoverageGeoTiff::canEncode(grid, local));
+    CHECK(!Exporter::exportGeoTiff(grid, local, path.toStdString()));
+    CHECK(!Exporter::exportGeoTiff(FieldGrid{}, terrain, path.toStdString()));
+    CHECK(file.open(QIODevice::ReadOnly));
+    CHECK(file.readAll() == bytes);
+    file.close();
+}
+
 void testCsvUsesClampedEdgeCellCenter() {
     FieldGrid grid;
     grid.width = 2;
@@ -1051,6 +1135,7 @@ int main(int argc, char** argv) {
     testScenarioComparisonPanelWorkflow();
     testCalibrationPanelStatesAndSignals();
     testCsvUsesClampedEdgeCellCenter();
+    testGeoTiffExportPlacesEachCell();
     testMgrsDialogInput();
     testDebouncedCustomGeocoderSuggestions();
     testRuntimeAssetsIgnoreLaunchDirectory();
