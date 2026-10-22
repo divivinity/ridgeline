@@ -8,6 +8,22 @@
 #include <string>
 #include <vector>
 
+// The strongest jammer's direct path to the inspected point, traced like the
+// serving path. Present whenever an in-band jammer reaches the cell, whether or
+// not there is service - which is when it matters most.
+struct JammerPath {
+    bool present = false;
+    float distanceM = 0.0f;
+    TerrainModel::LOSStatus losStatus = TerrainModel::LOSStatus::Blocked;
+    float foliageDepthM = 0.0f;
+    float foliageLossDb = 0.0f;
+    std::vector<float> profileDistanceM;
+    std::vector<float> terrainElevationM;
+    std::vector<float> lineOfSightElevationM;
+    std::vector<float> fresnel60LowerElevationM;
+    std::vector<float> canopyTopElevationM;
+};
+
 struct PointAnalysisResult {
     bool valid = false;
     bool inService = false;
@@ -46,6 +62,7 @@ struct PointAnalysisResult {
     // Canopy top along the profile, parallel to terrainElevationM. Empty when
     // the terrain carries no vegetation.
     std::vector<float> canopyTopElevationM;
+    JammerPath jammerPath;
     std::vector<std::string> explanations;
 };
 

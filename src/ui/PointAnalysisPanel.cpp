@@ -33,20 +33,28 @@ QString losName(TerrainModel::LOSStatus status) {
     return QStringLiteral("Unknown");
 }
 
+// One traced path, as PointAnalysis lays it out for the serving source and
+// for the strongest jammer alike.
+struct Profile {
+    std::vector<float> distance, terrain, sight, fresnel, canopy;
+};
+
 class ProfileWidget final : public QWidget {
 public:
-    explicit ProfileWidget(QWidget* parent = nullptr) : QWidget(parent) {
+    ProfileWidget(const QString& objectName, QColor sightColor, QString emptyText,
+                  QWidget* parent = nullptr)
+        : QWidget(parent), m_sightColor(sightColor), m_emptyText(std::move(emptyText)) {
         setMinimumHeight(190);
-        setObjectName("LinkProfilePlot");
+        setObjectName(objectName);
     }
 
-    void setAnalysis(const PointAnalysisResult& analysis) {
-        m_analysis = analysis;
+    void setProfile(Profile profile) {
+        m_profile = std::move(profile);
         update();
     }
 
     void clear() {
-        m_analysis = {};
+        m_profile = {};
         update();
     }
 
@@ -57,30 +65,30 @@ protected:
         painter.fillRect(rect(), QColor("#0c1625"));
         const QRectF plot = QRectF(rect()).adjusted(46, 18, -12, -30);
         if (plot.width() <= 0.0 || plot.height() <= 0.0 ||
-            m_analysis.profileDistanceM.size() < 2) {
+            m_profile.distance.size() < 2) {
             painter.setPen(QColor("#64748b"));
-            painter.drawText(rect(), Qt::AlignCenter, "No serving path at this point");
+            painter.drawText(rect(), Qt::AlignCenter, m_emptyText);
             return;
         }
 
         float minimum = std::numeric_limits<float>::infinity();
         float maximum = -std::numeric_limits<float>::infinity();
-        for (const float value : m_analysis.terrainElevationM) {
+        for (const float value : m_profile.terrain) {
             minimum = std::min(minimum, value);
             maximum = std::max(maximum, value);
         }
-        for (const float value : m_analysis.lineOfSightElevationM) {
+        for (const float value : m_profile.sight) {
             minimum = std::min(minimum, value);
             maximum = std::max(maximum, value);
         }
-        for (const float value : m_analysis.fresnel60LowerElevationM)
+        for (const float value : m_profile.fresnel)
             minimum = std::min(minimum, value);
-        for (const float value : m_analysis.canopyTopElevationM)
+        for (const float value : m_profile.canopy)
             maximum = std::max(maximum, value);
         const float padding = std::max(5.0f, (maximum - minimum) * 0.12f);
         minimum -= padding;
         maximum += padding;
-        const float distance = std::max(m_analysis.profileDistanceM.back(), 1.0f);
+        const float distance = std::max(m_profile.distance.back(), 1.0f);
         const float elevationSpan = std::max(maximum - minimum, 1.0f);
         auto pointFor = [&](float d, float elevation) {
             return QPointF(plot.left() + d / distance * plot.width(),
@@ -96,26 +104,26 @@ protected:
 
         QPainterPath terrainPath;
         terrainPath.moveTo(plot.left(), plot.bottom());
-        for (std::size_t i = 0; i < m_analysis.profileDistanceM.size(); ++i)
-            terrainPath.lineTo(pointFor(m_analysis.profileDistanceM[i],
-                                        m_analysis.terrainElevationM[i]));
+        for (std::size_t i = 0; i < m_profile.distance.size(); ++i)
+            terrainPath.lineTo(pointFor(m_profile.distance[i],
+                                        m_profile.terrain[i]));
         terrainPath.lineTo(plot.right(), plot.bottom());
         terrainPath.closeSubpath();
 
         // Canopy sits on the terrain: trace its top outward, then the ground
         // back, so bare stretches collapse to nothing.
-        const std::size_t samples = m_analysis.profileDistanceM.size();
-        if (m_analysis.canopyTopElevationM.size() == samples) {
+        const std::size_t samples = m_profile.distance.size();
+        if (m_profile.canopy.size() == samples) {
             QPainterPath canopyPath;
             for (std::size_t i = 0; i < samples; ++i) {
-                const QPointF top = pointFor(m_analysis.profileDistanceM[i],
-                                             m_analysis.canopyTopElevationM[i]);
+                const QPointF top = pointFor(m_profile.distance[i],
+                                             m_profile.canopy[i]);
                 if (i == 0) canopyPath.moveTo(top);
                 else canopyPath.lineTo(top);
             }
             for (std::size_t i = samples; i-- > 0;)
-                canopyPath.lineTo(pointFor(m_analysis.profileDistanceM[i],
-                                           m_analysis.terrainElevationM[i]));
+                canopyPath.lineTo(pointFor(m_profile.distance[i],
+                                           m_profile.terrain[i]));
             canopyPath.closeSubpath();
             painter.fillPath(canopyPath, QColor(101, 163, 13, 150));
         }
@@ -125,13 +133,13 @@ protected:
 
         QPainterPath fresnelPath;
         QPainterPath losPath;
-        for (std::size_t i = 0; i < m_analysis.profileDistanceM.size(); ++i) {
+        for (std::size_t i = 0; i < m_profile.distance.size(); ++i) {
             const QPointF fresnelPoint = pointFor(
-                m_analysis.profileDistanceM[i],
-                m_analysis.fresnel60LowerElevationM[i]);
+                m_profile.distance[i],
+                m_profile.fresnel[i]);
             const QPointF losPoint = pointFor(
-                m_analysis.profileDistanceM[i],
-                m_analysis.lineOfSightElevationM[i]);
+                m_profile.distance[i],
+                m_profile.sight[i]);
             if (i == 0) {
                 fresnelPath.moveTo(fresnelPoint);
                 losPath.moveTo(losPoint);
@@ -142,7 +150,7 @@ protected:
         }
         painter.setPen(QPen(QColor("#f59e0b"), 1.2, Qt::DashLine));
         painter.drawPath(fresnelPath);
-        painter.setPen(QPen(QColor("#38bdf8"), 1.8));
+        painter.setPen(QPen(m_sightColor, 1.8));
         painter.drawPath(losPath);
 
         painter.setPen(QColor("#a8b7ca"));
@@ -161,7 +169,9 @@ protected:
     }
 
 private:
-    PointAnalysisResult m_analysis;
+    Profile m_profile;
+    QColor m_sightColor;
+    QString m_emptyText;
 };
 
 QLabel* metricValue(const QString& objectName) {
@@ -245,11 +255,24 @@ PointAnalysisPanel::PointAnalysisPanel(QWidget* parent) : QWidget(parent) {
     m_path->setStyleSheet("color: #cbd5e1; font-size: 12px;");
     outer->addWidget(m_path);
 
-    m_profile = new ProfileWidget(this);
+    m_profile = new ProfileWidget("LinkProfilePlot", QColor("#38bdf8"),
+                                  "No serving path at this point", this);
     outer->addWidget(m_profile);
 
+    // The jammer's own path to the same point: whether terrain shields the
+    // receiver from it is half of why a cell is or is not in service.
+    m_jammerTitle = new QLabel("—");
+    m_jammerTitle->setObjectName("JammerPathSummary");
+    m_jammerTitle->setWordWrap(true);
+    m_jammerTitle->setStyleSheet("color: #fecaca; font-size: 12px;");
+    outer->addWidget(m_jammerTitle);
+    m_jammerProfile = new ProfileWidget("JammerProfilePlot", QColor("#f87171"),
+                                        "No jammer reaches this point", this);
+    outer->addWidget(m_jammerProfile);
+
     auto* legend = new QLabel(
-        "Cyan: direct path   ·   Amber: 60% Fresnel boundary   ·   Green: terrain + effective Earth curvature"
+        "Cyan: direct path   ·   Red: strongest jammer's path   ·   Amber: 60% Fresnel boundary"
+        "   ·   Green: terrain + effective Earth curvature"
         "   ·   Olive: canopy, when vegetation is loaded");
     legend->setWordWrap(true);
     legend->setStyleSheet("color: #a8b7ca; font-size: 12px;");
@@ -321,8 +344,31 @@ void PointAnalysisPanel::setAnalysis(const PointAnalysisResult& analysis,
             : QString("No serving path is available.\nStrongest jammer: %1")
                 .arg(strongestJammerName));
     }
-    auto* profile = static_cast<ProfileWidget*>(m_profile);
-    profile->setAnalysis(analysis);
+    static_cast<ProfileWidget*>(m_profile)->setProfile({
+        analysis.profileDistanceM, analysis.terrainElevationM,
+        analysis.lineOfSightElevationM, analysis.fresnel60LowerElevationM,
+        analysis.canopyTopElevationM});
+    const JammerPath& jammer = analysis.jammerPath;
+    m_jammerTitle->setVisible(jammer.present);
+    m_jammerProfile->setVisible(jammer.present);
+    if (jammer.present) {
+        m_jammerTitle->setText(QString("Strongest jammer%1: %2 · %3%4")
+            .arg(strongestJammerName.isEmpty() ? QString{}
+                                               : QString(" (%1)").arg(strongestJammerName))
+            .arg(jammer.distanceM >= 1000.0f
+                    ? QString("%1 km").arg(jammer.distanceM / 1000.0f, 0, 'f', 2)
+                    : QString("%1 m").arg(jammer.distanceM, 0, 'f', 0))
+            .arg(losName(jammer.losStatus))
+            .arg(jammer.foliageLossDb >= 0.1f
+                    ? QString(" · foliage %1 dB").arg(jammer.foliageLossDb, 0, 'f', 1)
+                    : QString{}));
+        static_cast<ProfileWidget*>(m_jammerProfile)->setProfile({
+            jammer.profileDistanceM, jammer.terrainElevationM,
+            jammer.lineOfSightElevationM, jammer.fresnel60LowerElevationM,
+            jammer.canopyTopElevationM});
+    } else {
+        static_cast<ProfileWidget*>(m_jammerProfile)->clear();
+    }
     QStringList explanations;
     for (const auto& item : analysis.explanations)
         explanations.append(QString::fromStdString(item));
@@ -346,5 +392,9 @@ void PointAnalysisPanel::clear() {
     m_margin->setText("—");
     m_path->setText("—");
     static_cast<ProfileWidget*>(m_profile)->clear();
+    static_cast<ProfileWidget*>(m_jammerProfile)->clear();
+    m_jammerTitle->setText("—");
+    m_jammerTitle->hide();
+    m_jammerProfile->hide();
     m_explanation->setText("Run coverage, then click the map.");
 }

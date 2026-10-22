@@ -30,4 +30,6 @@ private:
     QLabel* m_path = nullptr;
     QLabel* m_explanation = nullptr;
     QWidget* m_profile = nullptr;
+    QLabel* m_jammerTitle = nullptr;
+    QWidget* m_jammerProfile = nullptr;
 };
