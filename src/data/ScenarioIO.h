@@ -7,6 +7,10 @@
 #include "sim/SimEngine.h"
 #include "sim/VegetationAreas.h"
 
+// The newest scenario format this build reads. A file declaring a higher
+// minReaderVersion is refused with a message rather than half-understood.
+inline constexpr int kScenarioReaderVersion = 6;
+
 struct TerrainSource {
     enum class Type { Hills, Flat, Hgt, Dted, GeoTiff, Global };
 

@@ -62,6 +62,14 @@ private slots:
     void onLoadCanopy();
     void onClearCanopy();
     void onCanopyOptions();
+    void onVegetationDrawModeChanged(bool active, int kind);
+    void onVegetationAreaDrawn(float minX, float minZ, float maxX, float maxZ);
+    void onVegetationAreaReshaped(int index, float minX, float minZ, float maxX, float maxZ,
+                                  bool resized);
+    void onVegetationAreaClicked(int index);
+    void onDeleteVegetationArea();
+    void onEditVegetationArea();
+    void onDeleteOffTerrainVegetation();
 
 private:
     SimEngine        m_engine;
@@ -196,4 +204,35 @@ private:
     landfire::Options m_canopyOptions;
     QAction*         m_clearCanopyAct = nullptr;
     QAction*         m_canopyStatusAct = nullptr;
+
+    // Drawn vegetation. Every change - draw, move, resize, edit, delete, undo,
+    // redo - goes through applyVegetationState, so there is one place where
+    // results are invalidated and the map is brought up to date.
+    void applyVegetationState(const std::vector<VegetationArea>& areas, int selected);
+    void pushVegetationChange(std::vector<VegetationArea> after, int selectedAfter,
+                              const QString& description);
+    void refreshVegetationActions();
+    // The map texture is rebuilt after a short, restartable delay and never
+    // inside an undo command: the rebuild can run nested event loops, and a
+    // Ctrl+Z dispatched from one while QUndoStack::push is still running would
+    // corrupt the history.
+    void scheduleVegetationWashRefresh();
+    void flushVegetationWash();
+    QString vegetationEffectSummary(const VegetationArea& area) const;
+    QString vegetationToolHint(VegetationKind kind) const;
+    // A new stand's height: the median imported canopy under it where at least
+    // half its samples carry some, otherwise the last height set this session.
+    float defaultStandHeightM(const VegetationArea& area, bool& fromImport) const;
+    std::string nextVegetationName(VegetationKind kind) const;
+
+    // Index-based, which is sound only because every apply, load and tool exit
+    // re-clamps it and cancels any gesture in progress.
+    int              m_selectedVegetationIndex = -1;
+    QAction*         m_drawStandsAct = nullptr;
+    QAction*         m_drawClearingsAct = nullptr;
+    QAction*         m_editVegetationAct = nullptr;
+    QAction*         m_deleteVegetationAct = nullptr;
+    QAction*         m_deleteOffTerrainVegetationAct = nullptr;
+    QTimer*          m_vegetationWashTimer = nullptr;
+    float            m_lastStandHeightM = 15.0f;
 };

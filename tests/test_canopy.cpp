@@ -630,6 +630,235 @@ void testRealLandfireResponse(const std::string& heightPath,
           "forest is");
 }
 
+// ---------------------------------------------------------------------------
+// Clearings, and the footprint the solver actually paints
+// ---------------------------------------------------------------------------
+
+VegetationArea clearingArea(float minX, float minZ, float maxX, float maxZ,
+                            float heightM = 0.0f) {
+    return {minX, minZ, maxX, maxZ, heightM, "cut", VegetationKind::Clearing};
+}
+
+void testClearings() {
+    TerrainModel terrain = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    const int width = terrain.width;
+    const auto at = [width](int x, int z) {
+        return static_cast<std::size_t>(z) * width + x;
+    };
+    const std::size_t cells = terrain.heights.size();
+    const std::vector<std::uint16_t> base(cells, 180);
+    const std::vector<std::uint8_t> cover(cells, 40);
+
+    VegetationAreas::apply(terrain, {clearingArea(0.0f, 0.0f, 20.0f, 20.0f)}, base, cover);
+    check(terrain.hasVegetation() && terrain.canopyHeightDm[at(1, 1)] == 0,
+          "a clearing removes imported canopy inside it");
+    check(terrain.hasVegetation() && terrain.canopyHeightDm[at(7, 7)] == 180 &&
+          terrain.canopyCoverPct[at(7, 7)] == 40,
+          "imported height and cover outside the clearing are untouched");
+    check(terrain.hasVegetation() && terrain.canopyCoverPct[at(1, 1)] == 40,
+          "a clearing leaves cover as it was, since with no canopy it changes no answer");
+
+    const VegetationArea wood{0.0f, 0.0f, 40.0f, 40.0f, 12.0f, "wood"};
+    const VegetationArea cut = clearingArea(10.0f, 10.0f, 30.0f, 30.0f);
+    VegetationAreas::apply(terrain, {wood, cut}, base, cover);
+    const std::vector<std::uint16_t> standFirstHeights = terrain.canopyHeightDm;
+    const std::vector<std::uint8_t> standFirstCovers = terrain.canopyCoverPct;
+    VegetationAreas::apply(terrain, {cut, wood}, base, cover);
+    check(terrain.canopyHeightDm == standFirstHeights &&
+          terrain.canopyCoverPct == standFirstCovers,
+          "a stand and a clearing give byte-identical grids in either list order");
+    check(terrain.canopyHeightDm[at(2, 2)] == 0,
+          "where a clearing overlaps a drawn stand, the clearing wins");
+    check(terrain.canopyHeightDm[at(0, 0)] == 120 && terrain.canopyHeightDm[at(4, 4)] == 120,
+          "the stand still stands where the clearing does not reach");
+
+    VegetationAreas::apply(terrain, {{0.0f, 0.0f, 30.0f, 30.0f, 8.0f, "low"},
+                                     {20.0f, 20.0f, 60.0f, 60.0f, 20.0f, "high"}});
+    check(terrain.hasVegetation() && terrain.canopyHeightDm[at(2, 2)] == 200 &&
+          terrain.canopyHeightDm[at(0, 0)] == 80,
+          "stands that overlap only each other still take the tallest");
+
+    VegetationAreas::apply(terrain, {clearingArea(0.0f, 0.0f, 30.0f, 30.0f)});
+    check(!terrain.hasVegetation() && terrain.canopyCoverPct.empty(),
+          "clearings on terrain with no canopy leave no vegetation grids at all");
+
+    VegetationAreas::apply(terrain, {clearingArea(-50.0f, -50.0f, 500.0f, 500.0f)},
+                           base, cover);
+    check(!terrain.hasVegetation() && terrain.canopyCoverPct.empty(),
+          "a clearing over all the imported canopy leaves no vegetation");
+
+    VegetationAreas::apply(terrain, {clearingArea(0.0f, 0.0f, 20.0f, 20.0f, 15.0f)},
+                           base, cover);
+    check(terrain.hasVegetation() && terrain.canopyHeightDm[at(1, 1)] == 0,
+          "a clearing clears whatever height it happens to carry");
+
+    const float nan = std::nanf("");
+    check(clearingArea(0.0f, 0.0f, 10.0f, 10.0f).valid(),
+          "a clearing with no height is valid");
+    check(!VegetationArea{0.0f, 0.0f, 10.0f, 10.0f, 0.0f, "flat"}.valid(),
+          "a stand with no height is not");
+    check(!VegetationArea{0.0f, 0.0f, 10.0f, 10.0f, nan, "unknown"}.valid(),
+          "a stand whose height is not a number is not valid");
+    check(!VegetationArea{nan, 0.0f, 10.0f, 10.0f, 5.0f, "nan bound"}.valid(),
+          "a bound that is not a number is not valid");
+    check(!VegetationArea{0.0f, 0.0f, HUGE_VALF, 10.0f, 5.0f, "infinite"}.valid(),
+          "an infinite bound is not valid");
+    check(!VegetationArea{0.0f, 0.0f, 1.0e30f, 10.0f, 5.0f, "far"}.valid(),
+          "a bound beyond ten thousand kilometres is not valid");
+    check(!clearingArea(10.0f, 0.0f, 0.0f, 10.0f).valid(),
+          "an inverted clearing is not valid");
+}
+
+void testClearingSignature() {
+    TerrainModel terrain = TerrainLoader::makeFlat(8, 8, 10.0f, 0.0f);
+    const std::size_t cells = terrain.heights.size();
+    // Imported canopy over the northern half only, with zero cover where it is
+    // bare - which is what a real LANDFIRE import carries.
+    std::vector<std::uint16_t> base(cells, 0);
+    std::vector<std::uint8_t> cover(cells, 0);
+    for (int z = 4; z < 8; ++z) {
+        for (int x = 0; x < 8; ++x) {
+            base[static_cast<std::size_t>(z) * 8 + x] = 180;
+            cover[static_cast<std::size_t>(z) * 8 + x] = 40;
+        }
+    }
+    const std::vector<Antenna> antennas;
+    const ReceiverSettings receiver;
+    const CoverageCalibrationSettings calibration;
+    auto sign = [&] {
+        return SolveSignature::of(antennas, receiver, SimEngine::Mode::Planner,
+                                  calibration, terrain);
+    };
+
+    VegetationAreas::apply(terrain, {}, base, cover);
+    const std::string importedOnly = sign();
+    VegetationAreas::apply(terrain, {clearingArea(0.0f, 0.0f, 10.0f, 10.0f)}, base, cover);
+    check(sign() == importedOnly,
+          "a clearing over ground that was already bare leaves the fingerprint unchanged");
+    VegetationAreas::apply(terrain, {clearingArea(0.0f, 40.0f, 10.0f, 50.0f)}, base, cover);
+    check(sign() != importedOnly,
+          "a clearing that removes imported canopy changes the fingerprint");
+}
+
+void testFootprintMatchesRaster() {
+    TerrainModel terrain = TerrainLoader::makeFlat(64, 64, 10.0f, 0.0f);
+    const int width = terrain.width;
+    struct Case { float lo, hi; const char* what; };
+    const Case cases[] = {
+        {101.0f, 199.0f, "[101, 199]"},
+        {100.0f, 200.0f, "[100, 200]"},
+        {101.0f, 102.0f, "[101, 102]"},
+        {-500.0f, 150.0f, "[-500, 150]"},
+        {5000.0f, 6000.0f, "[5000, 6000]"},
+        {-9.0e6f, 9.0e6f, "[-9e6, 9e6]"},
+    };
+    for (const Case& c : cases) {
+        const VegetationArea stand{c.lo, c.lo, c.hi, c.hi, 12.0f, "stand"};
+        const VegetationAreas::Footprint fp = VegetationAreas::footprint(terrain, stand);
+        VegetationAreas::apply(terrain, {stand});
+        bool matches = true;
+        for (int z = 0; z < terrain.height; ++z) {
+            for (int x = 0; x < width; ++x) {
+                const bool inFootprint = !fp.empty && x >= fp.x0 && x <= fp.x1 &&
+                                         z >= fp.z0 && z <= fp.z1;
+                const bool painted = terrain.hasVegetation() &&
+                    terrain.canopyHeightDm[static_cast<std::size_t>(z) * width + x] > 0;
+                if (inFootprint != painted) matches = false;
+            }
+        }
+        check(matches, std::string("the painted samples are exactly the footprint for ") + c.what);
+    }
+
+    const VegetationAreas::Footprint inner =
+        VegetationAreas::footprint(terrain, {101.0f, 101.0f, 199.0f, 199.0f, 12.0f, ""});
+    check(inner.x0 == 10 && inner.x1 == 20 && inner.samples == 121,
+          "a rectangle rounds outward, so [101, 199] paints samples 10 through 20");
+    check(VegetationAreas::footprint(terrain, {101.0f, 101.0f, 102.0f, 102.0f, 12.0f, ""}).x1 == 11,
+          "a rectangle narrower than a cell still paints the samples either side of it");
+    check(near(inner.minX, 95.0, 1e-3) && near(inner.maxX, 205.0, 1e-3),
+          "the footprint's ground reaches half a sample beyond its outermost samples");
+    const VegetationAreas::Footprint edge =
+        VegetationAreas::footprint(terrain, {-500.0f, -500.0f, 150.0f, 150.0f, 12.0f, ""});
+    check(edge.x0 == 0 && near(edge.minX, 0.0, 1e-6),
+          "a footprint's ground is clipped to the terrain");
+
+    // Bounds typed as decimal multiples of a cell size float cannot store: their
+    // float quotients are whole numbers and their double quotients are not.
+    // Scenarios saved before footprint() existed were painted from the float
+    // quotients, so these must not move by a sample.
+    const TerrainModel oddCells = TerrainLoader::makeFlat(64, 64, 30.87f, 0.0f);
+    check(VegetationAreas::footprint(oddCells, {0.0f, 0.0f, 308.7f, 308.7f, 12.0f, ""}).x1 == 10,
+          "a stand ending at 308.7 m on 30.87 m cells stops at sample 10, as it always did");
+    check(VegetationAreas::footprint(oddCells, {339.57f, 339.57f, 400.0f, 400.0f, 12.0f, ""}).x0 == 11,
+          "a stand starting at 339.57 m on 30.87 m cells starts at sample 11, as it always did");
+
+    const VegetationAreas::Footprint whole =
+        VegetationAreas::footprint(terrain, {-9.0e6f, -9.0e6f, 9.0e6f, 9.0e6f, 12.0f, ""});
+    check(!whole.empty && whole.x0 == 0 && whole.x1 == width - 1 && whole.z0 == 0 &&
+              whole.z1 == terrain.height - 1,
+          "a rectangle far larger than the terrain paints every sample");
+    const VegetationAreas::Footprint aligned =
+        VegetationAreas::footprint(terrain, {100.0f, 100.0f, 200.0f, 200.0f, 12.0f, ""});
+    check(aligned.x0 == 10 && aligned.x1 == 20 && aligned.z0 == 10 && aligned.z1 == 20,
+          "edges lying on sample positions paint exactly those samples");
+    check(VegetationAreas::footprint(terrain, {5000.0f, 5000.0f, 6000.0f, 6000.0f, 12.0f, ""}).empty,
+          "an area off the terrain has an empty footprint");
+    check(VegetationAreas::countOutside(terrain, {
+              {100.0f, 100.0f, 200.0f, 200.0f, 12.0f, "on"},
+              {5000.0f, 5000.0f, 6000.0f, 6000.0f, 12.0f, "off"},
+              {200.0f, 100.0f, 100.0f, 200.0f, 12.0f, "inverted"}}) == 1,
+          "only valid areas that paint nothing are counted as outside the terrain");
+}
+
+void testSameFootprintAndImportedMedian() {
+    const VegetationArea a{100.0f, 100.0f, 200.0f, 200.0f, 15.0f, "north wood"};
+    VegetationArea renamed = a;
+    renamed.name = "south wood";
+    check(VegetationAreas::sameFootprint({a}, {renamed}),
+          "a rename leaves the footprint unchanged");
+    VegetationArea nearlySame = a;
+    nearlySame.canopyHeightM = 15.04f;
+    check(VegetationAreas::sameFootprint({a}, {nearlySame}),
+          "a height change below the grid's decimetre is not a change");
+    VegetationArea taller = a;
+    taller.canopyHeightM = 15.1f;
+    check(!VegetationAreas::sameFootprint({a}, {taller}),
+          "a decimetre of height is a change");
+    VegetationArea moved = a;
+    moved.maxX = 210.0f;
+    check(!VegetationAreas::sameFootprint({a}, {moved}), "a moved bound is a change");
+    VegetationArea felled = a;
+    felled.kind = VegetationKind::Clearing;
+    check(!VegetationAreas::sameFootprint({a}, {felled}),
+          "turning a stand into a clearing is a change");
+    VegetationArea felledTaller = felled;
+    felledTaller.canopyHeightM = 30.0f;
+    check(VegetationAreas::sameFootprint({felled}, {felledTaller}),
+          "a clearing's ignored height is not a change");
+    check(!VegetationAreas::sameFootprint({a}, {a, renamed}),
+          "adding an area is a change");
+
+    TerrainModel terrain = TerrainLoader::makeFlat(64, 64, 10.0f, 0.0f);
+    std::vector<std::uint16_t> base(terrain.heights.size(), 0);
+    for (int z = 0; z < 64; ++z)
+        for (int x = 0; x < 32; ++x)
+            base[static_cast<std::size_t>(z) * 64 + x] = 180;
+    const VegetationAreas::ImportedUnder whole = VegetationAreas::importedHeightUnder(
+        terrain, {50.0f, 50.0f, 150.0f, 150.0f, 1.0f, ""}, base);
+    check(whole.samples > 0 && whole.vegetated == whole.samples &&
+          near(whole.medianM, 18.0, 1e-4),
+          "a rectangle wholly over 18 m imported canopy reports that height for every sample");
+    const VegetationAreas::ImportedUnder half = VegetationAreas::importedHeightUnder(
+        terrain, {200.0f, 50.0f, 420.0f, 150.0f, 1.0f, ""}, base);
+    const double fraction = half.samples > 0
+        ? static_cast<double>(half.vegetated) / static_cast<double>(half.samples) : 0.0;
+    check(fraction > 0.4 && fraction < 0.6,
+          "a rectangle half over imported canopy reports about half its samples vegetated");
+    check(VegetationAreas::importedHeightUnder(
+              terrain, {50.0f, 50.0f, 150.0f, 150.0f, 1.0f, ""}, {}).samples == 0,
+          "with no import there is nothing under an area");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -646,6 +875,10 @@ int main(int argc, char** argv) {
         testComposite();
         testCoverScalesDepth();
         testSignatureSeesCover();
+        testClearings();
+        testClearingSignature();
+        testFootprintMatchesRaster();
+        testSameFootprintAndImportedMedian();
 
         if (argc >= 3) {
             testRealLandfireResponse(argv[1], argv[2]);

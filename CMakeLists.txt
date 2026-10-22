@@ -254,6 +254,7 @@ add_test(NAME global_terrain_tests COMMAND ridgeline_global_terrain_tests
 add_executable(ridgeline_location_picking_tests
     tests/test_location_and_picking.cpp
     src/geo/Mgrs.cpp
+    src/render/ScreenProjection.cpp
     src/render/TerrainRaycast.cpp
     src/sim/TerrainModel.cpp)
 target_include_directories(ridgeline_location_picking_tests PRIVATE src)
@@ -261,9 +262,22 @@ target_link_libraries(ridgeline_location_picking_tests glm::glm)
 add_test(NAME location_picking_tests COMMAND ridgeline_location_picking_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Vegetation editing: the shared cell triangulation, the outline draped on the
+# rendered mesh, picking and reshaping, and the undo command's merge and
+# interleaving rules. Headless: QUndoStack needs QtGui but no display.
+add_executable(ridgeline_vegetation_edit_tests tests/test_vegetation_edit.cpp
+    src/map/VegetationGeometry.cpp src/sim/VegetationAreas.cpp
+    src/sim/TerrainModel.cpp src/data/TerrainLoader.cpp)
+target_include_directories(ridgeline_vegetation_edit_tests PRIVATE src)
+target_link_libraries(ridgeline_vegetation_edit_tests
+    Qt6::Gui glm::glm nlohmann_json::nlohmann_json)
+add_test(NAME vegetation_edit_tests COMMAND ridgeline_vegetation_edit_tests
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_executable(ridgeline_ui_interaction_tests
     tests/test_ui_interactions.cpp
     src/ui/OverlayToolbar.cpp
+    src/ui/VegetationAreaDialog.cpp
     src/ui/LayersPanel.cpp
     src/ui/MapFurniture.cpp
     src/map/LayerStack.cpp
@@ -339,5 +353,24 @@ if(RIDGELINE_GUI_TESTS)
     # Runs beside the app's copied assets, which MainWindow loads at startup.
     add_dependencies(ridgeline_main_window_tests ridgeline)
     add_test(NAME main_window_tests COMMAND ridgeline_main_window_tests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    # Drawing and editing vegetation end to end in the real window, and pins for
+    # what test_main_window_guard.cpp relies on without naming it. A separate
+    # target so the guard target stays exactly as it is.
+    add_executable(ridgeline_vegetation_gui_tests
+        tests/test_vegetation_gui.cpp ${RIDGELINE_APP_SOURCES})
+    target_include_directories(ridgeline_vegetation_gui_tests PRIVATE src)
+    target_compile_definitions(ridgeline_vegetation_gui_tests PRIVATE HAVE_NTIA_ITM)
+    target_link_libraries(ridgeline_vegetation_gui_tests
+        Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Concurrent
+        OpenGL::GL glm::glm nlohmann_json::nlohmann_json ntia_itm)
+    if(GDAL_FOUND)
+        target_compile_definitions(ridgeline_vegetation_gui_tests PRIVATE HAVE_GDAL)
+        target_include_directories(ridgeline_vegetation_gui_tests PRIVATE ${GDAL_INCLUDE_DIRS})
+        target_link_libraries(ridgeline_vegetation_gui_tests GDAL::GDAL)
+    endif()
+    add_dependencies(ridgeline_vegetation_gui_tests ridgeline)
+    add_test(NAME vegetation_gui_tests COMMAND ridgeline_vegetation_gui_tests
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()

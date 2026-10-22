@@ -2,10 +2,17 @@
 #include <nlohmann/json.hpp>
 #include <QFile>
 #include <stdexcept>
+#include <string>
 #include <cmath>
 #include <QSaveFile>
 
 using json = nlohmann::json;
+
+// The format that introduced clearings. A file containing one declares this as
+// the oldest reader that can understand it - fixed at the format that added the
+// feature, not at whatever this build reads, so a later format bump does not
+// needlessly lock out files that use nothing newer.
+static constexpr int kClearingsFormatVersion = 6;
 
 static const char* typeToStr(TerrainSource::Type t) {
     switch (t) {
@@ -45,7 +52,7 @@ static SimEngine::Mode strToMode(const std::string& s) {
 
 void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     json j;
-    j["version"] = 5;
+    j["version"] = 6;
     j["mode"] = modeToStr(doc.mode);
 
     auto& jr = j["receiver"];
@@ -131,13 +138,35 @@ void ScenarioIO::save(const ScenarioDoc& doc, const std::string& path) {
     j["layers"] = std::move(layers);
 
     json vegetation = json::array();
+    bool anyClearing = false;
     for (const auto& area : doc.vegetation) {
-        vegetation.push_back({{"minX", area.minX}, {"minZ", area.minZ},
-                              {"maxX", area.maxX}, {"maxZ", area.maxZ},
-                              {"canopyHeightM", area.canopyHeightM},
-                              {"name", area.name}});
+        json entry = {{"kind", VegetationAreas::kindToString(area.kind)},
+                      {"minX", area.minX}, {"minZ", area.minZ},
+                      {"maxX", area.maxX}, {"maxZ", area.maxZ},
+                      {"name", area.name}};
+        if (area.kind == VegetationKind::Clearing) {
+            // Null on purpose. Builds before clearings existed read this key
+            // with value("canopyHeightM", 0.0f), and nlohmann throws on a
+            // present null, so an older build refuses the whole file and keeps
+            // its current workspace. Both alternatives fail silently: a zero
+            // height makes the older build drop the clearing, keep the imported
+            // forest beneath it and erase the clearing on its next save; a
+            // positive height makes it plant a stand where trees were felled.
+            entry["canopyHeightM"] = nullptr;
+            anyClearing = true;
+        } else {
+            entry["canopyHeightM"] = area.canopyHeightM;
+        }
+        vegetation.push_back(std::move(entry));
     }
     j["vegetation"] = std::move(vegetation);
+    if (anyClearing) {
+        // Read by this build and later ones. "requires" is for a person who
+        // opens the JSON after an older build's parse error, since that error
+        // names no feature.
+        j["minReaderVersion"] = kClearingsFormatVersion;
+        j["requires"] = "Vegetation clearings: open with Ridgeline scenario format 6 or newer";
+    }
 
     if (doc.canopyImport.enabled) {
         j["canopyImport"] = {
@@ -171,6 +200,15 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
     ScenarioDoc doc;
     try {
         json j = json::parse(contents.constBegin(), contents.constEnd());
+
+        // Checked before anything else is read: a file that needs a newer
+        // reader cannot be partly trusted.
+        const int minReader = j.value("minReaderVersion", 0);
+        if (minReader > kScenarioReaderVersion)
+            throw std::runtime_error(
+                "This scenario needs a newer version of Ridgeline (scenario format " +
+                std::to_string(minReader) + "); this build reads format " +
+                std::to_string(kScenarioReaderVersion) + " and earlier");
         doc.mode = strToMode(j.value("mode", "planner"));
 
         // Absent in scenarios written before layers existed, so its absence is
@@ -181,11 +219,23 @@ ScenarioDoc ScenarioIO::load(const std::string& path) {
             for (const auto& entry : j["vegetation"]) {
                 if (!entry.is_object()) continue;
                 VegetationArea area;
+                // Entries written before clearings existed carry no kind and
+                // are stands. An unknown kind refuses the file rather than being
+                // dropped: a dropped area would change coverage without a word
+                // and be erased from the file on the next save.
+                const std::string kind = entry.value("kind", std::string{"stand"});
+                if (!VegetationAreas::kindFromString(kind, area.kind))
+                    throw std::runtime_error(
+                        "Scenario uses vegetation of kind '" + kind +
+                        "', which this version of Ridgeline cannot read");
                 area.minX = entry.value("minX", 0.0f);
                 area.minZ = entry.value("minZ", 0.0f);
                 area.maxX = entry.value("maxX", 0.0f);
                 area.maxZ = entry.value("maxZ", 0.0f);
-                area.canopyHeightM = entry.value("canopyHeightM", 0.0f);
+                // A clearing is bare ground whatever height the file carries,
+                // and in files this build writes the key is null.
+                area.canopyHeightM = area.kind == VegetationKind::Clearing
+                    ? 0.0f : entry.value("canopyHeightM", 0.0f);
                 area.name = entry.value("name", std::string{});
                 // A malformed area would paint nothing anyway; dropping it here
                 // keeps the invalid shape out of the editing UI.

@@ -52,6 +52,19 @@ struct Antenna {
     float       heightAglM     = 10.0f;
 };
 
+// How the serving path's loss was computed at a result cell. The analytic
+// fallbacks are kept apart because each has a different remedy.
+enum class PathModel : std::uint8_t {
+    None = 0,            // no serving path
+    QuickEstimate,       // Fast mode: free space, material, flat terrain penalty
+    TerrainAnalytic,     // free space with Fresnel, diffraction and reflection
+    Itm,                 // NTIA ITM median basic transmission loss
+    AnalyticShortPath,   // ITM requested; path under ITM's 1 km minimum
+    AnalyticOutOfBand,   // ITM requested; frequency outside 20 MHz-20 GHz
+    AnalyticItmRejected, // ITM requested; it declined these inputs
+    AnalyticItmMissing,  // ITM requested; this build has no ITM
+};
+
 struct FieldGrid {
     int   width    = 0;
     int   height   = 0;
@@ -74,6 +87,8 @@ struct FieldGrid {
     // scenario antenna vector; -1 means no in-band contributor was present.
     std::vector<std::int32_t> servingSourceIndex;
     std::vector<std::int32_t> strongestJammerIndex;
+    // PathModel per cell, for the serving contributor.
+    std::vector<std::uint8_t> servingPathModel;
 
     float noiseFloorDbm = -120.0f;
     float receiverSensitivityDbm = -100.0f;

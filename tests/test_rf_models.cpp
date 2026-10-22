@@ -257,6 +257,106 @@ void testPointAnalysisExplainsSolvedCell() {
     NEAR(analysis.lineOfSightElevationM.front(), emitter.position.y, 0.001);
     NEAR(analysis.lineOfSightElevationM.back(), analysis.receiverPosition.y, 0.001);
     CHECK(!analysis.explanations.empty());
+    CHECK(analysis.canopyTopElevationM.empty());
+    CHECK(analysis.foliageDepthM == 0.0f);
+    CHECK(analysis.foliageLossDb == 0.0f);
+}
+
+// The inspector must charge a path exactly what the solver charged it, so the
+// explanation can never disagree with the map.
+void testPointAnalysisExplainsFoliageLoss() {
+    TerrainModel bare = flatTerrain(41, 41, 20.0f);
+    TerrainModel wooded = bare;
+    wooded.canopyHeightDm.assign(wooded.heights.size(), 200); // 20 m everywhere.
+    MaterialLibrary materials;
+    FastSolver solver;
+    solver.gridResolution = 40.0f;
+    solver.receiver.receiverHeightAglM = 2.0f;
+
+    Antenna emitter;
+    emitter.position = {100.0f, 10.0f, 400.0f};
+    emitter.frequencyMHz = 450.0f;
+    emitter.powerW = 10.0f;
+    const std::vector<Antenna> antennas{emitter};
+
+    const FieldGrid bareGrid = solver.solve(bare, antennas, materials);
+    const FieldGrid woodedGrid = solver.solve(wooded, antennas, materials);
+    const PointAnalysisResult open = analyzeFieldPoint(
+        bareGrid, bare, antennas, solver.receiver, 500.0f, 400.0f);
+    const PointAnalysisResult woods = analyzeFieldPoint(
+        woodedGrid, wooded, antennas, solver.receiver, 500.0f, 400.0f);
+    CHECK(open.valid && woods.valid);
+    CHECK(woods.servingSourceIndex == 0);
+
+    CHECK(woods.foliageDepthM > 300.0f);
+    NEAR(woods.foliageLossDb,
+         RFModels::vegetationLossDb(woods.foliageDepthM, emitter.frequencyMHz), 0.001);
+    CHECK(woods.foliageLossDb > 1.0f);
+    NEAR(open.desiredDbm - woods.desiredDbm, woods.foliageLossDb, 0.05);
+    CHECK(std::any_of(woods.explanations.begin(), woods.explanations.end(),
+        [](const std::string& text) { return text.find("vegetation") != std::string::npos; }));
+    CHECK(std::none_of(open.explanations.begin(), open.explanations.end(),
+        [](const std::string& text) { return text.find("vegetation") != std::string::npos; }));
+
+    CHECK(woods.canopyTopElevationM.size() == woods.terrainElevationM.size());
+    const std::size_t middle = woods.terrainElevationM.size() / 2;
+    NEAR(woods.canopyTopElevationM[middle] - woods.terrainElevationM[middle], 20.0, 0.001);
+}
+
+// Each result cell says which model produced its serving path, and an ITM
+// fallback says why, because each fallback has a different remedy.
+void testPointAnalysisNamesPathModel() {
+    auto mentions = [](const PointAnalysisResult& analysis, const char* text) {
+        return std::any_of(analysis.explanations.begin(), analysis.explanations.end(),
+            [text](const std::string& item) { return item.find(text) != std::string::npos; });
+    };
+    TerrainModel terrain = flatTerrain(151, 151, 20.0f); // 3 km square.
+    MaterialLibrary materials;
+    Antenna emitter;
+    emitter.position = {100.0f, 30.0f, 100.0f};
+    emitter.frequencyMHz = 450.0f;
+    emitter.powerW = 10.0f;
+    const std::vector<Antenna> antennas{emitter};
+
+    FastSolver fast;
+    fast.gridResolution = 200.0f;
+    const FieldGrid fastGrid = fast.solve(terrain, antennas, materials);
+    const PointAnalysisResult quick = analyzeFieldPoint(
+        fastGrid, terrain, antennas, fast.receiver, 500.0f, 500.0f);
+    CHECK(quick.pathModel == PathModel::QuickEstimate);
+    CHECK(!mentions(quick, "flat 20 dB")); // A clear path needs no caveat.
+
+    FullSolver full;
+    full.gridResolution = 200.0f;
+    full.enableItm = false;
+    const FieldGrid analyticGrid = full.solve(terrain, antennas, materials);
+    const PointAnalysisResult analytic = analyzeFieldPoint(
+        analyticGrid, terrain, antennas, full.receiver, 500.0f, 500.0f);
+    CHECK(analytic.pathModel == PathModel::TerrainAnalytic);
+    CHECK(!mentions(analytic, "ITM"));
+
+    full.enableItm = true;
+    const FieldGrid itmGrid = full.solve(terrain, antennas, materials);
+    const PointAnalysisResult near = analyzeFieldPoint(
+        itmGrid, terrain, antennas, full.receiver, 500.0f, 500.0f);
+    CHECK(near.pathModel == PathModel::AnalyticShortPath);
+    CHECK(mentions(near, "under 1 km"));
+    const PointAnalysisResult far = analyzeFieldPoint(
+        itmGrid, terrain, antennas, full.receiver, 2500.0f, 2500.0f);
+    CHECK(far.pathModel == PathModel::Itm);
+    CHECK(!mentions(far, "ITM"));
+
+    Antenna microwave = emitter;
+    microwave.frequencyMHz = 24000.0f;
+    const FieldGrid bandGrid = full.solve(terrain, {microwave}, materials);
+    const PointAnalysisResult band = analyzeFieldPoint(
+        bandGrid, terrain, {microwave}, full.receiver, 2500.0f, 2500.0f);
+    CHECK(band.pathModel == PathModel::AnalyticOutOfBand);
+    CHECK(mentions(band, "20 MHz to 20 GHz"));
+
+    CHECK(pathModelName(PathModel::Itm) == "NTIA ITM");
+    CHECK(pathModelName(PathModel::QuickEstimate) != pathModelName(PathModel::TerrainAnalytic));
+    CHECK(pathModelName(PathModel::AnalyticShortPath).find("ITM not used") != std::string::npos);
 }
 
 void testSolverContributorProvenance() {
@@ -842,6 +942,8 @@ int main() {
     testPatternImport();
     testFastSolverMetrics();
     testPointAnalysisExplainsSolvedCell();
+    testPointAnalysisExplainsFoliageLoss();
+    testPointAnalysisNamesPathModel();
     testSolverContributorProvenance();
     testJammerOnlyPointExplanation();
     testPartialEdgeCellsUseTerrainBoundary();

@@ -267,6 +267,123 @@ static void test_cancelled_solve_does_not_publish_partial_field() {
     CHECK(!engine.fieldGrid().valid());
 }
 
+static VegetationArea standAt(float minX, float minZ, float maxX, float maxZ,
+                              float heightM = 15.0f) {
+    return {minX, minZ, maxX, maxZ, heightM, "stand"};
+}
+
+// A drawn stand on one real-world terrain must sit on the same ground after a
+// location load moves the terrain's south-west origin, as imported canopy does.
+static void test_drawn_vegetation_keeps_its_ground() {
+    SimEngine engine;
+    const TerrainModel first = makeCustomGeoTerrain(101, 0.0f, 35.0, -80.0, 0.1);
+    engine.setTerrain(first);
+    engine.setVegetation({standAt(3000.0f, 3000.0f, 4000.0f, 4000.0f)});
+    const auto sw = first.worldToLatLon(3000.0f, 3000.0f);
+    const auto ne = first.worldToLatLon(4000.0f, 4000.0f);
+
+    engine.setTerrain(makeCustomGeoTerrain(121, 0.0f, 34.98, -80.03, 0.14));
+    const TerrainModel& second = engine.terrain();
+    CHECK(engine.vegetation().size() == 1);
+    const VegetationArea& carried = engine.vegetation()[0];
+    const auto carriedSw = second.worldToLatLon(carried.minX, carried.minZ);
+    const auto carriedNe = second.worldToLatLon(carried.maxX, carried.maxZ);
+    CHECK_NEAR(carriedSw.latDeg, sw.latDeg, 1e-6);
+    CHECK_NEAR(carriedSw.lonDeg, sw.lonDeg, 1e-6);
+    CHECK_NEAR(carriedNe.latDeg, ne.latDeg, 1e-6);
+    CHECK_NEAR(carriedNe.lonDeg, ne.lonDeg, 1e-6);
+
+    const glm::vec2 centre = second.latLonToWorld((sw.latDeg + ne.latDeg) * 0.5,
+                                                  (sw.lonDeg + ne.lonDeg) * 0.5);
+    const int cx = static_cast<int>(std::lround(centre.x / second.metersPerCellX()));
+    const int cz = static_cast<int>(std::lround(centre.y / second.metersPerCellZ()));
+    CHECK(second.canopyHeightAt(cx, cz) > 0.0f);
+
+    // The stand's old world metres describe different ground on the new
+    // terrain, and nothing is painted there.
+    CHECK(!carried.contains(3500.0f, 3500.0f));
+    const int ox = static_cast<int>(std::lround(3500.0f / second.metersPerCellX()));
+    const int oz = static_cast<int>(std::lround(3500.0f / second.metersPerCellZ()));
+    CHECK(second.canopyHeightAt(ox, oz) == 0.0f);
+}
+
+// A location on another continent carries a drawn area tens of thousands of
+// kilometres off the new terrain. It has to stay valid there - counted as
+// outside, so it can be found and deleted - and return to its own ground when
+// the first location is loaded again. Scenario coordinates are single precision,
+// which is about a metre at that distance, hence the tolerance.
+static void test_drawn_vegetation_survives_a_far_location() {
+    SimEngine engine;
+    const TerrainModel asheville = makeCustomGeoTerrain(101, 0.0f, 35.55, -82.60, 0.1);
+    engine.setTerrain(asheville);
+    engine.setVegetation({standAt(3000.0f, 3000.0f, 4000.0f, 4000.0f)});
+
+    engine.setTerrain(makeCustomGeoTerrain(101, 0.0f, 35.63, 139.64, 0.1));
+    CHECK(engine.vegetation().size() == 1);
+    const VegetationArea farAway = engine.vegetation()[0];
+    CHECK(std::abs(farAway.minX) > 1.0e7f);
+    CHECK(farAway.valid());
+    CHECK(VegetationAreas::countOutside(engine.terrain(), engine.vegetation()) == 1);
+
+    engine.setTerrain(asheville);
+    CHECK(engine.vegetation().size() == 1);
+    const VegetationArea back = engine.vegetation()[0];
+    CHECK(back.valid());
+    CHECK_NEAR(back.minX, 3000.0, 1.5);
+    CHECK_NEAR(back.minZ, 3000.0, 1.5);
+    CHECK_NEAR(back.maxX, 4000.0, 1.5);
+    CHECK_NEAR(back.maxZ, 4000.0, 1.5);
+    const int cx = static_cast<int>(std::lround(3500.0f / engine.terrain().metersPerCellX()));
+    const int cz = static_cast<int>(std::lround(3500.0f / engine.terrain().metersPerCellZ()));
+    CHECK(engine.terrain().canopyHeightAt(cx, cz) > 0.0f);
+}
+
+// With no georeference on either side there is no shared frame, so areas keep
+// their metres exactly rather than being moved by a guess.
+static void test_drawn_vegetation_verbatim_without_georeference() {
+    SimEngine engine;
+    engine.setTerrain(makeProceduralTerrain(101, 10.0f, 0.0f));
+    const VegetationArea stand = standAt(120.5f, 230.25f, 480.75f, 610.125f);
+    engine.setVegetation({stand});
+    engine.setTerrain(makeProceduralTerrain(201, 5.0f, 0.0f));
+    CHECK(engine.vegetation().size() == 1);
+    CHECK(engine.vegetation()[0].minX == stand.minX);
+    CHECK(engine.vegetation()[0].minZ == stand.minZ);
+    CHECK(engine.vegetation()[0].maxX == stand.maxX);
+    CHECK(engine.vegetation()[0].maxZ == stand.maxZ);
+
+    engine.setTerrain(makeCustomGeoTerrain(101, 0.0f, 35.0, -80.0, 0.1));
+    engine.setVegetation({stand});
+    engine.setTerrain(makeProceduralTerrain(101, 10.0f, 0.0f));
+    CHECK(engine.vegetation()[0].minX == stand.minX);
+    CHECK(engine.vegetation()[0].maxZ == stand.maxZ);
+}
+
+// A rename changes nothing the solver reads, so it must not rebuild the canopy
+// and bump the revision that invalidates results and rebuilds the map texture.
+static void test_vegetation_rename_does_not_rebuild_canopy() {
+    SimEngine engine;
+    engine.setTerrain(makeProceduralTerrain(64, 10.0f, 0.0f));
+    engine.setVegetation({standAt(100.0f, 100.0f, 200.0f, 200.0f)});
+    const auto revision = engine.canopyRevision();
+
+    VegetationArea renamed = engine.vegetation()[0];
+    renamed.name = "renamed";
+    engine.setVegetation({renamed});
+    CHECK(engine.canopyRevision() == revision);
+    CHECK(engine.vegetation()[0].name == "renamed");
+
+    VegetationArea taller = renamed;
+    taller.canopyHeightM = 16.0f;
+    engine.setVegetation({taller});
+    CHECK(engine.canopyRevision() == revision + 1);
+
+    VegetationArea felled = taller;
+    felled.kind = VegetationKind::Clearing;
+    engine.setVegetation({felled});
+    CHECK(engine.canopyRevision() == revision + 2);
+}
+
 int main() {
     test_procedural_source_keeps_relative_position();
     test_procedural_source_keeps_height_above_ground();
@@ -280,6 +397,11 @@ int main() {
     test_southern_western_round_trip();
     test_high_latitude_round_trip();
     test_cancelled_solve_does_not_publish_partial_field();
+
+    test_drawn_vegetation_keeps_its_ground();
+    test_drawn_vegetation_survives_a_far_location();
+    test_drawn_vegetation_verbatim_without_georeference();
+    test_vegetation_rename_does_not_rebuild_canopy();
 
     if (g_fail == 0)
         std::cout << "Geospatial/cancellation tests passed.\n";

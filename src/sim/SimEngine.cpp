@@ -84,8 +84,14 @@ void applyProcedural(Antenna& antenna, const ProceduralPlacement& placement,
 } // namespace
 
 void SimEngine::setVegetation(std::vector<VegetationArea> areas) {
+    // The canopy grid depends only on footprints - kind, bounds and a stand's
+    // height in decimetres - so a list that changes none of them, such as a
+    // rename, is stored without a rebuild. A rebuild bumps canopyRevision, which
+    // rebuilds the map texture and, in the application, discards a solve whose
+    // inputs did not change.
+    const bool unchanged = VegetationAreas::sameFootprint(m_vegetation, areas);
     m_vegetation = std::move(areas);
-    rebuildCanopy();
+    if (!unchanged) rebuildCanopy();
 }
 
 void SimEngine::setImportedCanopy(CanopySampler sampler, CanopySourceInfo info) {
@@ -98,6 +104,12 @@ void SimEngine::clearImportedCanopy() {
     m_canopySampler = nullptr;
     m_canopyInfo = {};
     rebuildCanopy();
+}
+
+bool SimEngine::sampleImportedCanopy(std::vector<std::uint16_t>& heightDm,
+                                     std::vector<std::uint8_t>& coverPct) const {
+    if (!m_canopySampler) return false;
+    return m_canopySampler(m_terrain, heightDm, coverPct);
 }
 
 void SimEngine::rebuildCanopy() {
@@ -119,6 +131,34 @@ void SimEngine::setTerrain(TerrainModel terrain) {
     if (m_terrain.hasGeoReference()) {
         for (auto& antenna : m_antennas)
             syncGeoFromWorld(antenna, m_terrain);
+    }
+
+    // Drawn areas are carried by latitude and longitude when both terrains know
+    // where they are. The world frame's origin is the south-west sample, which
+    // moves with the centre and extent of every location load: carried over
+    // verbatim, a drawn clearing would land on different ground while imported
+    // canopy, which is anchored geographically, stayed put.
+    //
+    // The lat/lon-to-world mapping is linear and treats latitude and longitude
+    // independently, so a carried rectangle stays an exact axis-aligned
+    // rectangle on the same ground. Its size in metres can change slightly
+    // between terrains linearised at different centre latitudes. Invalid areas
+    // are left verbatim: re-normalising their corners would quietly turn an
+    // inverted, ignored area into a real one. Where either terrain has no
+    // georeference there is no shared frame, and areas keep their metres.
+    struct GeoCorners {
+        TerrainModel::GeoPoint southWest;
+        TerrainModel::GeoPoint northEast;
+    };
+    const bool carryVegetationByGeo =
+        m_terrain.hasGeoReference() && terrain.hasGeoReference();
+    std::vector<GeoCorners> vegetationCorners;
+    if (carryVegetationByGeo) {
+        vegetationCorners.reserve(m_vegetation.size());
+        for (const VegetationArea& area : m_vegetation) {
+            vegetationCorners.push_back({m_terrain.worldToLatLon(area.minX, area.minZ),
+                                         m_terrain.worldToLatLon(area.maxX, area.maxZ)});
+        }
     }
 
     // Capture relative placement for any source still lacking a geographic
@@ -143,6 +183,22 @@ void SimEngine::setTerrain(TerrainModel terrain) {
             if (carried[i].carry)
                 syncGeoFromWorld(m_antennas[i], m_terrain);
     }
+    if (carryVegetationByGeo) {
+        for (std::size_t i = 0; i < m_vegetation.size(); ++i) {
+            VegetationArea& area = m_vegetation[i];
+            if (!area.valid()) continue;
+            const GeoCorners& corners = vegetationCorners[i];
+            const glm::vec2 a = m_terrain.latLonToWorld(corners.southWest.latDeg,
+                                                        corners.southWest.lonDeg);
+            const glm::vec2 b = m_terrain.latLonToWorld(corners.northEast.latDeg,
+                                                        corners.northEast.lonDeg);
+            area.minX = std::min(a.x, b.x);
+            area.maxX = std::max(a.x, b.x);
+            area.minZ = std::min(a.y, b.y);
+            area.maxZ = std::max(a.y, b.y);
+        }
+    }
+
     // New terrain means a new grid, so the canopy raster must be rebuilt from
     // its sources rather than carried over at the old resolution.
     rebuildCanopy();

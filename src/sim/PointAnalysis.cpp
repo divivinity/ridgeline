@@ -1,4 +1,5 @@
 #include "PointAnalysis.h"
+#include "RFModels.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -20,6 +21,34 @@ std::string formatDeficit(const char* label, float actual, float required) {
     std::snprintf(text, sizeof(text), "%s is %.1f dB below the %.1f dB requirement.",
                   label, deficit, required);
     return text;
+}
+
+// Why a requested ITM prediction was replaced, or what the quick estimate
+// leaves out. Empty when there is nothing the operator needs to know.
+std::string pathModelCaveat(PathModel model, TerrainModel::LOSStatus los) {
+    switch (model) {
+        case PathModel::QuickEstimate:
+            return los == TerrainModel::LOSStatus::Clear ? std::string{}
+                : "Quick preview charges a flat 20 dB where terrain blocks the path; "
+                  "Balanced and High accuracy model the diffraction.";
+        case PathModel::AnalyticShortPath:
+            return "ITM does not model paths under 1 km, so this one uses free-space "
+                   "loss with terrain diffraction.";
+        case PathModel::AnalyticOutOfBand:
+            return "ITM covers 20 MHz to 20 GHz, so this frequency uses free-space "
+                   "loss with terrain diffraction.";
+        case PathModel::AnalyticItmRejected:
+            return "ITM rejected this path's inputs, so it uses free-space loss with "
+                   "terrain diffraction.";
+        case PathModel::AnalyticItmMissing:
+            return "This build has no ITM, so the path uses free-space loss with "
+                   "terrain diffraction.";
+        case PathModel::None:
+        case PathModel::TerrainAnalytic:
+        case PathModel::Itm:
+            break;
+    }
+    return {};
 }
 
 } // namespace
@@ -72,6 +101,9 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
         result.servingSourceIndex = grid.servingSourceIndex[index];
     if (index < grid.strongestJammerIndex.size())
         result.strongestJammerIndex = grid.strongestJammerIndex[index];
+    if (index < grid.servingPathModel.size() &&
+        grid.servingPathModel[index] <= static_cast<std::uint8_t>(PathModel::AnalyticItmMissing))
+        result.pathModel = static_cast<PathModel>(grid.servingPathModel[index]);
 
     if (!std::isfinite(result.desiredDbm) || result.servingSourceIndex < 0 ||
         result.servingSourceIndex >= static_cast<int>(antennas.size())) {
@@ -91,6 +123,14 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
         source.position, result.receiverPosition);
     result.fresnelClearanceRatio = terrain.fresnelClearanceRatio(
         source.position, result.receiverPosition, source.frequencyMHz);
+    // The same depth and loss the solvers charge for this path, so the
+    // explanation can never disagree with the number on the map.
+    if (terrain.hasVegetation()) {
+        result.foliageDepthM = terrain.foliageDepthM(
+            source.position, result.receiverPosition);
+        result.foliageLossDb = RFModels::vegetationLossDb(
+            result.foliageDepthM, source.frequencyMHz);
+    }
 
     if (result.inService) {
         result.explanations.emplace_back(
@@ -119,6 +159,16 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
         result.explanations.emplace_back(
             "The direct path is visible, but less than 60% of the first Fresnel zone is clear.");
     }
+    if (const std::string caveat = pathModelCaveat(result.pathModel, result.losStatus);
+        !caveat.empty())
+        result.explanations.push_back(caveat);
+    if (result.foliageLossDb >= 0.1f) {
+        char text[160]{};
+        std::snprintf(text, sizeof(text),
+                      "The direct path crosses %.0f m of vegetation, costing %.1f dB.",
+                      result.foliageDepthM, result.foliageLossDb);
+        result.explanations.emplace_back(text);
+    }
     if (std::isfinite(result.jammerDbm) && result.strongestJammerIndex >= 0) {
         result.explanations.emplace_back(
             "An in-band jammer contributes to the interference level.");
@@ -136,6 +186,7 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
     result.terrainElevationM.reserve(samples);
     result.lineOfSightElevationM.reserve(samples);
     result.fresnel60LowerElevationM.reserve(samples);
+    if (terrain.hasVegetation()) result.canopyTopElevationM.reserve(samples);
     const glm::vec3 delta = result.receiverPosition - source.position;
     const float pathM = std::max(result.distanceM, 1.0f);
     const float horizontalDistanceM = glm::distance(
@@ -156,6 +207,9 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
             terrain.heightAtWorld(point.x, point.z) + earthBulgeM);
         result.lineOfSightElevationM.push_back(point.y);
         result.fresnel60LowerElevationM.push_back(point.y - 0.6f * radiusM);
+        if (terrain.hasVegetation())
+            result.canopyTopElevationM.push_back(
+                terrain.canopyTopAtWorld(point.x, point.z) + earthBulgeM);
     }
     return result;
 }
