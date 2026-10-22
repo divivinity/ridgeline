@@ -111,6 +111,8 @@ FieldGrid FastSolver::solve(const TerrainModel& terrain,
             grid.jammerDbm[index] = RFModels::mwToDbm(jammerMw);
             grid.servingSourceIndex[index] = servingSourceIndex;
             grid.strongestJammerIndex[index] = strongestJammerIndex;
+            grid.servingPathModel[index] = static_cast<std::uint8_t>(
+                servingSourceIndex >= 0 ? PathModel::QuickEstimate : PathModel::None);
         }
         if (progress) progress(gz + 1, grid.height);
     }

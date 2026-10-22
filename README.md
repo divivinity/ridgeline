@@ -269,6 +269,11 @@ number:
   terminals outside it, and nothing here is validated against field
   measurements.
 
+Clicking a solved map shows where vegetation cost a path something. The result
+inspector draws the canopy on the link profile, and gives the metres of crown
+the direct path crosses and the dB they cost. These are the same figures the
+solver charged at that point.
+
 A scenario records the canopy *request*, not the raster. The raster already
 lives in the tile cache keyed by that request, so reopening a scenario is a
 cache read and works offline.

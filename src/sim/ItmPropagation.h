@@ -5,8 +5,11 @@
 #include "Types.h"
 #include <glm/glm.hpp>
 
+enum class ItmOutcome { Valid, NotBuilt, ShortPath, OutOfBand, Rejected };
+
 struct ItmPrediction {
     bool valid = false;
+    ItmOutcome outcome = ItmOutcome::NotBuilt;
     float basicTransmissionLossDb = 0.0f;
     long warnings = 0;
     int errorCode = 0;
