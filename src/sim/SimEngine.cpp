@@ -190,8 +190,18 @@ void SimEngine::setTerrain(TerrainModel terrain) {
             const GeoCorners& corners = vegetationCorners[i];
             const glm::vec2 a = m_terrain.latLonToWorld(corners.southWest.latDeg,
                                                         corners.southWest.lonDeg);
-            const glm::vec2 b = m_terrain.latLonToWorld(corners.northEast.latDeg,
-                                                        corners.northEast.lonDeg);
+            glm::vec2 b = m_terrain.latLonToWorld(corners.northEast.latDeg,
+                                                  corners.northEast.lonDeg);
+            // Each corner is wrapped into the half-world either side of the
+            // new origin on its own, so an area near the opposite meridian can
+            // have one corner thrown a world away. Keep the east corner on the
+            // west corner's branch: an area is never wider than half a world.
+            const double worldM = 360.0 / m_terrain.cellLonDeg * m_terrain.metersPerCellX();
+            if (std::isfinite(worldM) && worldM > 0.0) {
+                const double offset = static_cast<double>(b.x) - a.x;
+                if (offset > worldM * 0.5) b.x = static_cast<float>(b.x - worldM);
+                else if (offset < -worldM * 0.5) b.x = static_cast<float>(b.x + worldM);
+            }
             area.minX = std::min(a.x, b.x);
             area.maxX = std::max(a.x, b.x);
             area.minZ = std::min(a.y, b.y);
