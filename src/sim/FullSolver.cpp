@@ -172,8 +172,15 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                         if (refl > 0.001f) {
                             const float reflMatLoss = mat.lossDbPer100m(freq)
                                                    * dRefl / 100.0f;
+                            // The bounce happens on the ground, under the
+                            // canopy, so both legs cross the crown.
+                            const float reflFoliageDb = terrain.hasVegetation()
+                                ? RFModels::vegetationLossDb(
+                                      terrain.foliageDepthM(ant.position, sp) +
+                                          terrain.foliageDepthM(sp, rx), freq)
+                                : 0.0f;
                             const float reflLoss = fsplDb(dRefl, freq)
-                                + reflMatLoss + rainDb
+                                + reflMatLoss + rainDb + reflFoliageDb
                                 - 10.0f * std::log10(refl);
                             pathMw += RFModels::dbmToMw(
                                 txPowerDbm + effectiveGainDbi - reflLoss);
