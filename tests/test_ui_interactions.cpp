@@ -409,6 +409,29 @@ void testPointAnalysisPanelShowsExplanation() {
     analysis.foliageLossDb = 0.0f;
     analysis.canopyTopElevationM.clear();
 
+    // The jammer's path is shown only when a jammer reaches the point.
+    auto* jammerPlot = panel.findChild<QWidget*>("JammerProfilePlot");
+    auto* jammerSummary = panel.findChild<QLabel*>("JammerPathSummary");
+    CHECK(jammerPlot && jammerSummary);
+    if (!jammerPlot || !jammerSummary) return;
+    CHECK(jammerPlot->isHidden() && jammerSummary->isHidden());
+    analysis.jammerPath.present = true;
+    analysis.jammerPath.distanceM = 1500.0f;
+    analysis.jammerPath.losStatus = TerrainModel::LOSStatus::Blocked;
+    analysis.jammerPath.profileDistanceM = {0.0f, 750.0f, 1500.0f};
+    analysis.jammerPath.terrainElevationM = {100.0f, 160.0f, 100.0f};
+    analysis.jammerPath.lineOfSightElevationM = {120.0f, 125.0f, 130.0f};
+    analysis.jammerPath.fresnel60LowerElevationM = {120.0f, 110.0f, 130.0f};
+    panel.setAnalysis(analysis, "35.0°, -80.0°", "Emitter 1 · 450 MHz", "Jammer 1");
+    QApplication::processEvents();
+    CHECK(!jammerPlot->isHidden() && !jammerSummary->isHidden());
+    CHECK(jammerSummary->text().contains("Strongest jammer (Jammer 1)") &&
+          jammerSummary->text().contains("1.50 km") &&
+          jammerSummary->text().contains("Terrain blocked"));
+    analysis.jammerPath = {};
+    panel.setAnalysis(analysis, "35.0°, -80.0°", "Emitter 1 · 450 MHz", {});
+    CHECK(jammerPlot->isHidden() && jammerSummary->isHidden());
+
     analysis.servingSourceIndex = -1;
     analysis.strongestJammerIndex = 0;
     analysis.explanations = {"No emitter reaches this result cell.",
@@ -421,6 +444,7 @@ void testPointAnalysisPanelShowsExplanation() {
     auto* path = panel.findChild<QLabel*>("PointPathSummary");
     CHECK(path && path->text().contains("Jammer 1"));
     panel.clear();
+    CHECK(jammerPlot->isHidden() && jammerSummary->isHidden());
     CHECK(result->text() == "No result selected");
     CHECK(signal->text() == "—");
     CHECK(explanation->text().contains("Run coverage"));

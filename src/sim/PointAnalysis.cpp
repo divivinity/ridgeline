@@ -51,6 +51,54 @@ std::string pathModelCaveat(PathModel model, TerrainModel::LOSStatus los) {
     return {};
 }
 
+// Terrain, sight line, 60% Fresnel boundary and canopy top along a straight
+// path, with the terrain lifted by effective Earth curvature as the solvers see
+// it. Canopy stays empty when the terrain carries no vegetation.
+void traceProfile(const TerrainModel& terrain, glm::vec3 from, glm::vec3 to,
+                  float frequencyMHz, std::vector<float>& distanceM,
+                  std::vector<float>& terrainM, std::vector<float>& sightM,
+                  std::vector<float>& fresnelM, std::vector<float>& canopyM) {
+    const int pathSteps = terrain.adaptivePathSteps(from, to, 160, 2048);
+    const int samples = pathSteps + 1;
+    distanceM.reserve(samples);
+    terrainM.reserve(samples);
+    sightM.reserve(samples);
+    fresnelM.reserve(samples);
+    if (terrain.hasVegetation()) canopyM.reserve(samples);
+    const glm::vec3 delta = to - from;
+    const float pathM = std::max(glm::distance(from, to), 1.0f);
+    const float horizontalDistanceM = glm::distance(
+        glm::vec2(from.x, from.z), glm::vec2(to.x, to.z));
+    const float lambdaM = 3.0e8f / std::max(frequencyMHz * 1.0e6f, 1.0f);
+    for (int i = 0; i < samples; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(pathSteps);
+        const glm::vec3 point = from + delta * t;
+        const float d1 = pathM * t;
+        const float d2 = pathM * (1.0f - t);
+        const float radiusM = std::sqrt(std::max(0.0f, lambdaM * d1 * d2 / pathM));
+        const float earthBulgeM = horizontalDistanceM * horizontalDistanceM *
+            t * (1.0f - t) / (2.0f * kEffectiveEarthRadiusM);
+        distanceM.push_back(pathM * t);
+        terrainM.push_back(terrain.heightAtWorld(point.x, point.z) + earthBulgeM);
+        sightM.push_back(point.y);
+        fresnelM.push_back(point.y - 0.6f * radiusM);
+        if (terrain.hasVegetation())
+            canopyM.push_back(terrain.canopyTopAtWorld(point.x, point.z) + earthBulgeM);
+    }
+}
+
+std::string jammerSightExplanation(const JammerPath& path) {
+    switch (path.losStatus) {
+        case TerrainModel::LOSStatus::Clear:
+            return "The strongest jammer has a clear line of sight to this point.";
+        case TerrainModel::LOSStatus::Diffracted:
+            return "A narrow terrain edge partly shields this point from the strongest jammer.";
+        case TerrainModel::LOSStatus::Blocked:
+            return "Terrain shields this point from the strongest jammer's direct path.";
+    }
+    return {};
+}
+
 } // namespace
 
 PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
@@ -105,12 +153,31 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
         grid.servingPathModel[index] <= static_cast<std::uint8_t>(PathModel::AnalyticItmMissing))
         result.pathModel = static_cast<PathModel>(grid.servingPathModel[index]);
 
+    JammerPath& jammer = result.jammerPath;
+    if (std::isfinite(result.jammerDbm) && result.strongestJammerIndex >= 0 &&
+        result.strongestJammerIndex < static_cast<int>(antennas.size())) {
+        const Antenna& source = antennas[result.strongestJammerIndex];
+        jammer.present = true;
+        jammer.distanceM = glm::distance(source.position, result.receiverPosition);
+        jammer.losStatus = terrain.lineOfSightStatus(source.position, result.receiverPosition);
+        if (terrain.hasVegetation()) {
+            jammer.foliageDepthM = terrain.foliageDepthM(source.position, result.receiverPosition);
+            jammer.foliageLossDb = RFModels::vegetationLossDb(
+                jammer.foliageDepthM, source.frequencyMHz);
+        }
+        traceProfile(terrain, source.position, result.receiverPosition, source.frequencyMHz,
+                     jammer.profileDistanceM, jammer.terrainElevationM,
+                     jammer.lineOfSightElevationM, jammer.fresnel60LowerElevationM,
+                     jammer.canopyTopElevationM);
+    }
+
     if (!std::isfinite(result.desiredDbm) || result.servingSourceIndex < 0 ||
         result.servingSourceIndex >= static_cast<int>(antennas.size())) {
         result.explanations.emplace_back("No emitter reaches this result cell.");
-        if (std::isfinite(result.jammerDbm) && result.strongestJammerIndex >= 0) {
+        if (jammer.present) {
             result.explanations.emplace_back(
                 "An in-band jammer is present even though no desired signal is available.");
+            result.explanations.push_back(jammerSightExplanation(jammer));
         }
         return result;
     }
@@ -172,6 +239,7 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
     if (std::isfinite(result.jammerDbm) && result.strongestJammerIndex >= 0) {
         result.explanations.emplace_back(
             "An in-band jammer contributes to the interference level.");
+        if (jammer.present) result.explanations.push_back(jammerSightExplanation(jammer));
     }
     if (std::isfinite(result.strongestSourceDbm) &&
         result.desiredDbm - result.strongestSourceDbm > 0.25f) {
@@ -179,37 +247,9 @@ PointAnalysisResult analyzeFieldPoint(const FieldGrid& grid,
             "Multiple co-channel emitters contribute to the desired-signal total.");
     }
 
-    const int pathSteps = terrain.adaptivePathSteps(
-        source.position, result.receiverPosition, 160, 2048);
-    const int samples = pathSteps + 1;
-    result.profileDistanceM.reserve(samples);
-    result.terrainElevationM.reserve(samples);
-    result.lineOfSightElevationM.reserve(samples);
-    result.fresnel60LowerElevationM.reserve(samples);
-    if (terrain.hasVegetation()) result.canopyTopElevationM.reserve(samples);
-    const glm::vec3 delta = result.receiverPosition - source.position;
-    const float pathM = std::max(result.distanceM, 1.0f);
-    const float horizontalDistanceM = glm::distance(
-        glm::vec2(source.position.x, source.position.z),
-        glm::vec2(result.receiverPosition.x, result.receiverPosition.z));
-    const float lambdaM = 3.0e8f /
-        std::max(source.frequencyMHz * 1.0e6f, 1.0f);
-    for (int i = 0; i < samples; ++i) {
-        const float t = static_cast<float>(i) / static_cast<float>(pathSteps);
-        const glm::vec3 point = source.position + delta * t;
-        const float d1 = pathM * t;
-        const float d2 = pathM * (1.0f - t);
-        const float radiusM = std::sqrt(std::max(0.0f, lambdaM * d1 * d2 / pathM));
-        const float earthBulgeM = horizontalDistanceM * horizontalDistanceM *
-            t * (1.0f - t) / (2.0f * kEffectiveEarthRadiusM);
-        result.profileDistanceM.push_back(pathM * t);
-        result.terrainElevationM.push_back(
-            terrain.heightAtWorld(point.x, point.z) + earthBulgeM);
-        result.lineOfSightElevationM.push_back(point.y);
-        result.fresnel60LowerElevationM.push_back(point.y - 0.6f * radiusM);
-        if (terrain.hasVegetation())
-            result.canopyTopElevationM.push_back(
-                terrain.canopyTopAtWorld(point.x, point.z) + earthBulgeM);
-    }
+    traceProfile(terrain, source.position, result.receiverPosition, source.frequencyMHz,
+                 result.profileDistanceM, result.terrainElevationM,
+                 result.lineOfSightElevationM, result.fresnel60LowerElevationM,
+                 result.canopyTopElevationM);
     return result;
 }

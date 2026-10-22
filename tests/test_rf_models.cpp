@@ -394,6 +394,71 @@ void testGroundReflectionPaysFoliageLoss() {
     NEAR(open.desiredDbm - woods.desiredDbm, woods.foliageLossDb, 1.5);
 }
 
+// The inspector traces the strongest jammer's own path, so it can say whether
+// terrain shields the point from it - with service or without.
+void testPointAnalysisTracesJammerPath() {
+    auto mentions = [](const PointAnalysisResult& analysis, const char* text) {
+        return std::any_of(analysis.explanations.begin(), analysis.explanations.end(),
+            [text](const std::string& item) { return item.find(text) != std::string::npos; });
+    };
+    TerrainModel open = flatTerrain(41, 41, 20.0f); // 800 m square.
+    TerrainModel ridged = open;
+    for (int z = 0; z < ridged.height; ++z)
+        for (int x = 15; x <= 17; ++x)                // a ridge at x = 300-340 m
+            ridged.heights[static_cast<std::size_t>(z) * ridged.width + x] = 80.0f;
+    MaterialLibrary materials;
+    FastSolver solver;
+    solver.gridResolution = 40.0f;
+
+    Antenna emitter;
+    emitter.position = {700.0f, 20.0f, 400.0f};
+    emitter.frequencyMHz = 450.0f;
+    emitter.powerW = 10.0f;
+    Antenna jammer = emitter;
+    jammer.position = {100.0f, 10.0f, 400.0f}; // west of the ridge
+    jammer.powerW = 1.0f;
+    jammer.isJammer = true;
+    const std::vector<Antenna> antennas{emitter, jammer};
+
+    for (const TerrainModel* terrain : {&open, &ridged}) {
+        const FieldGrid grid = solver.solve(*terrain, antennas, materials);
+        const PointAnalysisResult analysis = analyzeFieldPoint(
+            grid, *terrain, antennas, solver.receiver, 600.0f, 400.0f);
+        const JammerPath& path = analysis.jammerPath;
+        CHECK(analysis.strongestJammerIndex == 1);
+        CHECK(path.present);
+        CHECK(path.profileDistanceM.size() > 100u);
+        CHECK(path.terrainElevationM.size() == path.profileDistanceM.size());
+        CHECK(path.lineOfSightElevationM.size() == path.profileDistanceM.size());
+        NEAR(path.profileDistanceM.back(), path.distanceM, 0.01);
+        NEAR(path.lineOfSightElevationM.front(), jammer.position.y, 0.001);
+        if (terrain == &open) {
+            CHECK(path.losStatus == TerrainModel::LOSStatus::Clear);
+            CHECK(mentions(analysis, "clear line of sight"));
+        } else {
+            CHECK(path.losStatus == TerrainModel::LOSStatus::Blocked);
+            CHECK(mentions(analysis, "shields this point from the strongest jammer"));
+            // The serving path, east of the ridge, is unaffected.
+            CHECK(analysis.losStatus == TerrainModel::LOSStatus::Clear);
+        }
+    }
+
+    // A cell with no desired signal still explains the jammer that reaches it.
+    const std::vector<Antenna> jammerOnly{jammer};
+    const FieldGrid grid = solver.solve(open, jammerOnly, materials);
+    const PointAnalysisResult alone = analyzeFieldPoint(
+        grid, open, jammerOnly, solver.receiver, 600.0f, 400.0f);
+    CHECK(alone.servingSourceIndex == -1);
+    CHECK(alone.jammerPath.present);
+    CHECK(mentions(alone, "clear line of sight"));
+
+    // Without a jammer there is nothing to trace.
+    const std::vector<Antenna> emitterOnly{emitter};
+    const FieldGrid quiet = solver.solve(open, emitterOnly, materials);
+    CHECK(!analyzeFieldPoint(quiet, open, emitterOnly, solver.receiver, 600.0f, 400.0f)
+               .jammerPath.present);
+}
+
 void testSolverContributorProvenance() {
     TerrainModel terrain = flatTerrain(21, 21, 20.0f);
     MaterialLibrary materials;
@@ -979,6 +1044,7 @@ int main() {
     testPointAnalysisExplainsSolvedCell();
     testPointAnalysisExplainsFoliageLoss();
     testPointAnalysisNamesPathModel();
+    testPointAnalysisTracesJammerPath();
     testGroundReflectionPaysFoliageLoss();
     testSolverContributorProvenance();
     testJammerOnlyPointExplanation();
