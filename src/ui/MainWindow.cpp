@@ -33,6 +33,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QInputDialog>
+#include <tuple>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -130,9 +131,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(exportPngAct, &QAction::triggered, this, &MainWindow::onExportPng);
     QAction* exportCsvAct = exportMenu->addAction("Coverage &CSV…");
     connect(exportCsvAct, &QAction::triggered, this, &MainWindow::onExportCsv);
-    QAction* exportGeoTiffAct = exportMenu->addAction("Coverage &GeoTIFF…");
-    exportGeoTiffAct->setObjectName("ExportGeoTiffAction");
-    connect(exportGeoTiffAct, &QAction::triggered, this, &MainWindow::onExportGeoTiff);
+    // One metric per file, so each opens in a GIS as a single labelled band.
+    QMenu* geoTiffMenu = exportMenu->addMenu("Coverage &GeoTIFF");
+    geoTiffMenu->setObjectName("ExportGeoTiffMenu");
+    for (const auto& [label, name, metric] : {
+             std::tuple{"Desired &Signal (dBm)…", "ExportGeoTiffSignalAction",
+                        CoverageGeoTiff::Metric::DesiredSignal},
+             std::tuple{"S&INR (dB)…", "ExportGeoTiffSinrAction",
+                        CoverageGeoTiff::Metric::Sinr},
+             std::tuple{"&Fade Margin (dB)…", "ExportGeoTiffFadeMarginAction",
+                        CoverageGeoTiff::Metric::FadeMargin},
+             std::tuple{"Ser&vice (in = 1, out = 0)…", "ExportGeoTiffServiceAction",
+                        CoverageGeoTiff::Metric::Service}}) {
+        QAction* action = geoTiffMenu->addAction(label);
+        action->setObjectName(name);
+        const CoverageGeoTiff::Metric chosen = metric;
+        connect(action, &QAction::triggered, this, [this, chosen] { onExportGeoTiff(chosen); });
+    }
 
     QMenu* editMenu = menuBar()->addMenu("&Edit");
     QAction* undoAction = m_undoStack->createUndoAction(this, "&Undo");
@@ -2847,7 +2862,7 @@ void MainWindow::onExportCsv() {
     else QMessageBox::critical(this, "Export failed", "Could not write CSV file.");
 }
 
-void MainWindow::onExportGeoTiff() {
+void MainWindow::onExportGeoTiff(CoverageGeoTiff::Metric metric) {
     if (!m_engine.fieldGrid().valid()) {
         QMessageBox::information(this, "No data", "Run Solve first to generate a coverage field.");
         return;
@@ -2858,11 +2873,17 @@ void MainWindow::onExportGeoTiff() {
             "none, so export the CSV, which gives positions in metres.");
         return;
     }
+    const QString what = QString::fromUtf8(CoverageGeoTiff::description(metric));
     const QString path = QFileDialog::getSaveFileName(
-        this, "Export Coverage GeoTIFF", {}, "GeoTIFF (*.tif *.tiff);;All files (*)");
+        this, QString("Export %1 GeoTIFF").arg(what), {},
+        "GeoTIFF (*.tif *.tiff);;All files (*)");
     if (path.isEmpty()) return;
-    if (Exporter::exportGeoTiff(m_engine.fieldGrid(), m_engine.terrain(), path.toStdString()))
-        m_statusLabel->setText("  Signal GeoTIFF exported (WGS 84, dBm)");
+    if (Exporter::exportGeoTiff(m_engine.fieldGrid(), m_engine.terrain(),
+                                path.toStdString(), metric)) {
+        const QString unit = QString::fromUtf8(CoverageGeoTiff::unit(metric));
+        m_statusLabel->setText(QString("  %1 GeoTIFF exported (WGS 84%2)")
+            .arg(what, unit.isEmpty() ? QString{} : QString(", %1").arg(unit)));
+    }
     else QMessageBox::critical(this, "Export failed", "Could not write GeoTIFF file.");
 }
 

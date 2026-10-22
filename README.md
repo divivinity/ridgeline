@@ -80,9 +80,11 @@ sensitivity, required SINR, and fade-margin target. CSV exports include these
 metrics together with WGS84 coordinates and terrain elevation when the terrain
 is georeferenced.
 
-*File ▸ Export ▸ Coverage GeoTIFF* writes desired signal as a GIS raster: one
-float32 band in dBm, one pixel per result cell, in WGS 84 longitude/latitude,
-with no-signal cells masked as no-data. QGIS, ArcGIS and GDAL open it directly.
+*File ▸ Export ▸ Coverage GeoTIFF* writes one result metric as a GIS raster:
+desired signal (dBm), SINR (dB), fade margin (dB), or service (1 in, 0 out).
+Each file is one labelled float32 band, one pixel per result cell, in WGS 84
+longitude/latitude, with cells that have no value masked as no-data. QGIS,
+ArcGIS and GDAL open it directly.
 It needs terrain with a real-world location. Each pixel covers the area its cell
 stands for, so the last row and column can reach up to one partial cell past
 the terrain edge. *Coverage PNG* is different: it is a capture of the map as

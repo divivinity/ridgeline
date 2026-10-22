@@ -2,6 +2,7 @@
 #include <string>
 #include "sim/Types.h"
 #include "sim/TerrainModel.h"
+#include "data/CoverageGeoTiff.h"
 class QImage;
 
 // Static image/grid export helpers. Return false on invalid input or write failure.
@@ -19,8 +20,10 @@ public:
     static bool exportCsv(const FieldGrid& grid, const std::string& path);
     static bool exportCsv(const FieldGrid& grid, const TerrainModel& terrain,
                           const std::string& path);
-    // Atomic GeoTIFF of desired signal (see CoverageGeoTiff). Fails, leaving
-    // the target untouched, when the terrain has no real-world location.
+    // Atomic single-metric GeoTIFF (see CoverageGeoTiff). Fails, leaving the
+    // target untouched, when the terrain has no real-world location.
     static bool exportGeoTiff(const FieldGrid& grid, const TerrainModel& terrain,
-                              const std::string& path);
+                              const std::string& path,
+                              CoverageGeoTiff::Metric metric =
+                                  CoverageGeoTiff::Metric::DesiredSignal);
 };

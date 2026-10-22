@@ -68,6 +68,26 @@ Tag asciiTag(std::uint16_t id, const std::string& text) {
 
 namespace CoverageGeoTiff {
 
+const char* description(Metric metric) {
+    switch (metric) {
+        case Metric::DesiredSignal: return "Desired signal";
+        case Metric::Sinr: return "SINR";
+        case Metric::FadeMargin: return "Fade margin";
+        case Metric::Service: return "In service (1) or not (0)";
+    }
+    return "";
+}
+
+const char* unit(Metric metric) {
+    switch (metric) {
+        case Metric::DesiredSignal: return "dBm";
+        case Metric::Sinr: return "dB";
+        case Metric::FadeMargin: return "dB";
+        case Metric::Service: return "";
+    }
+    return "";
+}
+
 bool canEncode(const FieldGrid& grid, const TerrainModel& terrain) {
     return grid.valid() && terrain.hasGeoReference() &&
            terrain.metersPerCellX() > 0.0f && terrain.metersPerCellZ() > 0.0f &&
@@ -75,8 +95,25 @@ bool canEncode(const FieldGrid& grid, const TerrainModel& terrain) {
            grid.cellCount() <= std::numeric_limits<std::uint32_t>::max() / 4;
 }
 
-std::vector<std::uint8_t> encode(const FieldGrid& grid, const TerrainModel& terrain) {
+std::vector<std::uint8_t> encode(const FieldGrid& grid, const TerrainModel& terrain,
+                                 Metric metric) {
     if (!canEncode(grid, terrain)) return {};
+    // A metric vector shorter than the grid reads as no data rather than past
+    // its end.
+    auto valueAt = [&](std::size_t index) {
+        const auto from = [&](const std::vector<float>& values) {
+            return index < values.size() && std::isfinite(values[index])
+                ? values[index] : std::numeric_limits<float>::quiet_NaN();
+        };
+        switch (metric) {
+            case Metric::DesiredSignal: return from(grid.dbm);
+            case Metric::Sinr: return from(grid.sinrDb);
+            case Metric::FadeMargin: return from(grid.fadeMarginDb);
+            case Metric::Service:
+                return index < grid.service.size() && grid.service[index] ? 1.0f : 0.0f;
+        }
+        return std::numeric_limits<float>::quiet_NaN();
+    };
 
     // World metres map linearly onto degrees, so a cell's edges in world
     // space give its edges on the ground. Cell i is centred on
@@ -104,12 +141,10 @@ std::vector<std::uint8_t> encode(const FieldGrid& grid, const TerrainModel& terr
     putU32(out, 0); // directory offset, patched below
 
     // TIFF rows run north to south; grid rows run south to north.
-    const float noData = std::numeric_limits<float>::quiet_NaN();
     for (std::uint32_t row = 0; row < height; ++row) {
         const std::size_t gz = height - 1 - row;
         for (std::uint32_t x = 0; x < width; ++x) {
-            const float v = grid.dbm[gz * width + x];
-            const float value = std::isfinite(v) ? v : noData;
+            const float value = valueAt(gz * width + x);
             std::uint32_t bits;
             std::memcpy(&bits, &value, sizeof bits);
             putU32(out, bits);
@@ -143,11 +178,11 @@ std::vector<std::uint8_t> encode(const FieldGrid& grid, const TerrainModel& terr
         doubleTag(33922, {0.0, 0.0, 0.0, westLon, northLat, 0.0}),  // ModelTiepoint
         shortTag(34735, geoKeys),                      // GeoKeyDirectory
         asciiTag(kTagGdalMetadata,
-                 "<GDALMetadata>"
-                 "<Item name=\"DESCRIPTION\" sample=\"0\" role=\"description\">"
-                 "Desired signal</Item>"
-                 "<Item name=\"UNITTYPE\" sample=\"0\" role=\"unittype\">dBm</Item>"
-                 "</GDALMetadata>"),
+                 std::string("<GDALMetadata>"
+                             "<Item name=\"DESCRIPTION\" sample=\"0\" role=\"description\">") +
+                     description(metric) + "</Item>"
+                     "<Item name=\"UNITTYPE\" sample=\"0\" role=\"unittype\">" +
+                     unit(metric) + "</Item></GDALMetadata>"),
         asciiTag(kTagGdalNoData, "nan"),
     };
 

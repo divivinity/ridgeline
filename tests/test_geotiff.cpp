@@ -98,6 +98,9 @@ void geoTiffFixture(FieldGrid& grid, TerrainModel& terrain) {
     const float none = -std::numeric_limits<float>::infinity();
     grid.dbm = {-70.0f, -75.0f, -80.0f,   // south row
                 -85.0f, none, -90.0f};    // north row
+    grid.sinrDb = {12.0f, 6.5f, -3.0f, 1.0f, none, 20.0f};
+    grid.fadeMarginDb = {30.0f, 25.0f, 20.0f, 15.0f, none, 10.0f};
+    grid.service = {1, 1, 0, 0, 0, 1};
 }
 
 // An independent reader: GDAL must place, label and mask the coverage export
@@ -150,6 +153,27 @@ void testCoverageExportReadsInGdal() {
     CHECK(std::isnan(values[1]));
     CHECK_NEAR(values[5], -80.0, 1e-6);
     GDALClose(ds);
+
+    // Another metric is labelled as itself.
+    const std::vector<std::uint8_t> sinrBytes =
+        CoverageGeoTiff::encode(grid, terrain, CoverageGeoTiff::Metric::Sinr);
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(sinrBytes.data()),
+                  static_cast<std::streamsize>(sinrBytes.size()));
+    }
+    GDALDataset* sinr = static_cast<GDALDataset*>(GDALOpen(path.c_str(), GA_ReadOnly));
+    CHECK(sinr != nullptr);
+    if (sinr) {
+        GDALRasterBand* sinrBand = sinr->GetRasterBand(1);
+        CHECK(std::string(sinrBand->GetDescription()) == "SINR");
+        CHECK(std::string(sinrBand->GetUnitType()) == "dB");
+        float first = 0.0f;
+        CHECK(sinrBand->RasterIO(GF_Read, 0, 0, 1, 1, &first, 1, 1, GDT_Float32, 0, 0, nullptr)
+              == CE_None);
+        CHECK_NEAR(first, 1.0, 1e-6);
+        GDALClose(sinr);
+    }
     std::remove(path.c_str());
 }
 
