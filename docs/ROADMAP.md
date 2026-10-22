@@ -25,9 +25,9 @@ calls something pending or the current handoff, this section supersedes it.
     when it did (#12);
   - it traces the strongest jammer's path too, with its own profile, and says
     whether terrain shields the point from it (#18).
-- Exports, roadmap item 8: *Coverage GeoTIFF* writes desired signal as a
-  WGS 84 float32 raster, verified by the built-in reader and, on CI, by
-  GDAL (#13).
+- Exports, roadmap item 8: *Coverage GeoTIFF* writes desired signal (#13),
+  SINR, fade margin or service (#20) as a labelled WGS 84 float32 raster,
+  verified by the built-in reader and, on CI, by GDAL.
 - Physics fix (#14): the ground-reflected component now pays foliage loss.
   Before, under 20 m of canopy, 16.5 dB of direct-path loss moved the solved
   signal by only 3.9 dB, in High accuracy mode under 1 km.
@@ -43,9 +43,8 @@ calls something pending or the current handoff, this section supersedes it.
 
 1. Result clarity (5): what remains is native visual QA of the inspector
    (whole-solve errors already name what to change).
-2. Exports (8): SINR, fade margin and service as GeoTIFF bands. The
-   built-in reader handles one band, so verification needs it extended or
-   separate files. Also metadata and a printable report.
+2. Exports (8): scenario metadata in the exports (sources, receiver
+   criteria, propagation mode) and a printable report.
 3. Planning conveniences (9): grouping, bulk editing, bookmarks and scenario
    templates.
 4. Performance and offline (10), Windows release follow-through (11), and
