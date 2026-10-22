@@ -72,6 +72,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
             float strongestDesiredDbm = NEG_INF;
             float servingFrequencyMHz = 0.0f;
             int servingSourceIndex = -1;
+            PathModel servingPathModel = PathModel::None;
             std::vector<Contribution> desiredContributions;
             std::vector<Contribution> jammerContributions;
             desiredContributions.reserve(antennas.size());
@@ -108,9 +109,10 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                     : 0.0f;
 
                 float directRxDbm = NEG_INF;
+                PathModel pathModel = PathModel::TerrainAnalytic;
                 const float itmLoss = enableItm
                     ? itmBasicTransmissionLossDb(
-                        terrain, ant.position, rx, freq, mat, ant)
+                        terrain, ant.position, rx, freq, mat, ant, pathModel)
                     : std::numeric_limits<float>::quiet_NaN();
 
                 if (std::isfinite(itmLoss)) {
@@ -188,6 +190,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
                         strongestDesiredDbm = pathDbm;
                         servingFrequencyMHz = freq;
                         servingSourceIndex = antennaIndex;
+                        servingPathModel = pathModel;
                     }
                 }
             }
@@ -221,6 +224,7 @@ FieldGrid FullSolver::solve(const TerrainModel& terrain,
             grid.jammerDbm[index] = RFModels::mwToDbm(jammerMw);
             grid.servingSourceIndex[index] = servingSourceIndex;
             grid.strongestJammerIndex[index] = strongestJammerIndex;
+            grid.servingPathModel[index] = static_cast<std::uint8_t>(servingPathModel);
         }
         if (progress) progress(gz + 1, grid.height);
     }
@@ -337,11 +341,19 @@ float FullSolver::itmBasicTransmissionLossDb(const TerrainModel& terrain,
                                               glm::vec3 to,
                                               float frequencyMHz,
                                               const Material& material,
-                                              const Antenna& antenna) {
+                                              const Antenna& antenna,
+                                              PathModel& model) {
     Antenna itmAntenna = antenna;
     itmAntenna.frequencyMHz = frequencyMHz;
     const ItmPrediction prediction = ItmPropagation::predict(
         terrain, from, to, itmAntenna, material);
+    switch (prediction.outcome) {
+        case ItmOutcome::Valid: model = PathModel::Itm; break;
+        case ItmOutcome::ShortPath: model = PathModel::AnalyticShortPath; break;
+        case ItmOutcome::OutOfBand: model = PathModel::AnalyticOutOfBand; break;
+        case ItmOutcome::Rejected: model = PathModel::AnalyticItmRejected; break;
+        case ItmOutcome::NotBuilt: model = PathModel::AnalyticItmMissing; break;
+    }
     return prediction.valid
         ? prediction.basicTransmissionLossDb
         : std::numeric_limits<float>::quiet_NaN();
